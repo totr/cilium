@@ -163,6 +163,48 @@ func RedeployCiliumWithMerge(vm *helpers.Kubectl,
 	RedeployCilium(vm, ciliumFilename, newOpts)
 }
 
+// optionChangeRequiresPodRedeploy returns true if the difference between the
+// specified options requires redeployment of all pods to ensure that the
+// datapath is operating consistently.
+func optionChangeRequiresPodRedeploy(prev, next map[string]string) bool {
+	// See GH-16717, as of v1.10.x Cilium does not support migrating
+	// between endpointRoutes modes without restarting pods.
+	// Also, the default setting for endpointRoutes is disabled.
+	// If either of these properties change, this logic needs updating!
+	a := "false"
+	if opt, ok := prev["endpointRoutes.enabled"]; ok {
+		a = opt
+	}
+	b := "false"
+	if opt, ok := next["endpointRoutes.enabled"]; ok {
+		b = opt
+	}
+
+	if a != b {
+		return true
+	}
+
+	// Switching on and off KPR affects who is handling service traffic.
+	// E.g., off => on some traffic might be handled by iptables. For existing
+	// connections it might not have enough of state information which could
+	// lead to connection interruptions. To avoid it, restart the pods to restart
+	// such connections.
+	a = "disabled"
+	if opt, ok := prev["kubeProxyReplacement"]; ok {
+		a = opt
+	}
+	b = "disabled"
+	if opt, ok := next["kubeProxyReplacement"]; ok {
+		b = opt
+	}
+
+	if a != b {
+		return true
+	}
+
+	return false
+}
+
 // DeployCiliumOptionsAndDNS deploys DNS and cilium with options into the kubernetes cluster
 func DeployCiliumOptionsAndDNS(vm *helpers.Kubectl, ciliumFilename string, options map[string]string) {
 	redeployCilium(vm, ciliumFilename, options)
