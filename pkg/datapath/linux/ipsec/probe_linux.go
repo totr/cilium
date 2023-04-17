@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build linux
-// +build linux
 
 package ipsec
 
@@ -11,9 +10,9 @@ import (
 	"errors"
 	"net"
 
-	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
-
 	"github.com/vishvananda/netlink"
+
+	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 )
 
 const (
@@ -32,7 +31,7 @@ func initDummyXfrmState() *netlink.XfrmState {
 		Key:    k,
 		ICVLen: 128,
 	}
-	state.Spi = int(stateId)
+	state.Spi = stateId
 	state.Reqid = stateId
 
 	state.Src = net.ParseIP(dummyIP)

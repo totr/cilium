@@ -17,12 +17,12 @@ cilium endpoint regenerate <endpoint-id> [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium endpoint](../cilium_endpoint)	 - Manage endpoints
+* [cilium endpoint](cilium_endpoint.md)	 - Manage endpoints
 

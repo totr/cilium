@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package recorder
 
@@ -14,6 +14,9 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	recorderpb "github.com/cilium/cilium/api/v1/recorder"
 	"github.com/cilium/cilium/pkg/cidr"
 	"github.com/cilium/cilium/pkg/hubble/recorder/pcap"
@@ -25,9 +28,6 @@ import (
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/recorder"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	"github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "hubble-recorder")
@@ -113,7 +113,7 @@ func (s *Service) Record(stream recorderpb.Recorder_RecordServer) error {
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
 
-	// Spawn a go routine that forwards any received messages in order to be
+	// Spawn a goroutine that forwards any received messages in order to be
 	// able to use select on it
 	reqCh := make(chan *recorderpb.RecordRequest)
 	errCh := make(chan error, 1)
@@ -147,7 +147,7 @@ func (s *Service) Record(stream recorderpb.Recorder_RecordServer) error {
 			return fmt.Errorf("received invalid request %q, expected start request", req)
 		}
 
-		// The startRecording helper spawns a clean up go routine to remove all
+		// The startRecording helper spawns a clean up goroutine to remove all
 		// state associated with this recording when the context ctx is cancelled.
 		recording, filePath, err = s.startRecording(ctx, startRecording)
 		if err != nil {
@@ -213,6 +213,8 @@ func (s *Service) Record(stream recorderpb.Recorder_RecordServer) error {
 
 const fileExistsRetries = 100
 
+var allowedFileChars = regexp.MustCompile("[^a-zA-Z0-9_.-]")
+
 func createPcapFile(basedir, prefix string) (f *os.File, filePath string, err error) {
 	try := 0
 	for {
@@ -220,7 +222,8 @@ func createPcapFile(basedir, prefix string) (f *os.File, filePath string, err er
 		random := rand.Uint32()
 		nodeName := nodeTypes.GetAbsoluteNodeName()
 		name := fmt.Sprintf("%s_%d_%d_%s.pcap", prefix, startTime, random, nodeName)
-		filePath = path.Join(basedir, name)
+		sanitizedName := allowedFileChars.ReplaceAllLiteralString(name, "_")
+		filePath = path.Join(basedir, sanitizedName)
 		f, err = os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 		if err != nil {
 			if os.IsExist(err) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cilium/cilium/pkg/rand"
-	"github.com/cilium/cilium/pkg/versioncheck"
-	"github.com/cilium/cilium/test/config"
-	ginkgoext "github.com/cilium/cilium/test/ginkgo-ext"
-
 	"github.com/blang/semver/v4"
 	"github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"golang.org/x/sys/unix"
+
+	"github.com/cilium/cilium/pkg/rand"
+	"github.com/cilium/cilium/pkg/versioncheck"
+	"github.com/cilium/cilium/test/config"
+	ginkgoext "github.com/cilium/cilium/test/ginkgo-ext"
 )
 
 // ensure that our random numbers are seeded differently on each run
@@ -342,14 +342,14 @@ func ManifestGet(base, manifestFilename string) string {
 	// needed since no integration is "" and that causes us to find the
 	// base_path/filename before we check the base_path/k8s_version/filename
 	if integration := GetCurrentIntegration(); integration != "" {
-		fullPath := filepath.Join(manifestsPath, integration, manifestFilename)
+		fullPath := filepath.Join(K8sManifestBase, integration, manifestFilename)
 		_, err := os.Stat(fullPath)
 		if err == nil {
 			return filepath.Join(base, fullPath)
 		}
 
 		// try dependent k8s version and integration file
-		fullPath = filepath.Join(manifestsPath, GetCurrentK8SEnv(), integration, manifestFilename)
+		fullPath = filepath.Join(K8sManifestBase, GetCurrentK8SEnv(), integration, manifestFilename)
 		_, err = os.Stat(fullPath)
 		if err == nil {
 			return filepath.Join(base, fullPath)
@@ -357,12 +357,12 @@ func ManifestGet(base, manifestFilename string) string {
 	}
 
 	// try dependent k8s version
-	fullPath := filepath.Join(manifestsPath, GetCurrentK8SEnv(), manifestFilename)
+	fullPath := filepath.Join(K8sManifestBase, GetCurrentK8SEnv(), manifestFilename)
 	_, err := os.Stat(fullPath)
 	if err == nil {
 		return filepath.Join(base, fullPath)
 	}
-	return filepath.Join(base, "k8sT", "manifests", manifestFilename)
+	return filepath.Join(base, K8sManifestBase, manifestFilename)
 }
 
 // WriteOrAppendToFile writes data to a file named by filename.
@@ -416,8 +416,12 @@ func getK8sSupportedConstraints(ciliumVersion string) (semver.Range, error) {
 		return nil, err
 	}
 	switch {
+	case IsCiliumV1_14(cst):
+		return versioncheck.MustCompile(">=1.16.0 <1.27.0"), nil
+	case IsCiliumV1_13(cst):
+		return versioncheck.MustCompile(">=1.16.0 <1.27.0"), nil
 	case IsCiliumV1_12(cst):
-		return versioncheck.MustCompile(">=1.16.0 <1.24.0"), nil
+		return versioncheck.MustCompile(">=1.16.0 <1.25.0"), nil
 	case IsCiliumV1_11(cst):
 		return versioncheck.MustCompile(">=1.16.0 <1.24.0"), nil
 	case IsCiliumV1_10(cst):
@@ -461,8 +465,8 @@ func failIfContainsBadLogMsg(logs, label string, blacklist map[string][]string) 
 					}
 				}
 				if !ok {
-					count, _ := uniqueFailures[fail]
-					uniqueFailures[fail] = count + 1
+					count, _ := uniqueFailures[msg]
+					uniqueFailures[msg] = count + 1
 				}
 			}
 		}
@@ -510,7 +514,7 @@ func RunsOn419Kernel() bool {
 	return os.Getenv("KERNEL") == "419"
 }
 
-func GKENativeRoutingCIDR() string {
+func NativeRoutingCIDR() string {
 	return os.Getenv("NATIVE_CIDR")
 }
 
@@ -550,6 +554,16 @@ func DoesNotRunOnGKE() bool {
 	return !RunsOnGKE()
 }
 
+// RunsOnAKS returns true if the tests are running on AKS.
+func RunsOnAKS() bool {
+	return GetCurrentIntegration() == CIIntegrationAKS
+}
+
+// DoesNotRunOnAKS is the complement function of DoesNotRunOnAKS.
+func DoesNotRunOnAKS() bool {
+	return !RunsOnAKS()
+}
+
 // RunsOnEKS returns true if the tests are running on EKS.
 func RunsOnEKS() bool {
 	return GetCurrentIntegration() == CIIntegrationEKS
@@ -564,7 +578,7 @@ func DoesNotRunOnEKS() bool {
 // kube-proxy replacement. Note that kube-proxy may still be running
 // alongside Cilium.
 func RunsWithKubeProxyReplacement() bool {
-	return RunsOnGKE() || RunsOn419OrLaterKernel()
+	return RunsOnGKE() || RunsOn54OrLaterKernel()
 }
 
 // DoesNotRunWithKubeProxyReplacement is the complement function of
@@ -611,24 +625,20 @@ func DoesNotExistNodeWithoutCilium() bool {
 	return !ExistNodeWithoutCilium()
 }
 
-// HasHostReachableServices returns true if the given Cilium pod has TCP and/or
+func RunsOnJenkins() bool {
+	return os.Getenv("JENKINS_HOME") != ""
+}
+
+// HasSocketLB returns true if the given Cilium pod has TCP and/or
 // UDP host reachable services are enabled.
-func (kub *Kubectl) HasHostReachableServices(pod string, checkTCP, checkUDP bool) bool {
+func (kub *Kubectl) HasSocketLB(pod string) bool {
 	status := kub.CiliumExecContext(context.TODO(), pod,
-		"cilium status -o jsonpath='{.kube-proxy-replacement.features.hostReachableServices}'")
+		"cilium status -o jsonpath='{.kube-proxy-replacement.features.socketLB}'")
 	status.ExpectSuccess("Failed to get status: %s", status.OutputPrettyPrint())
 	lines := status.ByLines()
-	Expect(len(lines)).ShouldNot(Equal(0), "Failed to get hostReachableServices status")
+	Expect(len(lines)).ShouldNot(Equal(0), "Failed to get socketLB status")
 
-	// One-line result is e.g. "{true [TCP UDP]}" if host-reachable
-	// services are activated for both protocols.
-	if checkUDP && !strings.Contains(lines[0], "UDP") {
-		return false
-	}
-	if checkTCP && !strings.Contains(lines[0], "TCP") {
-		return false
-	}
-	return true
+	return strings.Contains(lines[0], "true")
 }
 
 // HasBPFNodePort returns true if the given Cilium pod has BPF NodePort enabled.
@@ -661,6 +671,24 @@ func GetFirstNodeWithoutCilium() string {
 	return noCiliumNodes[0]
 }
 
+// GetFirstNodeWithoutCiliumLabel returns the ci-node label value of the first node
+// which is running without Cilium.
+func (kub *Kubectl) GetFirstNodeWithoutCiliumLabel() string {
+	nodeName := GetFirstNodeWithoutCilium()
+	return kub.GetNodeCILabel(nodeName)
+}
+
+// GetNodeCILabel returns the ci-node label value of the given node.
+func (kub *Kubectl) GetNodeCILabel(nodeName string) string {
+	cmd := fmt.Sprintf("%s get node %s -o jsonpath='{.metadata.labels.cilium\\.io/ci-node}'",
+		KubectlCmd, nodeName)
+	res := kub.ExecShort(cmd)
+	if !res.WasSuccessful() {
+		return ""
+	}
+	return res.SingleOut()
+}
+
 // IsNodeWithoutCilium returns true if node node doesn't run Cilium.
 func IsNodeWithoutCilium(node string) bool {
 	for _, n := range GetNodesWithoutCilium() {
@@ -682,11 +710,6 @@ func GetLatestImageVersion() string {
 // SkipQuarantined returns whether test under quarantine should be skipped
 func SkipQuarantined() bool {
 	return !config.CiliumTestConfig.RunQuarantined
-}
-
-// SkipGKEQuarantined returns whether test under quarantine on GKE should be skipped
-func SkipGKEQuarantined() bool {
-	return SkipQuarantined() && IsIntegration(CIIntegrationGKE)
 }
 
 // SkipRaceDetectorEnabled returns whether tests failing with race detector
@@ -711,6 +734,8 @@ func SkipK8sVersions(k8sVersions string) bool {
 // enabled or not for the cluster.
 func DualStackSupported() bool {
 	supportedVersions := versioncheck.MustCompile(">=1.18.0")
+	kubeProxyOnlySupportedVersions := versioncheck.MustCompile(">=1.20.0")
+
 	k8sVersion, err := versioncheck.Version(GetCurrentK8SEnv())
 	if err != nil {
 		// If we cannot conclude the k8s version we assume that dual stack is not
@@ -718,8 +743,21 @@ func DualStackSupported() bool {
 		return false
 	}
 
-	// We only have DualStack enabled in Vagrant test env.
-	return GetCurrentIntegration() == "" && supportedVersions(k8sVersion)
+	// When running with kube-proxy only, some IPv6 family services are not
+	// provisioned in ip6tables on k8s < 1.20. Therefore, skip any DualStack
+	// tests on those versions/configurations.
+	if DoesNotRunWithKubeProxyReplacement() && !kubeProxyOnlySupportedVersions(k8sVersion) {
+		return false
+	}
+
+	// AKS does not support dual stack yet
+	if IsIntegration(CIIntegrationAKS) {
+		return false
+	}
+
+	// We only have DualStack enabled in Vagrant test env or on KIND.
+	return (GetCurrentIntegration() == "" || IsIntegration(CIIntegrationKind)) &&
+		supportedVersions(k8sVersion)
 }
 
 // DualStackSupportBeta returns true if the environment has a Kubernetes version that
@@ -735,7 +773,13 @@ func DualStackSupportBeta() bool {
 		return false
 	}
 
-	return GetCurrentIntegration() == "" && supportedVersions(k8sVersion)
+	// AKS does not support dual stack yet
+	if IsIntegration(CIIntegrationAKS) {
+		return false
+	}
+
+	return (GetCurrentIntegration() == "" || IsIntegration(CIIntegrationKind)) &&
+		supportedVersions(k8sVersion)
 }
 
 // CiliumEndpointSliceFeatureEnabled returns true only if the environment has a kubernetes version
@@ -746,5 +790,6 @@ func CiliumEndpointSliceFeatureEnabled() bool {
 	if err != nil {
 		return false
 	}
-	return k8sVersionGreaterEqual121(k8sVersion) && GetCurrentIntegration() == ""
+	return k8sVersionGreaterEqual121(k8sVersion) && (GetCurrentIntegration() == "" ||
+		IsIntegration(CIIntegrationKind))
 }

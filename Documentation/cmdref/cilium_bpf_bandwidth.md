@@ -13,13 +13,13 @@ BPF datapath bandwidth settings
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf bandwidth list](../cilium_bpf_bandwidth_list)	 - List BPF datapath bandwidth settings
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf bandwidth list](cilium_bpf_bandwidth_list.md)	 - List BPF datapath bandwidth settings
 

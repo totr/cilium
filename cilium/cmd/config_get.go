@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,10 +8,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/test/helpers"
-
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -60,7 +60,7 @@ var configGetCmd = &cobra.Command{
 
 func init() {
 	configCmd.AddCommand(configGetCmd)
-	command.AddJSONOutput(configGetCmd)
+	command.AddOutputOption(configGetCmd)
 }
 
 func requireConfigName(cmd *cobra.Command, args []string) {

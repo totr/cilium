@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,10 +9,10 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 // PolicyEnabled and PolicyDisabled represent the endpoint policy status
@@ -38,7 +38,7 @@ var endpointListCmd = &cobra.Command{
 func init() {
 	endpointCmd.AddCommand(endpointListCmd)
 	endpointListCmd.Flags().BoolVar(&noHeaders, "no-headers", false, "Do not print headers")
-	command.AddJSONOutput(endpointListCmd)
+	command.AddOutputOption(endpointListCmd)
 }
 
 func endpointPolicyMode(ep *models.Endpoint) (string, string) {
@@ -55,11 +55,11 @@ func endpointPolicyMode(ep *models.Endpoint) (string, string) {
 		return PolicyEnabled, PolicyDisabled
 	case models.EndpointPolicyEnabledEgress:
 		return PolicyDisabled, PolicyEnabled
-	case models.EndpointPolicyEnabledAuditBoth:
+	case models.EndpointPolicyEnabledAuditDashBoth:
 		return PolicyAudit, PolicyAudit
-	case models.EndpointPolicyEnabledAuditIngress:
+	case models.EndpointPolicyEnabledAuditDashIngress:
 		return PolicyAudit, PolicyDisabled
-	case models.EndpointPolicyEnabledAuditEgress:
+	case models.EndpointPolicyEnabledAuditDashEgress:
 		return PolicyDisabled, PolicyAudit
 	}
 
@@ -79,11 +79,11 @@ func endpointAddressPair(ep *models.Endpoint) (string, string) {
 }
 
 func endpointState(ep *models.Endpoint) string {
-	if ep.Status == nil {
+	if ep.Status == nil || ep.Status.State == nil {
 		return UnknownState
 	}
 
-	return string(ep.Status.State)
+	return string(*ep.Status.State)
 }
 
 func endpointLabels(ep *models.Endpoint) []string {
@@ -143,7 +143,7 @@ func printEndpointList(w *tabwriter.Writer, eps []*models.Endpoint) {
 		fmt.Fprintf(w, "\t%s\t%s\t\t\t\t\t\n", enforcementTitle, enforcementTitle)
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(eps); err != nil {
 			os.Exit(1)
 		}

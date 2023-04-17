@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package api
 
 import (
 	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/cilium/cilium/pkg/ip"
@@ -37,14 +38,22 @@ func (c CIDR) MatchesAll() bool {
 type CIDRRule struct {
 	// CIDR is a CIDR prefix / IP Block.
 	//
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:OneOf
 	Cidr CIDR `json:"cidr"`
+
+	// CIDRGroupRef is a reference to a CiliumCIDRGroup object.
+	// A CiliumCIDRGroup contains a list of CIDRs that the endpoint, subject to
+	// the rule, can (Ingress) or cannot (IngressDeny) receive connections from.
+	//
+	// +kubebuilder:validation:OneOf
+	CIDRGroupRef CIDRGroupRef `json:"cidrGroupRef,omitempty"`
 
 	// ExceptCIDRs is a list of IP blocks which the endpoint subject to the rule
 	// is not allowed to initiate connections to. These CIDR prefixes should be
-	// contained within Cidr. These exceptions are only applied to the Cidr in
-	// this CIDRRule, and do not apply to any other CIDR prefixes in any other
-	// CIDRRules.
+	// contained within Cidr, using ExceptCIDRs together with CIDRGroupRef is not
+	// supported yet.
+	// These exceptions are only applied to the Cidr in this CIDRRule, and do not
+	// apply to any other CIDR prefixes in any other CIDRRules.
 	//
 	// +kubebuilder:validation:Optional
 	ExceptCIDRs []CIDR `json:"except,omitempty"`
@@ -154,18 +163,27 @@ func ComputeResultantCIDRSet(cidrs CIDRRuleSlice) CIDRSlice {
 	return allResultantAllowedCIDRs
 }
 
-// IPsToCIDRRules generates CIDRRules for the IPs passed in./
+// addrsToCIDRRules generates CIDRRules for the IPs passed in.
 // This function will mark the rule to Generated true by default.
-func IPsToCIDRRules(ips []net.IP) (cidrRules []CIDRRule) {
-	for _, ip := range ips {
+func addrsToCIDRRules(addrs []netip.Addr) []CIDRRule {
+	cidrRules := make([]CIDRRule, 0, len(addrs))
+	for _, addr := range addrs {
 		rule := CIDRRule{ExceptCIDRs: make([]CIDR, 0)}
 		rule.Generated = true
-		if ip.To4() != nil {
-			rule.Cidr = CIDR(ip.String() + "/32")
+		if addr.Is4() {
+			rule.Cidr = CIDR(addr.String() + "/32")
 		} else {
-			rule.Cidr = CIDR(ip.String() + "/128")
+			rule.Cidr = CIDR(addr.String() + "/128")
 		}
 		cidrRules = append(cidrRules, rule)
 	}
 	return cidrRules
 }
+
+// +kubebuilder:validation:MaxLength=253
+// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+//
+// CIDRGroupRef is a reference to a CIDR Group.
+// A CIDR Group is a list of CIDRs whose IP addresses should be considered as a
+// same entity when applying fromCIDRGroupRefs policies on incoming network traffic.
+type CIDRGroupRef string

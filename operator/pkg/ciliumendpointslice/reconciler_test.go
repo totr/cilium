@@ -1,28 +1,10 @@
-// Copyright 2021 Authors of Cilium
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package ciliumendpointslice
 
 import (
 	"testing"
-
-	capi_v2a1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
-	fake "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/fake"
-	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2alpha1"
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/time/rate"
@@ -30,6 +12,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/util/workqueue"
+
+	capi_v2a1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	fake "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/fake"
+	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2alpha1"
 )
 
 const (
@@ -100,6 +86,18 @@ var (
 			},
 		},
 	}
+
+	// Test CES object, with no CEPs packed in it.
+	emptyCES = &capi_v2a1.CiliumEndpointSlice{
+		TypeMeta: meta_v1.TypeMeta{
+			Kind:       "CiliumEndpointSlice",
+			APIVersion: capi_v2a1.SchemeGroupVersion.String(),
+		},
+		ObjectMeta: meta_v1.ObjectMeta{
+			Name: "CES-empty",
+		},
+		Endpoints: []capi_v2a1.CoreCiliumEndpoint{},
+	}
 )
 
 func newQueue() workqueue.RateLimitingInterface {
@@ -166,6 +164,17 @@ func TestCiliumReconcile(t *testing.T) {
 		// Get CES from local datastore
 		ces, _ = m.getCESFromCache(CES3.Name)
 		assert.Equal(t, string(ces.GetUID()), CESReconcilerUID, "Returned CES UID from api-server should match with local CES UID")
+	})
+
+	t.Run("Attempt to create empty CES and check that it is not created", func(*testing.T) {
+		m.createCES(emptyCES.Name)
+		m.updateCESInCache(emptyCES, true)
+		err := r.reconcileCESCreate(emptyCES.Name)
+		// There should not be any error from api-server
+		assert.Equal(t, err, nil, "No error in CES Create request to api-server")
+		ces, _ := m.getCESFromCache(emptyCES.Name)
+		// CES is empty, so it should be removed from cache instead of created in the api-server
+		assert.Equal(t, (*capi_v2a1.CiliumEndpointSlice)(nil), ces, "Empty CES was removed from cache rather than created in api-server")
 	})
 
 	// Update CESs, check errors from api-server and match CESs Generate value returned

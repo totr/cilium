@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package mock
 
@@ -22,8 +19,8 @@ var _ = check.Suite(&MockSuite{})
 
 func (e *MockSuite) TestMock(c *check.C) {
 	api := NewMockMetrics()
-	api.IncAllocationAttempt("foo", "s-1")
-	c.Assert(api.AllocationAttempts("foo", "s-1"), check.Equals, int64(1))
+	api.AllocationAttempt("createInterfaceAndAllocateIP", "foo", "s-1", 0)
+	c.Assert(api.GetAllocationAttempts("createInterfaceAndAllocateIP", "foo", "s-1"), check.Equals, int64(1))
 	api.AddIPAllocation("s-1", 10)
 	api.AddIPAllocation("s-1", 20)
 	c.Assert(api.IPAllocations("s-1"), check.Equals, int64(30))
@@ -31,6 +28,10 @@ func (e *MockSuite) TestMock(c *check.C) {
 	c.Assert(api.AllocatedIPs("used"), check.Equals, 200)
 	api.SetAvailableInterfaces(10)
 	c.Assert(api.AvailableInterfaces(), check.Equals, 10)
+	api.SetInterfaceCandidates(10)
+	c.Assert(api.InterfaceCandidates(), check.Equals, 10)
+	api.SetEmptyInterfaceSlots(10)
+	c.Assert(api.EmptyInterfaceSlots(), check.Equals, 10)
 	api.SetNodes("at-capacity", 5)
 	c.Assert(api.Nodes("at-capacity"), check.Equals, 5)
 	api.IncResyncCount()

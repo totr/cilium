@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package pidfile
 
@@ -53,6 +53,10 @@ func Write(path string) error {
 func Clean() {
 	close(cleanUPSig)
 	cleanUPWg.Wait()
+
+	// Reset to original state for reuse in tests
+	cleanUPSig = make(chan struct{})
+	cleanUPWg = &sync.WaitGroup{}
 }
 
 // kill parses the PID in the provided slice and attempts to kill the process

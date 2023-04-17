@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package drop
 
 import (
 	"context"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	"github.com/cilium/cilium/pkg/hubble/metrics/api"
-	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type dropHandler struct {
@@ -26,8 +25,8 @@ func (d *dropHandler) Init(registry *prometheus.Registry, options api.Options) e
 	}
 	d.context = c
 
-	labels := []string{"reason", "protocol"}
-	labels = append(labels, d.context.GetLabelNames()...)
+	contextLabels := d.context.GetLabelNames()
+	labels := append(contextLabels, "reason", "protocol")
 
 	d.drops = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: api.DefaultPrometheusNamespace,
@@ -43,13 +42,26 @@ func (d *dropHandler) Status() string {
 	return d.context.Status()
 }
 
-func (d *dropHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
+func (d *dropHandler) Context() *api.ContextOptions {
+	return d.context
+}
+
+func (d *dropHandler) ListMetricVec() []*prometheus.MetricVec {
+	return []*prometheus.MetricVec{d.drops.MetricVec}
+}
+
+func (d *dropHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) error {
 	if flow.GetVerdict() != flowpb.Verdict_DROPPED {
-		return
+		return nil
 	}
 
-	labels := []string{monitorAPI.DropReason(uint8(flow.GetDropReason())), v1.FlowProtocol(flow)}
-	labels = append(labels, d.context.GetLabelValues(flow)...)
+	contextLabels, err := d.context.GetLabelValues(flow)
+	if err != nil {
+		return err
+	}
+
+	labels := append(contextLabels, flow.GetDropReasonDesc().String(), v1.FlowProtocol(flow))
 
 	d.drops.WithLabelValues(labels...).Inc()
+	return nil
 }

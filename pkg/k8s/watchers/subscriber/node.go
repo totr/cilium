@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package subscriber
 
 import (
 	"fmt"
 
-	"github.com/cilium/cilium/pkg/lock"
-
 	v1 "k8s.io/api/core/v1"
+
+	"github.com/cilium/cilium/pkg/lock"
 )
 
 var _ Node = (*NodeChain)(nil)

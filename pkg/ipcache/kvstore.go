@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package ipcache
 
@@ -14,16 +14,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
-	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/source"
+	"github.com/cilium/cilium/pkg/types"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -34,7 +35,7 @@ const (
 
 var (
 	// IPIdentitiesPath is the path to where endpoint IPs are stored in the key-value
-	//store.
+	// store.
 	IPIdentitiesPath = path.Join(kvstore.BaseKeyPrefix, "state", "ip", "v1")
 
 	// AddressSpace is the address space (cluster, etc.) in which policy is
@@ -97,7 +98,7 @@ func newKVReferenceCounter(s store) *kvReferenceCounter {
 // UpsertIPToKVStore updates / inserts the provided IP->Identity mapping into the
 // kvstore, which will subsequently trigger an event in NewIPIdentityWatcher().
 func UpsertIPToKVStore(ctx context.Context, IP, hostIP net.IP, ID identity.NumericIdentity, key uint8,
-	metadata, k8sNamespace, k8sPodName string, npm policy.NamedPortMap) error {
+	metadata, k8sNamespace, k8sPodName string, npm types.NamedPortMap) error {
 	// Sort named ports into a slice
 	namedPorts := make([]identity.NamedPort, 0, len(npm))
 	for name, value := range npm {
@@ -197,17 +198,37 @@ type IPIdentityWatcher struct {
 	synced     chan struct{}
 	stopOnce   sync.Once
 	syncedOnce sync.Once
+
+	clusterID uint32
+
+	ipcache IPCacher
+}
+
+type IPCacher interface {
+	Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8sMetadata, newIdentity Identity) (bool, error)
+	ForEachListener(f func(listener IPIdentityMappingListener))
+	Delete(IP string, source source.Source) (namedPortsChanged bool)
 }
 
 // NewIPIdentityWatcher creates a new IPIdentityWatcher using the specified
-// kvstore backend
-func NewIPIdentityWatcher(backend kvstore.BackendOperations) *IPIdentityWatcher {
-	watcher := &IPIdentityWatcher{
-		backend: backend,
-		stop:    make(chan struct{}),
-		synced:  make(chan struct{}),
-	}
+// kvstore backend.
+func NewIPIdentityWatcher(ipc IPCacher, backend kvstore.BackendOperations) *IPIdentityWatcher {
+	return NewClusterIPIdentityWatcher(0, ipc, backend)
+}
 
+// NewClusterIPIdentityWatcher creates a new IPIdentityWatcher using the specified
+// kvstore backend. The difference between the watcher created by NewIPIdentityWatcher
+// is that each IP <=> Identity mapping will be annotated with ClusterID. Thus, it
+// can be used for watching the kvstore of the remote cluster with overlapping PodCIDR.
+// Calling this function with clusterID = 0 is identical to calling NewIPIdentityWatcher.
+func NewClusterIPIdentityWatcher(clusterID uint32, ipc IPCacher, backend kvstore.BackendOperations) *IPIdentityWatcher {
+	watcher := &IPIdentityWatcher{
+		clusterID: clusterID,
+		backend:   backend,
+		stop:      make(chan struct{}),
+		synced:    make(chan struct{}),
+		ipcache:   ipc,
+	}
 	return watcher
 }
 
@@ -217,7 +238,8 @@ func NewIPIdentityWatcher(backend kvstore.BackendOperations) *IPIdentityWatcher 
 // automatically restart as required.
 func (iw *IPIdentityWatcher) Watch(ctx context.Context) {
 
-	var scopedLog *logrus.Entry
+	scopedLog := log
+
 restart:
 	watcher := iw.backend.ListAndWatch(ctx, "endpointIPWatcher", IPIdentitiesPath, 512)
 
@@ -232,7 +254,10 @@ restart:
 			}
 
 			if option.Config.Debug {
-				scopedLog = log.WithFields(logrus.Fields{"kvstore-event": event.Typ.String(), "key": event.Key})
+				scopedLog = log.WithFields(logrus.Fields{
+					"kvstore-event": event.Typ.String(),
+					"key":           event.Key,
+				})
 				scopedLog.Debug("Received event")
 			}
 
@@ -256,24 +281,26 @@ restart:
 			//   the deletion event.
 			switch event.Typ {
 			case kvstore.EventTypeListDone:
-				IPIdentityCache.Lock()
-				for _, listener := range IPIdentityCache.listeners {
+				iw.ipcache.ForEachListener(func(listener IPIdentityMappingListener) {
 					listener.OnIPIdentityCacheGC()
-				}
-				IPIdentityCache.Unlock()
+				})
 				iw.closeSynced()
 
 			case kvstore.EventTypeCreate, kvstore.EventTypeModify:
 				var ipIDPair identity.IPIdentityPair
 				err := json.Unmarshal(event.Value, &ipIDPair)
 				if err != nil {
-					log.WithFields(logrus.Fields{"kvstore-event": event.Typ.String(), "key": event.Key}).
-						WithError(err).Error("Not adding entry to ip cache; error unmarshaling data from key-value store")
+					log.WithFields(logrus.Fields{
+						"kvstore-event": event.Typ.String(),
+						"key":           event.Key,
+					}).WithError(err).Error("Not adding entry to ip cache; error unmarshaling data from key-value store")
 					continue
 				}
 				ip := ipIDPair.PrefixString()
 				if ip == "<nil>" {
-					scopedLog.Debug("Ignoring entry with nil IP")
+					if option.Config.Debug {
+						scopedLog.Debug("Ignoring entry with nil IP")
+					}
 					continue
 				}
 				var k8sMeta *K8sMetadata
@@ -281,15 +308,35 @@ restart:
 					k8sMeta = &K8sMetadata{
 						Namespace:  ipIDPair.K8sNamespace,
 						PodName:    ipIDPair.K8sPodName,
-						NamedPorts: make(policy.NamedPortMap, len(ipIDPair.NamedPorts)),
+						NamedPorts: make(types.NamedPortMap, len(ipIDPair.NamedPorts)),
 					}
 					for _, np := range ipIDPair.NamedPorts {
 						err = k8sMeta.NamedPorts.AddPort(np.Name, int(np.Port), np.Protocol)
 						if err != nil {
-							log.WithFields(logrus.Fields{"kvstore-event": event.Typ.String(), "key": event.Key}).
-								WithError(err).Error("Parsing named port failed")
+							log.WithFields(logrus.Fields{
+								"kvstore-event": event.Typ.String(),
+								"key":           event.Key,
+							}).WithError(err).Error("Parsing named port failed")
 						}
 					}
+				}
+
+				peerIdentity := ipIDPair.ID
+				if option.Config.EnableRemoteNodeIdentity && peerIdentity == identity.ReservedIdentityHost {
+					// The only way we can discover IPs associated with the local host
+					// is directly via the NodeDiscovery package. If someone is informing
+					// this agent about IPs corresponding to the "host" via the kvstore,
+					// then they're sharing their own perspective on their own node IPs'
+					// identity. However, this node has remote-node enabled, so we should
+					// treat the peer as a "remote-node", not a "host".
+					peerIdentity = identity.ReservedIdentityRemoteNode
+				}
+
+				if iw.clusterID != 0 {
+					// Annotate IP/Prefix string with ClusterID. So that we can distinguish
+					// the two network endpoints that have the same IP adddress, but belogs
+					// to the different clusters.
+					ip = cmtypes.AnnotateIPCacheKeyWithClusterID(ip, iw.clusterID)
 				}
 
 				// There is no need to delete the "old" IP addresses from this
@@ -298,8 +345,8 @@ restart:
 				// and the endpoint-runIPIdentitySync where it bounded to a
 				// lease and a controller which is stopped/removed when the
 				// endpoint is gone.
-				IPIdentityCache.Upsert(ip, ipIDPair.HostIP, ipIDPair.Key, k8sMeta, Identity{
-					ID:     ipIDPair.ID,
+				iw.ipcache.Upsert(ip, ipIDPair.HostIP, ipIDPair.Key, k8sMeta, Identity{
+					ID:     peerIdentity,
 					Source: source.KVStore,
 				})
 
@@ -308,8 +355,10 @@ restart:
 				// need to convert kvstore key to IP.
 				ipnet, isHost, err := keyToIPNet(event.Key)
 				if err != nil {
-					log.WithFields(logrus.Fields{"kvstore-event": event.Typ.String(), "key": event.Key}).
-						WithError(err).Error("Error parsing IP from key")
+					log.WithFields(logrus.Fields{
+						"kvstore-event": event.Typ.String(),
+						"key":           event.Key,
+					}).WithError(err).Error("Error parsing IP from key")
 					continue
 				}
 				var ip string
@@ -330,10 +379,15 @@ restart:
 				} else {
 					globalMap.Unlock()
 
+					if iw.clusterID != 0 {
+						// See equivalent logic in the kvstore.EventTypeUpdate case
+						ip = cmtypes.AnnotateIPCacheKeyWithClusterID(ip, iw.clusterID)
+					}
+
 					// The key no longer exists in the
 					// local cache, it is safe to remove
 					// from the datapath ipcache.
-					IPIdentityCache.Delete(ip, source.KVStore)
+					iw.ipcache.Delete(ip, source.KVStore)
 				}
 			}
 		case <-ctx.Done():
@@ -355,7 +409,7 @@ func (iw *IPIdentityWatcher) Close() {
 	})
 }
 
-//closeSynced the IPIdentityWathcer and case panic
+// closeSynced the IPIdentityWathcer and case panic
 func (iw *IPIdentityWatcher) closeSynced() {
 	iw.syncedOnce.Do(func() {
 		close(iw.synced)
@@ -373,13 +427,13 @@ var (
 
 // InitIPIdentityWatcher initializes the watcher for ip-identity mapping events
 // in the key-value store.
-func InitIPIdentityWatcher() {
+func (ipc *IPCache) InitIPIdentityWatcher(ctx context.Context) {
 	setupIPIdentityWatcher.Do(func() {
 		go func() {
 			log.Info("Starting IP identity watcher")
-			watcher = NewIPIdentityWatcher(kvstore.Client())
+			watcher = NewIPIdentityWatcher(ipc, kvstore.Client())
 			close(initialized)
-			watcher.Watch(context.TODO())
+			watcher.Watch(ctx)
 		}()
 	})
 }

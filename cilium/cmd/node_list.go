@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -10,11 +10,11 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	pkg "github.com/cilium/cilium/pkg/client"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 var nodeListCmd = &cobra.Command{
@@ -33,7 +33,7 @@ var nodeListCmd = &cobra.Command{
 			return
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(cluster); err != nil {
 				os.Exit(1)
 			}
@@ -48,7 +48,7 @@ var nodeListCmd = &cobra.Command{
 
 func init() {
 	nodeCmd.AddCommand(nodeListCmd)
-	command.AddJSONOutput(nodeListCmd)
+	command.AddOutputOption(nodeListCmd)
 }
 
 func formatStatusResponse(w io.Writer, nodes []*models.NodeElement) {

@@ -1,26 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
+
+	"github.com/go-openapi/runtime/middleware"
+	"github.com/go-openapi/strfmt"
+	"github.com/sirupsen/logrus"
+	versionapi "k8s.io/apimachinery/pkg/version"
 
 	"github.com/cilium/cilium/api/v1/models"
 	. "github.com/cilium/cilium/api/v1/server/restapi/daemon"
 	"github.com/cilium/cilium/pkg/backoff"
 	"github.com/cilium/cilium/pkg/controller"
-	"github.com/cilium/cilium/pkg/datapath"
 	datapathOption "github.com/cilium/cilium/pkg/datapath/option"
-	"github.com/cilium/cilium/pkg/k8s"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
+	"github.com/cilium/cilium/pkg/identity"
 	k8smetrics "github.com/cilium/cilium/pkg/k8s/metrics"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-	"github.com/cilium/cilium/pkg/maps/eppolicymap"
 	"github.com/cilium/cilium/pkg/maps/eventsmap"
 	ipcachemap "github.com/cilium/cilium/pkg/maps/ipcache"
 	ipmasqmap "github.com/cilium/cilium/pkg/maps/ipmasq"
@@ -28,7 +33,6 @@ import (
 	"github.com/cilium/cilium/pkg/maps/lxcmap"
 	"github.com/cilium/cilium/pkg/maps/metricsmap"
 	"github.com/cilium/cilium/pkg/maps/signalmap"
-	"github.com/cilium/cilium/pkg/maps/sockmap"
 	tunnelmap "github.com/cilium/cilium/pkg/maps/tunnel"
 	"github.com/cilium/cilium/pkg/node"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
@@ -36,11 +40,6 @@ import (
 	"github.com/cilium/cilium/pkg/rand"
 	"github.com/cilium/cilium/pkg/status"
 	"github.com/cilium/cilium/pkg/version"
-	"github.com/sirupsen/logrus"
-
-	"github.com/go-openapi/runtime/middleware"
-	"github.com/go-openapi/strfmt"
-	versionapi "k8s.io/apimachinery/pkg/version"
 )
 
 const (
@@ -89,13 +88,13 @@ func (k *k8sVersion) update(version *versionapi.Info) string {
 var k8sVersionCache k8sVersion
 
 func (d *Daemon) getK8sStatus() *models.K8sStatus {
-	if !k8s.IsEnabled() {
+	if !d.clientset.IsEnabled() {
 		return &models.K8sStatus{State: models.StatusStateDisabled}
 	}
 
 	version, valid := k8sVersionCache.cachedVersion()
 	if !valid {
-		k8sVersion, err := k8s.Client().Discovery().ServerVersion()
+		k8sVersion, err := d.clientset.Discovery().ServerVersion()
 		if err != nil {
 			return &models.K8sStatus{State: models.StatusStateFailure, Msg: err.Error()}
 		}
@@ -114,14 +113,14 @@ func (d *Daemon) getK8sStatus() *models.K8sStatus {
 
 func (d *Daemon) getMasqueradingStatus() *models.Masquerading {
 	s := &models.Masquerading{
-		Enabled: option.Config.EnableIPv4Masquerade || option.Config.EnableIPv6Masquerade,
+		Enabled: option.Config.MasqueradingEnabled(),
 		EnabledProtocols: &models.MasqueradingEnabledProtocols{
 			IPV4: option.Config.EnableIPv4Masquerade,
 			IPV6: option.Config.EnableIPv6Masquerade,
 		},
 	}
 
-	if !option.Config.EnableIPv4Masquerade && !option.Config.EnableIPv6Masquerade {
+	if !option.Config.MasqueradingEnabled() {
 		return s
 	}
 
@@ -146,6 +145,14 @@ func (d *Daemon) getMasqueradingStatus() *models.Masquerading {
 	return s
 }
 
+func (d *Daemon) getIPV6BigTCPStatus() *models.IPV6BigTCP {
+	s := &models.IPV6BigTCP{
+		Enabled: option.Config.EnableIPv6BIGTCP,
+	}
+
+	return s
+}
+
 func (d *Daemon) getBandwidthManagerStatus() *models.BandwidthManager {
 	s := &models.BandwidthManager{
 		Enabled: option.Config.EnableBandwidthManager,
@@ -155,12 +162,12 @@ func (d *Daemon) getBandwidthManagerStatus() *models.BandwidthManager {
 		return s
 	}
 
-	devices := make([]string, len(option.Config.Devices))
-	for i, iface := range option.Config.Devices {
-		devices[i] = iface
+	s.CongestionControl = models.BandwidthManagerCongestionControlCubic
+	if option.Config.EnableBBR {
+		s.CongestionControl = models.BandwidthManagerCongestionControlBbr
 	}
 
-	s.Devices = devices
+	s.Devices = option.Config.GetDevices()
 	return s
 }
 
@@ -177,13 +184,9 @@ func (d *Daemon) getHostFirewallStatus() *models.HostFirewall {
 	if option.Config.EnableHostFirewall {
 		mode = models.HostFirewallModeEnabled
 	}
-	devices := make([]string, len(option.Config.Devices))
-	for i, iface := range option.Config.Devices {
-		devices[i] = iface
-	}
 	return &models.HostFirewall{
 		Mode:    mode,
-		Devices: devices,
+		Devices: option.Config.GetDevices(),
 	}
 }
 
@@ -196,6 +199,16 @@ func (d *Daemon) getClockSourceStatus() *models.ClockSource {
 	return s
 }
 
+func (d *Daemon) getCNIChainingStatus() *models.CNIChainingStatus {
+	mode := d.cniConfigManager.GetChainingMode()
+	if len(mode) == 0 {
+		mode = models.CNIChainingStatusModeNone
+	}
+	return &models.CNIChainingStatus{
+		Mode: mode,
+	}
+}
+
 func (d *Daemon) getKubeProxyReplacementStatus() *models.KubeProxyReplacement {
 	var mode string
 	switch option.Config.KubeProxyReplacement {
@@ -203,18 +216,15 @@ func (d *Daemon) getKubeProxyReplacementStatus() *models.KubeProxyReplacement {
 		mode = models.KubeProxyReplacementModeStrict
 	case option.KubeProxyReplacementPartial:
 		mode = models.KubeProxyReplacementModePartial
-	case option.KubeProxyReplacementProbe:
-		mode = models.KubeProxyReplacementModeProbe
 	case option.KubeProxyReplacementDisabled:
 		mode = models.KubeProxyReplacementModeDisabled
 	}
 
-	devicesLegacy := make([]string, len(option.Config.Devices))
-	devices := make([]*models.KubeProxyReplacementDeviceListItems0, len(option.Config.Devices))
+	devicesLegacy := option.Config.GetDevices()
+	devices := make([]*models.KubeProxyReplacementDeviceListItems0, len(devicesLegacy))
 	v4Addrs := node.GetNodePortIPv4AddrsWithDevices()
 	v6Addrs := node.GetNodePortIPv6AddrsWithDevices()
-	for i, iface := range option.Config.Devices {
-		devicesLegacy[i] = iface
+	for i, iface := range devicesLegacy {
 		info := &models.KubeProxyReplacementDeviceListItems0{
 			Name: iface,
 			IP:   make([]string, 0),
@@ -232,9 +242,12 @@ func (d *Daemon) getKubeProxyReplacementStatus() *models.KubeProxyReplacement {
 		NodePort:              &models.KubeProxyReplacementFeaturesNodePort{},
 		HostPort:              &models.KubeProxyReplacementFeaturesHostPort{},
 		ExternalIPs:           &models.KubeProxyReplacementFeaturesExternalIPs{},
-		HostReachableServices: &models.KubeProxyReplacementFeaturesHostReachableServices{},
+		SocketLB:              &models.KubeProxyReplacementFeaturesSocketLB{},
+		SocketLBTracing:       &models.KubeProxyReplacementFeaturesSocketLBTracing{},
 		SessionAffinity:       &models.KubeProxyReplacementFeaturesSessionAffinity{},
 		GracefulTermination:   &models.KubeProxyReplacementFeaturesGracefulTermination{},
+		Nat46X64:              &models.KubeProxyReplacementFeaturesNat46X64{},
+		BpfSocketLBHostnsOnly: option.Config.BPFSocketLBHostnsOnly,
 	}
 	if option.Config.EnableNodePort {
 		features.NodePort.Enabled = true
@@ -261,22 +274,31 @@ func (d *Daemon) getKubeProxyReplacementStatus() *models.KubeProxyReplacement {
 	if option.Config.EnableExternalIPs {
 		features.ExternalIPs.Enabled = true
 	}
-	if option.Config.EnableHostServicesTCP {
-		features.HostReachableServices.Enabled = true
-		protocols := []string{}
-		if option.Config.EnableHostServicesTCP {
-			protocols = append(protocols, "TCP")
-		}
-		if option.Config.EnableHostServicesUDP {
-			protocols = append(protocols, "UDP")
-		}
-		features.HostReachableServices.Protocols = protocols
+	if option.Config.EnableSocketLB {
+		features.SocketLB.Enabled = true
+		features.SocketLBTracing.Enabled = true
 	}
 	if option.Config.EnableSessionAffinity {
 		features.SessionAffinity.Enabled = true
 	}
 	if option.Config.EnableK8sTerminatingEndpoint {
 		features.GracefulTermination.Enabled = true
+	}
+	if option.Config.NodePortNat46X64 || option.Config.EnableNat46X64Gateway {
+		features.Nat46X64.Enabled = true
+		gw := &models.KubeProxyReplacementFeaturesNat46X64Gateway{
+			Enabled:  option.Config.EnableNat46X64Gateway,
+			Prefixes: make([]string, 0),
+		}
+		if option.Config.EnableNat46X64Gateway {
+			gw.Prefixes = append(gw.Prefixes, option.Config.IPv6NAT46x64CIDR)
+		}
+		features.Nat46X64.Gateway = gw
+
+		svc := &models.KubeProxyReplacementFeaturesNat46X64Service{
+			Enabled: option.Config.NodePortNat46X64,
+		}
+		features.Nat46X64.Service = svc
 	}
 
 	return &models.KubeProxyReplacement{
@@ -292,6 +314,10 @@ func (d *Daemon) getBPFMapStatus() *models.BPFMapStatus {
 	return &models.BPFMapStatus{
 		DynamicSizeRatio: option.Config.BPFMapsDynamicSizeRatio,
 		Maps: []*models.BPFMapProperties{
+			{
+				Name: "Auth",
+				Size: int64(option.Config.AuthMapEntries),
+			},
 			{
 				Name: "Non-TCP connection tracking",
 				Size: int64(option.Config.CTMapEntriesGlobalAny),
@@ -322,27 +348,27 @@ func (d *Daemon) getBPFMapStatus() *models.BPFMapStatus {
 			},
 			{
 				Name: "IPv4 service", // cilium_lb4_services_v2
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.ServiceMapMaxEntries),
 			},
 			{
 				Name: "IPv6 service", // cilium_lb6_services_v2
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.ServiceMapMaxEntries),
 			},
 			{
 				Name: "IPv4 service backend", // cilium_lb4_backends_v2
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.ServiceBackEndMapMaxEntries),
 			},
 			{
 				Name: "IPv6 service backend", // cilium_lb6_backends_v2
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.ServiceBackEndMapMaxEntries),
 			},
 			{
 				Name: "IPv4 service reverse NAT", // cilium_lb4_reverse_nat
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.RevNatMapMaxEntries),
 			},
 			{
 				Name: "IPv6 service reverse NAT", // cilium_lb6_reverse_nat
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.RevNatMapMaxEntries),
 			},
 			{
 				Name: "Metrics",
@@ -361,20 +387,12 @@ func (d *Daemon) getBPFMapStatus() *models.BPFMapStatus {
 				Size: int64(option.Config.PolicyMapEntries),
 			},
 			{
-				Name: "Per endpoint policy",
-				Size: int64(eppolicymap.MaxEntries),
-			},
-			{
 				Name: "Session affinity",
-				Size: int64(lbmap.MaxEntries),
+				Size: int64(lbmap.AffinityMapMaxEntries),
 			},
 			{
 				Name: "Signal",
 				Size: int64(signalmap.MaxEntries),
-			},
-			{
-				Name: "Sockmap",
-				Size: int64(sockmap.MaxEntries),
 			},
 			{
 				Name: "Sock reverse NAT",
@@ -398,7 +416,7 @@ func NewGetHealthzHandler(d *Daemon) GetHealthzHandler {
 
 func (d *Daemon) getNodeStatus() *models.ClusterStatus {
 	clusterStatus := models.ClusterStatus{
-		Self: d.nodeDiscovery.LocalNode.Fullname(),
+		Self: nodeTypes.GetAbsoluteNodeName(),
 	}
 	for _, node := range d.nodeDiscovery.Manager.GetNodes() {
 		clusterStatus.Nodes = append(clusterStatus.Nodes, node.GetModel())
@@ -509,6 +527,21 @@ func (c *clusterNodesClient) NodeCleanNeighbors(migrateOnly bool) {
 	return
 }
 
+func (c *clusterNodesClient) AllocateNodeID(_ net.IP) uint16 {
+	// no-op
+	return 0
+}
+
+func (c *clusterNodesClient) DumpNodeIDs() []*models.NodeID {
+	// no-op
+	return nil
+}
+
+func (c *clusterNodesClient) RestoreNodeIDs() {
+	// no-op
+	return
+}
+
 func (h *getNodes) cleanupClients() {
 	past := time.Now().Add(-clientGCTimeout)
 	for k, v := range h.clients {
@@ -559,7 +592,7 @@ func (h *getNodes) Handle(params GetClusterNodesParams) middleware.Responder {
 			lastSync: time.Now(),
 			ClusterNodeStatus: &models.ClusterNodeStatus{
 				ClientID: clientID,
-				Self:     h.d.nodeDiscovery.LocalNode.Fullname(),
+				Self:     nodeTypes.GetAbsoluteNodeName(),
 			},
 		}
 		h.d.nodeDiscovery.Manager.Subscribe(c)
@@ -575,7 +608,7 @@ func (h *getNodes) Handle(params GetClusterNodesParams) middleware.Responder {
 	// added / removed.
 	c.ClusterNodeStatus = &models.ClusterNodeStatus{
 		ClientID: clientID,
-		Self:     h.d.nodeDiscovery.LocalNode.Fullname(),
+		Self:     nodeTypes.GetAbsoluteNodeName(),
 	}
 	c.lastSync = time.Now()
 	c.Unlock()
@@ -656,10 +689,16 @@ func (d *Daemon) getStatus(brief bool) models.StatusResponse {
 			State: d.statusResponse.ContainerRuntime.State,
 			Msg:   fmt.Sprintf("%s    %s", ciliumVer, msg),
 		}
-	case k8s.IsEnabled() && d.statusResponse.Kubernetes != nil && d.statusResponse.Kubernetes.State != models.StatusStateOk:
+	case d.clientset.IsEnabled() && d.statusResponse.Kubernetes != nil && d.statusResponse.Kubernetes.State != models.StatusStateOk:
 		msg := "Kubernetes service is not ready"
 		sr.Cilium = &models.Status{
 			State: d.statusResponse.Kubernetes.State,
+			Msg:   fmt.Sprintf("%s    %s", ciliumVer, msg),
+		}
+	case d.statusResponse.CniFile != nil && d.statusResponse.CniFile.State == models.StatusStateFailure:
+		msg := "Could not write CNI config file"
+		sr.Cilium = &models.Status{
+			State: models.StatusStateFailure,
 			Msg:   fmt.Sprintf("%s    %s", ciliumVer, msg),
 		}
 	default:
@@ -672,7 +711,16 @@ func (d *Daemon) getStatus(brief bool) models.StatusResponse {
 	return sr
 }
 
-func (d *Daemon) startStatusCollector() {
+func (d *Daemon) getIdentityRange() *models.IdentityRange {
+	s := &models.IdentityRange{
+		MinIdentity: int64(identity.MinimalAllocationIdentity),
+		MaxIdentity: int64(identity.MaximumAllocationIdentity),
+	}
+
+	return s
+}
+
+func (d *Daemon) startStatusCollector(cleaner *daemonCleanup) {
 	probes := []status.Probe{
 		{
 			Name: "check-locks",
@@ -809,7 +857,7 @@ func (d *Daemon) startStatusCollector() {
 			Name: "cluster",
 			Probe: func(ctx context.Context) (interface{}, error) {
 				clusterStatus := &models.ClusterStatus{
-					Self: d.nodeDiscovery.LocalNode.Fullname(),
+					Self: nodeTypes.GetAbsoluteNodeName(),
 				}
 				return clusterStatus, nil
 			},
@@ -969,23 +1017,39 @@ func (d *Daemon) startStatusCollector() {
 				}
 			},
 		},
-	}
+		{
+			Name: "kube-proxy-replacement",
+			Probe: func(ctx context.Context) (interface{}, error) {
+				if d.clientset.IsEnabled() || option.Config.DatapathMode == datapathOption.DatapathModeLBOnly {
+					return d.getKubeProxyReplacementStatus(), nil
+				} else {
+					return nil, nil
+				}
+			},
+			OnStatusUpdate: func(status status.Status) {
+				d.statusCollectMutex.Lock()
+				defer d.statusCollectMutex.Unlock()
 
-	if k8s.IsEnabled() || option.Config.DatapathMode == datapathOption.DatapathModeLBOnly {
-		// kube-proxy replacement configuration does not change after
-		// initKubeProxyReplacementOptions() has been executed, so it's fine to
-		// statically set the field here.
-		d.statusResponse.KubeProxyReplacement = d.getKubeProxyReplacementStatus()
+				if status.Err == nil {
+					if s, ok := status.Data.(*models.KubeProxyReplacement); ok {
+						d.statusResponse.KubeProxyReplacement = s
+					}
+				}
+			},
+		},
 	}
 
 	d.statusResponse.Masquerading = d.getMasqueradingStatus()
+	d.statusResponse.IPV6BigTCP = d.getIPV6BigTCPStatus()
 	d.statusResponse.BandwidthManager = d.getBandwidthManagerStatus()
 	d.statusResponse.HostFirewall = d.getHostFirewallStatus()
 	d.statusResponse.HostRouting = d.getHostRoutingStatus()
 	d.statusResponse.ClockSource = d.getClockSourceStatus()
 	d.statusResponse.BpfMaps = d.getBPFMapStatus()
+	d.statusResponse.CniChaining = d.getCNIChainingStatus()
+	d.statusResponse.IdentityRange = d.getIdentityRange()
 
-	d.statusCollector = status.NewCollector(probes, status.Config{})
+	d.statusCollector = status.NewCollector(probes, status.Config{StackdumpPath: "/run/cilium/state/agent.stack.gz"})
 
 	// Set up a signal handler function which prints out logs related to daemon status.
 	cleaner.cleanupFuncs.Add(func() {

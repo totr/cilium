@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build linux
-// +build linux
 
 package mtu
 
@@ -10,10 +9,10 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/cilium/cilium/pkg/logging/logfields"
-
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
+
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 const (
@@ -86,7 +85,7 @@ func getMTUFromIf(ip net.IP) (int, error) {
 		}
 
 		for _, addr := range addrs {
-			if addr.IPNet.IP.Equal(ip) == true {
+			if addr.IPNet.IP.Equal(ip) {
 				myMTU := iface.Attrs().MTU
 				log.WithFields(logrus.Fields{
 					logfields.Device: iface.Attrs().Name,

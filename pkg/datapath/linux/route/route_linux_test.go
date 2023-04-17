@@ -1,35 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
-
-//go:build privileged_tests
-// +build privileged_tests
+// Copyright Authors of Cilium
 
 package route
 
 import (
 	"net"
-	"testing"
 	"time"
-
-	"github.com/cilium/cilium/pkg/testutils"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 	. "gopkg.in/check.v1"
-)
 
-// Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { TestingT(t) }
+	"github.com/cilium/cilium/pkg/testutils"
+)
 
 type RouteSuitePrivileged struct{}
 
 var _ = Suite(&RouteSuitePrivileged{})
 
-func parseIP(ip string) *net.IP {
-	result := net.ParseIP(ip)
-	return &result
+func (s *RouteSuitePrivileged) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
 }
 
 func testReplaceNexthopRoute(c *C, link netlink.Link, routerNet *net.IPNet) {
@@ -93,7 +85,7 @@ func testReplaceRoute(c *C, prefixStr, nexthopStr string, lookupTest bool) {
 		Scope:  netlink.SCOPE_LINK,
 	})
 
-	_, err = Upsert(rt)
+	err = Upsert(rt)
 	c.Assert(err, IsNil)
 
 	if lookupTest {

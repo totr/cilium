@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package k8s
 
@@ -10,6 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	. "gopkg.in/check.v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/annotation"
@@ -24,9 +24,6 @@ import (
 	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/policy/api"
 	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
-
-	. "gopkg.in/check.v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -93,7 +90,7 @@ type DummySelectorCacheUser struct{}
 
 func testNewPolicyRepository() *policy.Repository {
 	idAllocator := testidentity.NewMockIdentityAllocator(nil)
-	repo := policy.NewPolicyRepository(idAllocator, nil, nil)
+	repo := policy.NewPolicyRepository(idAllocator, nil, nil, nil)
 	repo.GetSelectorCache().SetLocalIdentityNotifier(testidentity.NewDummyIdentityNotifier())
 	return repo
 }
@@ -173,16 +170,16 @@ func (s *K8sSuite) TestParseNetworkPolicyIngress(c *C) {
 	c.Assert(ingressL4Policy, checker.Equals, policy.L4PolicyMap{
 		"80/TCP": {
 			Port: 80, Protocol: api.ProtoTCP, U8Proto: 6,
-			L7Parser:           policy.ParserTypeNone,
-			L7RulesPerSelector: policy.L7DataMap{cachedEPSelector: nil},
-			Ingress:            true,
-			DerivedFromRules: []labels.LabelArray{
-				labels.ParseLabelArray(
+			L7Parser:            policy.ParserTypeNone,
+			PerSelectorPolicies: policy.L7DataMap{cachedEPSelector: nil},
+			Ingress:             true,
+			RuleOrigin: map[policy.CachedSelector]labels.LabelArrayList{
+				cachedEPSelector: {labels.ParseLabelArray(
 					"k8s:"+k8sConst.PolicyLabelName,
 					"k8s:"+k8sConst.PolicyLabelUID,
 					"k8s:"+k8sConst.PolicyLabelNamespace+"=default",
 					"k8s:"+k8sConst.PolicyLabelDerivedFrom+"="+resourceTypeNetworkPolicy,
-				),
+				)},
 			},
 		},
 	})
@@ -214,7 +211,7 @@ func (s *K8sSuite) TestParseNetworkPolicyMultipleSelectors(c *C) {
 	// Rule with multiple selectors in egress and ingress
 	ex1 := []byte(`{
 "kind":"NetworkPolicy",
-"apiVersion":"extensions/networkingv1",
+"apiVersion":"networking.k8s.io/v1",
 "metadata":{
   "name":"ingress-multiple-selectors"
 },
@@ -354,7 +351,7 @@ func (s *K8sSuite) TestParseNetworkPolicyNoSelectors(c *C) {
 	// Ingress with neither pod nor namespace selector set.
 	ex1 := []byte(`{
 "kind": "NetworkPolicy",
-"apiVersion": "extensions/networkingv1",
+"apiVersion": "networking.k8s.io/v1",
 "metadata": {
   "name": "ingress-cidr-test",
   "namespace": "myns",
@@ -502,16 +499,11 @@ func (s *K8sSuite) TestParseNetworkPolicyEgress(c *C) {
 	c.Assert(egressL4Policy, checker.DeepEquals, policy.L4PolicyMap{
 		"80/TCP": {
 			Port: 80, Protocol: api.ProtoTCP, U8Proto: 6,
-			L7Parser:           policy.ParserTypeNone,
-			L7RulesPerSelector: policy.L7DataMap{cachedEPSelector: nil},
-			Ingress:            false,
-			DerivedFromRules: []labels.LabelArray{
-				labels.ParseLabelArray(
-					"k8s:"+k8sConst.PolicyLabelName,
-					"k8s:"+k8sConst.PolicyLabelUID,
-					"k8s:"+k8sConst.PolicyLabelNamespace+"=default",
-					"k8s:"+k8sConst.PolicyLabelDerivedFrom+"="+resourceTypeNetworkPolicy,
-				),
+			L7Parser:            policy.ParserTypeNone,
+			PerSelectorPolicies: policy.L7DataMap{cachedEPSelector: nil},
+			Ingress:             false,
+			RuleOrigin: map[policy.CachedSelector]labels.LabelArrayList{
+				cachedEPSelector: {rules[0].Labels},
 			},
 		},
 	})
@@ -839,7 +831,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// backend pods in the same namespace `myns`
 	ex1 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/v1beta1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-frontend",
     "namespace": "myns"
@@ -882,7 +874,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// in the same namespace `myns`
 	ex1 = []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/networkingv1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-frontend",
     "namespace": "myns"
@@ -975,7 +967,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// Example 2a: Allow TCP 443 from any source in Bob's namespaces.
 	ex2 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/v1beta1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-tcp-443"
   },
@@ -1017,7 +1009,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// Example 2b: Allow from any source in Bob's namespaces.
 	ex2 = []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/networkingv1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-tcp-443"
   },
@@ -1104,7 +1096,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// Example 3: Allow all traffic to all pods in this namespace.
 	ex3 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/v1beta1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-all"
   },
@@ -1179,7 +1171,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// policies to see if the rules are additive for the same podSelector.
 	ex4 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/v1beta1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-tcp-8080"
   },
@@ -1223,7 +1215,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// policies to see if the rules are additive for the same podSelector.
 	ex4 = []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/networkingv1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-tcp-8080"
   },
@@ -1340,7 +1332,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 	// Example 5: Some policies with match expressions.
 	ex5 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/v1beta1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "allow-tcp-8080",
     "namespace": "expressions"
@@ -1512,7 +1504,7 @@ func (s *K8sSuite) TestNetworkPolicyExamples(c *C) {
 func (s *K8sSuite) TestCIDRPolicyExamples(c *C) {
 	ex1 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/networkingv1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "ingress-cidr-test",
     "namespace": "myns"
@@ -1561,7 +1553,7 @@ func (s *K8sSuite) TestCIDRPolicyExamples(c *C) {
 
 	ex2 := []byte(`{
   "kind": "NetworkPolicy",
-  "apiVersion": "extensions/networkingv1",
+  "apiVersion": "networking.k8s.io/v1",
   "metadata": {
     "name": "ingress-cidr-test",
     "namespace": "myns"
@@ -1812,7 +1804,7 @@ func (s *K8sSuite) TestGetPolicyLabelsv1(c *C) {
 			np: &slim_networkingv1.NetworkPolicy{
 				ObjectMeta: slim_metav1.ObjectMeta{
 					Annotations: map[string]string{
-						annotation.Name: "foo",
+						annotation.PolicyName: "foo",
 					},
 				},
 			},

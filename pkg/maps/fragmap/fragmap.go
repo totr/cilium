@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package fragmap
 
@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/types"
 )
 
@@ -68,7 +69,7 @@ func InitMap(mapEntries int) error {
 		0,
 		0,
 		bpf.ConvertKeyValue,
-	)
+	).WithEvents(option.Config.GetEventBufferConfig(MapName))
 	_, err := fragMap.Create()
 	return err
 }

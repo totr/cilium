@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package endpoint
 
@@ -10,8 +9,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cilium/cilium/pkg/checker"
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 func (s *EndpointSuite) TestMoveNewFilesTo(c *check.C) {

@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Hubble
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Hubble
 
 package container
 
@@ -10,14 +7,12 @@ import (
 	"container/list"
 	"container/ring"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"sync"
 	"testing"
-
-	flowpb "github.com/cilium/cilium/api/v1/flow"
-	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -25,6 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	flowpb "github.com/cilium/cilium/api/v1/flow"
+	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 )
 
 func BenchmarkRingWrite(b *testing.B) {
@@ -403,7 +401,7 @@ func TestRing_Read(t *testing.T) {
 					t.Errorf("Ring.read() got = %v, want %v", got, tt.want)
 				}
 			}
-			if got1 != tt.wantErr {
+			if !errors.Is(got1, tt.wantErr) {
 				t.Errorf("Ring.read() got1 = %v, want %v", got1, tt.wantErr)
 			}
 		})
@@ -579,6 +577,54 @@ func TestRing_LastWrite(t *testing.T) {
 		})
 	}
 }
+func TestRingOldestWrite(t *testing.T) {
+	r := NewRing(Capacity3)
+
+	oldestWrite := r.OldestWrite()
+	entry, err := r.read(oldestWrite)
+	if err != nil {
+		t.Errorf("unexpected error: %s", err)
+	}
+	if entry.GetLostEvent() == nil {
+		t.Errorf("able to read oldest entry without prior write: %s", entry)
+	}
+
+	r.Write(&v1.Event{Timestamp: &timestamppb.Timestamp{Seconds: 0}})
+	r.Write(&v1.Event{Timestamp: &timestamppb.Timestamp{Seconds: 1}})
+	r.Write(&v1.Event{Timestamp: &timestamppb.Timestamp{Seconds: 2}})
+	r.Write(&v1.Event{Timestamp: &timestamppb.Timestamp{Seconds: 3}})
+
+	oldestWrite = r.OldestWrite()
+	entry, err = r.read(oldestWrite)
+	if err != nil {
+		t.Errorf("Should be able to read position %x, got %v", oldestWrite, err)
+	}
+	if entry.Timestamp.Seconds != int64(0) {
+		t.Errorf("Read Event should be %+v, got %+v instead (%s)", &timestamppb.Timestamp{Seconds: 0}, entry.Timestamp, entry)
+	}
+
+	// this will trigger a wrap-around and overwrite entry 0
+	r.Write(&v1.Event{Timestamp: &timestamppb.Timestamp{Seconds: 4}})
+
+	// the previous oldest entry should now be overwritten
+	entry, err = r.read(oldestWrite)
+	if err != nil {
+		t.Errorf("unexpected error: %s", err)
+	}
+	if entry.GetLostEvent() == nil {
+		t.Errorf("able to read oldest entry even though it has been overwritten: %s", entry)
+	}
+
+	// new oldest entry should have timestamp 1
+	oldestWrite = r.OldestWrite()
+	entry, err = r.read(oldestWrite)
+	if err != nil {
+		t.Errorf("Should be able to read position %x, got %v", oldestWrite, err)
+	}
+	if entry.Timestamp.Seconds != int64(1) {
+		t.Errorf("Read Event should be %+v, got %+v instead (%s)", &timestamppb.Timestamp{Seconds: 1}, entry.Timestamp, entry)
+	}
+}
 
 func TestRingFunctionalityInParallel(t *testing.T) {
 	r := NewRing(Capacity15)
@@ -667,10 +713,10 @@ func TestRingFunctionalitySerialized(t *testing.T) {
 func TestRing_ReadFrom_Test_1(t *testing.T) {
 	defer goleak.VerifyNone(
 		t,
-		// ignore go routines started by the redirect we do from klog to logrus
+		// ignore goroutines started by the redirect we do from klog to logrus
 		goleak.IgnoreTopFunction("k8s.io/klog.(*loggingT).flushDaemon"),
 		goleak.IgnoreTopFunction("k8s.io/klog/v2.(*loggingT).flushDaemon"),
-		goleak.IgnoreTopFunction("io.(*pipe).Read"))
+		goleak.IgnoreTopFunction("io.(*pipe).read"))
 	r := NewRing(Capacity15)
 	if len(r.data) != 0x10 {
 		t.Errorf("r.data should have a length of 0x10. Got %x", len(r.data))
@@ -728,10 +774,10 @@ func TestRing_ReadFrom_Test_1(t *testing.T) {
 func TestRing_ReadFrom_Test_2(t *testing.T) {
 	defer goleak.VerifyNone(
 		t,
-		// ignore go routines started by the redirect we do from klog to logrus
+		// ignore goroutines started by the redirect we do from klog to logrus
 		goleak.IgnoreTopFunction("k8s.io/klog.(*loggingT).flushDaemon"),
 		goleak.IgnoreTopFunction("k8s.io/klog/v2.(*loggingT).flushDaemon"),
-		goleak.IgnoreTopFunction("io.(*pipe).Read"))
+		goleak.IgnoreTopFunction("io.(*pipe).read"))
 
 	r := NewRing(Capacity15)
 	if len(r.data) != 0x10 {
@@ -827,10 +873,10 @@ func TestRing_ReadFrom_Test_2(t *testing.T) {
 func TestRing_ReadFrom_Test_3(t *testing.T) {
 	defer goleak.VerifyNone(
 		t,
-		// ignore go routines started by the redirect we do from klog to logrus
+		// ignore goroutines started by the redirect we do from klog to logrus
 		goleak.IgnoreTopFunction("k8s.io/klog.(*loggingT).flushDaemon"),
 		goleak.IgnoreTopFunction("k8s.io/klog/v2.(*loggingT).flushDaemon"),
-		goleak.IgnoreTopFunction("io.(*pipe).Read"))
+		goleak.IgnoreTopFunction("io.(*pipe).read"))
 	r := NewRing(Capacity15)
 	if len(r.data) != 0x10 {
 		t.Errorf("r.data should have a length of 0x10. Got %x", len(r.data))

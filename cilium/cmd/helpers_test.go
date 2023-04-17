@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,12 +8,12 @@ import (
 	"path"
 	"sort"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	. "gopkg.in/check.v1"
 )
 
 type CMDHelpersSuite struct{}
@@ -94,7 +91,6 @@ func (s *CMDHelpersSuite) TestExpandNestedJSON(c *C) {
         "DebugPolicy": "Enabled",
         "DropNotification": "Enabled",
         "MonitorAggregationLevel": "None",
-        "NAT46": "Disabled",
         "TraceNotification": "Enabled"
       }
     },
@@ -284,7 +280,6 @@ func (s *CMDHelpersSuite) TestExpandNestedJSON(c *C) {
           "DebugPolicy": "Enabled",
           "DropNotification": "Enabled",
           "MonitorAggregationLevel": "None",
-          "NAT46": "Disabled",
           "TraceNotification": "Enabled"
         }
       },
@@ -308,7 +303,6 @@ func (s *CMDHelpersSuite) TestExpandNestedJSON(c *C) {
         "DebugPolicy": "Enabled",
         "DropNotification": "Enabled",
         "MonitorAggregationLevel": "None",
-        "NAT46": "Disabled",
         "TraceNotification": "Enabled"
       }
     },
@@ -528,7 +522,6 @@ func (s *CMDHelpersSuite) TestExpandNestedJSON(c *C) {
           "DebugPolicy": "Enabled",
           "DropNotification": "Enabled",
           "MonitorAggregationLevel": "None",
-          "NAT46": "Disabled",
           "TraceNotification": "Enabled"
         }
       },

@@ -5,14 +5,14 @@
 List connection tracking entries
 
 ```
-cilium bpf ct list ( <endpoint identifier> | global ) [flags]
+cilium bpf ct list ( global | endpoint | cluster ) [identifier] [flags]
 ```
 
 ### Options
 
 ```
   -h, --help                                help for list
-  -o, --output string                       json| jsonpath='{}'
+  -o, --output string                       json| yaml| jsonpath='{}'
   -d, --time-diff                           print time difference for entries
       --time-diff-clocksource-hz int        manually set clock source Hz (default 250)
       --time-diff-clocksource-mode string   manually set clock source mode (instead of contacting the server)
@@ -21,12 +21,12 @@ cilium bpf ct list ( <endpoint identifier> | global ) [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf ct](../cilium_bpf_ct)	 - Connection tracking tables
+* [cilium bpf ct](cilium_bpf_ct.md)	 - Connection tracking tables
 

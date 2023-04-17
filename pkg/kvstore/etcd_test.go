@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package kvstore
 
@@ -14,14 +11,13 @@ import (
 	"os"
 	"path"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	etcdAPI "go.etcd.io/etcd/client/v3"
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 type EtcdSuite struct {
@@ -35,7 +31,7 @@ func (e *EtcdSuite) SetUpTest(c *C) {
 }
 
 func (e *EtcdSuite) TearDownTest(c *C) {
-	Client().Close()
+	Client().Close(context.TODO())
 }
 
 type MaintenanceMocker struct {
@@ -158,9 +154,9 @@ func (s *EtcdSuite) TestETCDVersionCheck(c *C) {
 	}
 
 	// short timeout for tests
-	atomic.StoreInt64(&versionCheckTimeout, int64(time.Second))
+	timeout := time.Second
 
-	c.Assert(client.checkMinVersion(context.TODO()), IsNil)
+	c.Assert(client.checkMinVersion(context.TODO(), timeout), IsNil)
 
 	// One endpoint has a bad version and should fail
 	cfg.Endpoints = []string{"http://127.0.0.1:4003", "http://127.0.0.1:4004", "http://127.0.0.1:4005"}
@@ -171,7 +167,7 @@ func (s *EtcdSuite) TestETCDVersionCheck(c *C) {
 		client: cli,
 	}
 
-	c.Assert(client.checkMinVersion(context.TODO()), Not(IsNil))
+	c.Assert(client.checkMinVersion(context.TODO(), timeout), Not(IsNil))
 }
 
 type EtcdHelpersSuite struct{}
@@ -354,7 +350,7 @@ func (e *EtcdLockedSuite) SetUpSuite(c *C) {
 func (e *EtcdLockedSuite) TearDownSuite(c *C) {
 	err := e.etcdClient.Close()
 	c.Assert(err, IsNil)
-	Client().Close()
+	Client().Close(context.TODO())
 }
 
 func (e *EtcdLockedSuite) TestGetIfLocked(c *C) {
@@ -1961,7 +1957,7 @@ func (e *EtcdRateLimiterSuite) TestRateLimiter(c *C) {
 			err = kvlocker.Unlock(context.TODO())
 			c.Assert(err, IsNil)
 		}
-		Client().Close()
+		Client().Close(context.TODO())
 
 		// Clean created KV Pairs if populateKVPairs is disabled and cleanKVPairs is enabled.
 		if !op.populateKVPairs && op.cleanKVPairs {
@@ -1996,7 +1992,7 @@ func (e *EtcdRateLimiterSuite) TestRateLimiter(c *C) {
 			err = kvlocker.Unlock(context.TODO())
 			c.Assert(err, IsNil)
 		}
-		Client().Close()
+		Client().Close(context.TODO())
 
 		if op.needCondKey {
 			_, err = e.etcdClient.Delete(context.Background(), condKey)

@@ -1,7 +1,7 @@
-// This file is safe to edit. Once it exists it will not be overwritten
-
-// Copyright 2017-2020 Authors of Cilium
 // SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
+
+// This file is safe to edit. Once it exists it will not be overwritten
 
 package server
 
@@ -187,11 +187,6 @@ func configureAPI(api *restapi.CiliumAPIAPI) http.Handler {
 			return middleware.NotImplemented("operation policy.GetPolicy has not yet been implemented")
 		})
 	}
-	if api.PolicyGetPolicyResolveHandler == nil {
-		api.PolicyGetPolicyResolveHandler = policy.GetPolicyResolveHandlerFunc(func(params policy.GetPolicyResolveParams) middleware.Responder {
-			return middleware.NotImplemented("operation policy.GetPolicyResolve has not yet been implemented")
-		})
-	}
 	if api.PolicyGetPolicySelectorsHandler == nil {
 		api.PolicyGetPolicySelectorsHandler = policy.GetPolicySelectorsHandlerFunc(func(params policy.GetPolicySelectorsParams) middleware.Responder {
 			return middleware.NotImplemented("operation policy.GetPolicySelectors has not yet been implemented")
@@ -304,7 +299,7 @@ func setupMiddlewares(handler http.Handler) http.Handler {
 func setupGlobalMiddleware(handler http.Handler) http.Handler {
 	eventsHelper := &ciliumMetrics.APIEventTSHelper{
 		Next:      handler,
-		TSGauge:   ciliumMetrics.EventTSAPI,
+		TSGauge:   ciliumMetrics.EventTS,
 		Histogram: ciliumMetrics.APIInteractions,
 	}
 

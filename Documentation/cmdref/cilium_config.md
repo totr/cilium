@@ -15,20 +15,20 @@ cilium config [<option>=(enable|disable) ...] [flags]
   -h, --help            help for config
       --list-options    List available options
   -n, --num-pages int   Number of pages for perf ring buffer. New values have to be > 0
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
   -r, --read-only       Display read only configurations
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium](../cilium)	 - CLI
-* [cilium config get](../cilium_config_get)	 - Retrieve cilium configuration
+* [cilium](cilium.md)	 - CLI
+* [cilium config get](cilium_config_get.md)	 - Retrieve cilium configuration
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package kafka
 
@@ -7,9 +7,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-
-	"github.com/optiopay/kafka/proto"
 	"io"
+
+	"github.com/cilium/kafka/proto"
 )
 
 // ResponseMessage represents a Kafka response message.

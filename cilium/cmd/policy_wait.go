@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cilium/cilium/api/v1/models"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/api/v1/models"
 )
 
 var waitTime, failWaitTime, maxWaitTime int
@@ -45,14 +45,14 @@ var policyWaitCmd = &cobra.Command{
 
 			for _, ep := range eps {
 				switch {
-				case ep.Status.Policy == nil || ep.Status.Policy.Realized == nil:
+				case ep.Status.Policy == nil || ep.Status.Policy.Realized == nil || ep.Status.State == nil:
 					notReady++
 
 				case ep.Status.Policy.Realized.PolicyRevision >= reqRevision &&
-					ep.Status.State == models.EndpointStateReady:
+					*ep.Status.State == models.EndpointStateReady:
 					ready++
 
-				case ep.Status.State == models.EndpointStateNotReady:
+				case *ep.Status.State == models.EndpointStateNotDashReady:
 					notReady++
 				}
 			}

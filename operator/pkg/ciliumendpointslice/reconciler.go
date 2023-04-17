@@ -1,28 +1,17 @@
-// Copyright 2021 Authors of Cilium
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package ciliumendpointslice
 
 import (
 	"context"
 
+	"github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2alpha1"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-
-	"github.com/sirupsen/logrus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // reconciler is used to sync the current (i.e. desired) state of the CESs in datastore into current state CESs in the k8s-apiserver.
@@ -45,6 +34,13 @@ func (r *reconciler) reconcileCESCreate(cesToCreate string) (err error) {
 	var retCES, ces *cilium_v2.CiliumEndpointSlice
 	// Get the copy of CES from the cesManager
 	if ces, err = r.cesManager.getCESCopyFromCache(cesToCreate); err != nil {
+		return
+	}
+
+	if len(ces.Endpoints) == 0 {
+		// The CES is empty, delete ces information from cache rather than creating
+		// empty CES.
+		r.cesManager.deleteCESFromCache(cesToCreate)
 		return
 	}
 

@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package peer
 
 import (
 	"context"
+	"net"
 	"strings"
 
-	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/cilium/cilium/api/v1/models"
+	peerpb "github.com/cilium/cilium/api/v1/peer"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	ciliumDefaults "github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/hubble/defaults"
+	"github.com/cilium/cilium/pkg/hubble/peer/serviceoption"
 	"github.com/cilium/cilium/pkg/node/types"
-
-	peerpb "github.com/cilium/cilium/api/v1/peer"
 )
 
 // handler implements the datapath.NodeHandler interface so that it can be
@@ -23,16 +25,18 @@ import (
 // handler to the node manager.
 // Once not used anymore, Close must be called to free resources.
 type handler struct {
-	stop chan struct{}
-	C    chan *peerpb.ChangeNotification
-	tls  bool
+	stop        chan struct{}
+	C           chan *peerpb.ChangeNotification
+	tls         bool
+	addressPref serviceoption.AddressFamilyPreference
 }
 
-func newHandler(withoutTLSInfo bool) *handler {
+func newHandler(withoutTLSInfo bool, addressPref serviceoption.AddressFamilyPreference) *handler {
 	return &handler{
-		stop: make(chan struct{}),
-		C:    make(chan *peerpb.ChangeNotification),
-		tls:  !withoutTLSInfo,
+		stop:        make(chan struct{}),
+		C:           make(chan *peerpb.ChangeNotification),
+		tls:         !withoutTLSInfo,
+		addressPref: addressPref,
 	}
 }
 
@@ -42,7 +46,7 @@ var _ datapath.NodeHandler = (*handler)(nil)
 
 // NodeAdd implements datapath.NodeHandler.NodeAdd.
 func (h *handler) NodeAdd(n types.Node) error {
-	cn := newChangeNotification(n, peerpb.ChangeNotificationType_PEER_ADDED, h.tls)
+	cn := h.newChangeNotification(n, peerpb.ChangeNotificationType_PEER_ADDED)
 	select {
 	case h.C <- cn:
 	case <-h.stop:
@@ -52,14 +56,14 @@ func (h *handler) NodeAdd(n types.Node) error {
 
 // NodeUpdate implements datapath.NodeHandler.NodeUpdate.
 func (h *handler) NodeUpdate(o, n types.Node) error {
-	oAddr, nAddr := nodeAddress(o), nodeAddress(n)
+	oAddr, nAddr := nodeAddress(o, h.addressPref), nodeAddress(n, h.addressPref)
 	if o.Fullname() == n.Fullname() {
 		if oAddr == nAddr {
 			// this corresponds to the same peer
 			// => no need to send a notification
 			return nil
 		}
-		cn := newChangeNotification(n, peerpb.ChangeNotificationType_PEER_UPDATED, h.tls)
+		cn := h.newChangeNotification(n, peerpb.ChangeNotificationType_PEER_UPDATED)
 		select {
 		case h.C <- cn:
 		case <-h.stop:
@@ -68,13 +72,13 @@ func (h *handler) NodeUpdate(o, n types.Node) error {
 	}
 	// the name has changed; from a service consumer perspective, this is the
 	// same as if the peer with the old name was removed and a new one added
-	ocn := newChangeNotification(o, peerpb.ChangeNotificationType_PEER_DELETED, h.tls)
+	ocn := h.newChangeNotification(o, peerpb.ChangeNotificationType_PEER_DELETED)
 	select {
 	case h.C <- ocn:
 	case <-h.stop:
 		return nil
 	}
-	ncn := newChangeNotification(n, peerpb.ChangeNotificationType_PEER_ADDED, h.tls)
+	ncn := h.newChangeNotification(n, peerpb.ChangeNotificationType_PEER_ADDED)
 	select {
 	case h.C <- ncn:
 	case <-h.stop:
@@ -84,7 +88,7 @@ func (h *handler) NodeUpdate(o, n types.Node) error {
 
 // NodeDelete implements datapath.NodeHandler.NodeDelete.
 func (h *handler) NodeDelete(n types.Node) error {
-	cn := newChangeNotification(n, peerpb.ChangeNotificationType_PEER_DELETED, h.tls)
+	cn := h.newChangeNotification(n, peerpb.ChangeNotificationType_PEER_DELETED)
 	select {
 	case h.C <- cn:
 	case <-h.stop:
@@ -130,53 +134,72 @@ func (h *handler) Close() {
 	close(h.stop)
 }
 
+func (h *handler) AllocateNodeID(_ net.IP) uint16 {
+	// no-op
+	return 0
+}
+
+func (h *handler) DumpNodeIDs() []*models.NodeID {
+	// no-op
+	return nil
+}
+
+func (h *handler) RestoreNodeIDs() {
+	// no-op
+	return
+}
+
 // newChangeNotification creates a new change notification with the provided
 // information. If withTLS is true, the TLS field is populated with the server
 // name derived from the node and cluster names.
-func newChangeNotification(n types.Node, t peerpb.ChangeNotificationType, withTLS bool) *peerpb.ChangeNotification {
+func (h *handler) newChangeNotification(n types.Node, t peerpb.ChangeNotificationType) *peerpb.ChangeNotification {
 	var tls *peerpb.TLS
-	if withTLS {
+	if h.tls {
 		tls = &peerpb.TLS{
-			ServerName: tlsServerName(n.Name, n.Cluster),
+			ServerName: TLSServerName(n.Name, n.Cluster),
 		}
 	}
 	return &peerpb.ChangeNotification{
 		Name:    n.Fullname(),
-		Address: nodeAddress(n),
+		Address: nodeAddress(n, h.addressPref),
 		Type:    t,
 		Tls:     tls,
 	}
 }
 
 // nodeAddress returns the node's address. If the node has both IPv4 and IPv6
-// addresses, IPv4 takes priority.
-func nodeAddress(n types.Node) string {
-	addr := n.GetNodeIP(false)
-	if addr.To4() != nil {
-		return addr.String()
+// addresses, pref controls which address type is returned.
+func nodeAddress(n types.Node, pref serviceoption.AddressFamilyPreference) string {
+	for _, family := range pref {
+		switch family {
+		case serviceoption.AddressFamilyIPv4:
+			if addr := n.GetNodeIP(false); addr.To4() != nil {
+				return addr.String()
+			}
+		case serviceoption.AddressFamilyIPv6:
+			if addr := n.GetNodeIP(true); addr.To4() == nil {
+				return addr.String()
+			}
+		}
 	}
-	addr = n.GetNodeIP(true)
-	if addr == nil {
-		return ""
-	}
-	return addr.String()
+	return ""
 }
 
-// tlsServerName constructs a server name to be used as the TLS server name.
+// TLSServerName constructs a server name to be used as the TLS server name.
 // The server name is of the following form:
 //
-//     <nodeName>.<clusterName>.<hubble-grpc-svc-name>.<domain>
+//	<nodeName>.<clusterName>.<hubble-grpc-svc-name>.<domain>
 //
 // For example, with nodeName=moseisley and clusterName=tatooine, the following
 // server name is returned:
 //
-//     moseisley.tatooine.hubble-grpc.cilium.io
+//	moseisley.tatooine.hubble-grpc.cilium.io
 //
 // When nodeName is not provided, an empty string is returned. All Dot (.) in
 // nodeName are replaced by Hyphen (-). When clusterName is not provided, it
 // defaults to the default cluster name. All Dot (.) in clusterName are
 // replaced by Hypen (-).
-func tlsServerName(nodeName, clusterName string) string {
+func TLSServerName(nodeName, clusterName string) string {
 	if nodeName == "" {
 		return ""
 	}

@@ -11,6 +11,111 @@ CI / Jenkins
 
 The main CI infrastructure is maintained at https://jenkins.cilium.io/
 
+Triggering Pull-Request Builds With Jenkins
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To ensure that build resources are used judiciously, builds on Jenkins
+are manually triggered via comments on each pull-request that contain
+"trigger-phrases". Only members of the Cilium GitHub organization are
+allowed to trigger these jobs.
+
+Depending on the PR target branch, a specific set of jobs is marked as required,
+as per the `Cilium CI matrix`_. They will be automatically featured in PR checks
+directly on the PR page. The following trigger phrases may be used to trigger
+them all at once:
+
++------------------+--------------------------+
+| PR target branch | Trigger required PR jobs |
++==================+==========================+
+| master           | /test                    |
++------------------+--------------------------+
+| v1.13            | /test-backport-1.13      |
++------------------+--------------------------+
+| v1.12            | /test-backport-1.12      |
++------------------+--------------------------+
+| v1.11            | /test-backport-1.11      |
++------------------+--------------------------+
+
+For ``master`` PRs: on top of ``/test``, one may use ``/test-missed-k8s`` to
+trigger all non-required K8s versions on Kernel 4.9 as per the `Cilium CI
+matrix`_.
+
+For a full list of Jenkins PR jobs, see `Jenkins (PR tab)
+<https://jenkins.cilium.io/view/PR/>`_. Trigger phrases are configured within
+each job's build triggers advanced options.
+
+There are some feature flags based on Pull Requests labels, the list of labels
+are the following:
+
+- ``area/containerd``: Enable containerd runtime on all Kubernetes test.
+- ``ci/net-next``: Run tests on net-next kernel. This causes the  ``/test``
+  target to only run on the net-next kernel. It is purely for testing on a
+  different kernel, to merge a PR it must pass the CI without this flag.
+
+Retrigger specific jobs
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For all PRs: one may manually retrigger a specific job (e.g. in case of a flake)
+with the individual trigger featured directly in the PR check's name (e.g. for
+``K8s-1.20-kernel-4.9 (test-1.20-4.9)``, use ``/test-1.20-4.9``).
+
+This works for all displayed Jenkins tests.
+
+Testing with race condition detection enabled
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Optional non-required Jenkins are available for running the test suite with race
+condition detection enabled, and may be triggered using the trigger phrase
+``/test-race``.
+
+For a full list of Jenkins PR jobs with race detection enabled, see `Jenkins
+(Race Detection tab) <https://jenkins.cilium.io/view/Race%20Detection/>`_.
+Trigger phrases are configured within each job's build triggers advanced
+options.
+
+Using Jenkins for testing
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Typically when running Jenkins tests via one of the above trigger phases, it
+will run all of the tests in that particular category. However, there may be
+cases where you just want to run a single test quickly on Jenkins and observe
+the test result. To do so, you need to update the relevant test to have a
+custom name, and to update the Jenkins file to focus that test. Below is an
+example patch that shows how this can be achieved.
+
+.. code-block:: diff
+
+    diff --git a/ginkgo.Jenkinsfile b/ginkgo.Jenkinsfile
+    index ee17808748a6..637f99269a41 100644
+    --- a/ginkgo.Jenkinsfile
+    +++ b/ginkgo.Jenkinsfile
+    @@ -62,10 +62,10 @@ pipeline {
+                 steps {
+                     parallel(
+                         "Runtime":{
+    -                        sh 'cd ${TESTDIR}; ginkgo --focus="RuntimeValidated" --tags=integration_tests'
+    +                        sh 'cd ${TESTDIR}; ginkgo --focus="XFoooo" --tags=integration_tests'
+                         },
+                         "K8s-1.9":{
+    -                        sh 'cd ${TESTDIR}; K8S_VERSION=1.9 ginkgo --focus="K8sValidated" --tags=integration_tests ${FAILFAST}'
+    +                        sh 'cd ${TESTDIR}; K8S_VERSION=1.9 ginkgo --focus="K8sFooooo" --tags=integration_tests ${FAILFAST}'
+                         },
+                         failFast: true
+                     )
+    diff --git a/test/k8s/nightly.go b/test/k8s/nightly.go
+    index 62b324619797..3f955c73a818 100644
+    --- a/test/k8s/nightly.go
+    +++ b/test/k8s/nightly.go
+    @@ -466,7 +466,7 @@ var _ = Describe("NightlyExamples", func() {
+
+                    })
+
+    -               It("K8sValidated Updating Cilium stable to master", func() {
+    +               FIt("K8sFooooo K8sValidated Updating Cilium stable to master", func() {
+                            podFilter := "k8s:zgroup=testapp"
+
+                            //This test should run in each PR for now.
+
 Jobs Overview
 ~~~~~~~~~~~~~
 
@@ -47,8 +152,6 @@ After you don't need to run tests on your branch, please remove the branch from 
    +-------------------------------------------------+-------------------------------------------+
    | ``/test-only --focus="K8s"``                    | Runs all kubernetes tests                 |
    +-------------------------------------------------+-------------------------------------------+
-   | ``/test-only --focus="K8sConformance"``         | Runs all k8s conformance tests            |
-   +-------------------------------------------------+-------------------------------------------+
    | ``/test-only --focus="K8sChaos"``               | Runs all k8s chaos tests                  |
    +-------------------------------------------------+-------------------------------------------+
    | ``/test-only --focus="K8sDatapathConfig"``      | Runs all k8s datapath configuration tests |
@@ -83,6 +186,9 @@ After you don't need to run tests on your branch, please remove the branch from 
    | ``/test-focus Runtime``                | Runs all runtime tests                    |
    +----------------------------------------+-------------------------------------------+
 
+.. note::
+
+   It is not possible to run specific tests within the runtime test suite.
 
 
 Cilium-PR-Ginkgo-Tests-Kernel
@@ -167,106 +273,6 @@ always be found in the `Cilium CI matrix`_.
 
 .. _trigger_phrases:
 
-Triggering Pull-Request Builds With Jenkins
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-To ensure that build resources are used judiciously, builds on Jenkins
-are manually triggered via comments on each pull-request that contain
-"trigger-phrases". Only members of the Cilium GitHub organization are
-allowed to trigger these jobs.
-
-Depending on the PR target branch, a specific set of jobs is marked as required,
-as per the `Cilium CI matrix`_. They will be automatically featured in PR checks
-directly on the PR page. The following trigger phrases may be used to trigger
-them all at once:
-
-+------------------+--------------------------+
-| PR target branch | Trigger required PR jobs |
-+==================+==========================+
-| master           | /test                    |
-+------------------+--------------------------+
-| v1.11            | /test-backport-1.11      |
-+------------------+--------------------------+
-| v1.10            | /test-backport-1.10      |
-+------------------+--------------------------+
-| v1.9             | /test-backport-1.9       |
-+------------------+--------------------------+
-
-For ``master`` PRs: on top of ``/test``, one may use ``/test-missed-k8s`` to
-trigger all non-required K8s versions on Kernel 4.9 as per the `Cilium CI
-matrix`_.
-
-For all PRs: one may manually retrigger a specific job (e.g. in case of a flake)
-with the individual trigger featured directly in the PR check's name (e.g. for
-``K8s-1.20-kernel-4.9 (test-1.20-4.9)``, use ``/test-1.20-4.9``).
-
-For a full list of Jenkins PR jobs, see `Jenkins (PR tab)
-<https://jenkins.cilium.io/view/PR/>`_. Trigger phrases are configured within
-each job's build triggers advanced options.
-
-There are some feature flags based on Pull Requests labels, the list of labels
-are the following:
-
-- ``area/containerd``: Enable containerd runtime on all Kubernetes test.
-- ``ci/net-next``: Run tests on net-next kernel. This causes the  ``/test``
-  target to only run on the net-next kernel. It is purely for testing on a
-  different kernel, to merge a PR it must pass the CI without this flag.
-
-Testing with race condition detection enabled
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Optional non-required Jenkins are available for running the test suite with race
-condition detection enabled, and may be triggered using the trigger phrase
-``/test-race``.
-
-For a full list of Jenkins PR jobs with race detection enabled, see `Jenkins
-(Race Detection tab) <https://jenkins.cilium.io/view/Race%20Detection/>`_.
-Trigger phrases are configured within each job's build triggers advanced
-options.
-
-Using Jenkins for testing
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Typically when running Jenkins tests via one of the above trigger phases, it
-will run all of the tests in that particular category. However, there may be
-cases where you just want to run a single test quickly on Jenkins and observe
-the test result. To do so, you need to update the relevant test to have a
-custom name, and to update the Jenkins file to focus that test. Below is an
-example patch that shows how this can be achieved.
-
-.. code-block:: diff
-
-    diff --git a/ginkgo.Jenkinsfile b/ginkgo.Jenkinsfile
-    index ee17808748a6..637f99269a41 100644
-    --- a/ginkgo.Jenkinsfile
-    +++ b/ginkgo.Jenkinsfile
-    @@ -62,10 +62,10 @@ pipeline {
-                 steps {
-                     parallel(
-                         "Runtime":{
-    -                        sh 'cd ${TESTDIR}; ginkgo --focus="RuntimeValidated" --tags=integration_tests'
-    +                        sh 'cd ${TESTDIR}; ginkgo --focus="XFoooo" --tags=integration_tests'
-                         },
-                         "K8s-1.9":{
-    -                        sh 'cd ${TESTDIR}; K8S_VERSION=1.9 ginkgo --focus="K8sValidated" --tags=integration_tests ${FAILFAST}'
-    +                        sh 'cd ${TESTDIR}; K8S_VERSION=1.9 ginkgo --focus="K8sFooooo" --tags=integration_tests ${FAILFAST}'
-                         },
-                         failFast: true
-                     )
-    diff --git a/test/k8sT/Nightly.go b/test/k8sT/Nightly.go
-    index 62b324619797..3f955c73a818 100644
-    --- a/test/k8sT/Nightly.go
-    +++ b/test/k8sT/Nightly.go
-    @@ -466,7 +466,7 @@ var _ = Describe("NightlyExamples", func() {
-
-                    })
-
-    -               It("K8sValidated Updating Cilium stable to master", func() {
-    +               FIt("K8sFooooo K8sValidated Updating Cilium stable to master", func() {
-                            podFilter := "k8s:zgroup=testapp"
-
-                            //This test should run in each PR for now.
-
 .. _ci_failure_triage:
 
 CI Failure Triage
@@ -344,7 +350,7 @@ Triage process
       - The line on which the test failed, e.g.
         ::
 
-            github.com/cilium/cilium/test/k8sT/KafkaPolicies.go:202
+            github.com/cilium/cilium/test/k8s/kafka_policies.go:202
 
       - The error message, e.g.
         ::
@@ -357,9 +363,6 @@ Triage process
       eventually deleted).
    #. Attach the zipfile downloaded from Jenkins with logs from the failing
       tests. A zipfile for all tests is also available.
-   #. Check how much time has passed since the last reported occurrence of this
-      failure and move this issue to the correct column in the `CI flakes
-      project`_ board.
 
 #. If no existing GitHub issue was found, file a `new GitHub issue <https://github.com/cilium/cilium/issues/new>`_:
 
@@ -377,7 +380,6 @@ Triage process
          eventually deleted).
       #. Attach zipfile downloaded from Jenkins with logs from failing test
       #. Include the test name and whole Stacktrace section to help others find this issue.
-      #. Add issue to `CI flakes project`_.
 
    .. note::
 
@@ -400,7 +402,7 @@ Triage process
 
       This step can only be performed with an account on Jenkins. If you are
       interested in CI failure reviews and do not have an account yet, ping us
-      on Slack.
+      on Slack in the ``#testing`` channel.
 
 **Examples:**
 
@@ -408,8 +410,6 @@ Triage process
 * ``Flake, DNS not ready, #3333``
 * ``CI-Bug, K8sValidatedPolicyTest: Namespaces, pod not ready, #9939``
 * ``Regression, k8s host policy, #1111``
-
-.. _CI flakes project: https://github.com/cilium/cilium/projects/8
 
 Bisect process
 ^^^^^^^^^^^^^^
@@ -441,16 +441,16 @@ Logging into VM running tests
 1. If you have access to credentials for Jenkins, log into the Jenkins slave running the test workload
 2. Identify the vagrant box running the specific test
 
-.. code-block:: shell-session
+   .. code-block:: shell-session
 
-    $ vagrant global-status
-    id       name                          provider   state   directory
-    -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    6e68c6c  k8s1-build-PR-1588-6          virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q/tests/k8s
-    ec5962a  cilium-master-build-PR-1588-6 virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q
-    bfaffaa  k8s2-build-PR-1588-6          virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q/tests/k8s
-    3fa346c  k8s1-build-PR-1588-7          virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q@2/tests/k8s
-    b7ded3c  cilium-master-build-PR-1588-7 virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q@2
+       $ vagrant global-status
+       id       name                          provider   state   directory
+       -------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       6e68c6c  k8s1-build-PR-1588-6          virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q/tests/k8s
+       ec5962a  cilium-master-build-PR-1588-6 virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q
+       bfaffaa  k8s2-build-PR-1588-6          virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q/tests/k8s
+       3fa346c  k8s1-build-PR-1588-7          virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q@2/tests/k8s
+       b7ded3c  cilium-master-build-PR-1588-7 virtualbox running /root/jenkins/workspace/cilium_cilium_PR-1588-CWL743UTZEF6CPEZCNXQVSZVEW32FR3CMGKGY6667CU7X43AAZ4Q@2
 
 3. Log into the specific VM
 

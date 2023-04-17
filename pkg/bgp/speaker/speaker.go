@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 // Package speaker abstracts the BGP speaker controller from MetalLB. This
 // package provides BGP announcements based on K8s object event handling.
@@ -10,21 +10,22 @@ import (
 	"errors"
 	"sync/atomic"
 
+	"github.com/sirupsen/logrus"
+	metallbspr "go.universe.tf/metallb/pkg/speaker"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/workqueue"
+
 	"github.com/cilium/cilium/pkg/bgp/fence"
 	"github.com/cilium/cilium/pkg/k8s"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/k8s/client"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_discover_v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1"
 	slim_discover_v1beta1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1beta1"
 	"github.com/cilium/cilium/pkg/k8s/watchers/subscriber"
 	"github.com/cilium/cilium/pkg/lock"
 	nodetypes "github.com/cilium/cilium/pkg/node/types"
-	"github.com/sirupsen/logrus"
-
-	metallbspr "go.universe.tf/metallb/pkg/speaker"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/util/workqueue"
 )
 
 var (
@@ -36,8 +37,8 @@ var _ subscriber.Node = (*MetalLBSpeaker)(nil)
 
 // New creates a new MetalLB BGP speaker controller. Options are provided to
 // specify what the Speaker should announce via BGP.
-func New(ctx context.Context, opts Opts) (*MetalLBSpeaker, error) {
-	ctrl, err := newMetalLBSpeaker(ctx)
+func New(ctx context.Context, clientset client.Clientset, opts Opts) (*MetalLBSpeaker, error) {
+	ctrl, err := newMetalLBSpeaker(ctx, clientset)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ func (s *MetalLBSpeaker) OnUpdateService(svc *slim_corev1.Service) error {
 	}
 
 	l.Debug("adding event to queue")
-	s.queue.Add(epEvent{
+	s.queue.Add(svcEvent{
 		Meta: meta,
 		op:   Update,
 		id:   svcID,
@@ -382,9 +383,9 @@ func convertInternalEndpoints(in *k8s.Endpoints) *metallbspr.Endpoints {
 		return nil
 	}
 	out := new(metallbspr.Endpoints)
-	for ip, be := range in.Backends {
+	for addrCluster, be := range in.Backends {
 		ep := metallbspr.Endpoint{
-			IP:       ip,
+			IP:       addrCluster.Addr().String(),
 			NodeName: &be.NodeName,
 		}
 		out.Ready = append(out.Ready, ep)
@@ -423,16 +424,25 @@ func convertEndpointSliceV1(in *slim_discover_v1.EndpointSlice) *metallbspr.Endp
 	}
 	out := new(metallbspr.Endpoints)
 	for _, ep := range in.Endpoints {
-		for _, addr := range ep.Addresses {
-			out.Ready = append(out.Ready, metallbspr.Endpoint{
-				IP:       addr,
-				NodeName: ep.NodeName,
-			})
+		if isConditionReadyForSliceV1(ep.Conditions) {
+			for _, addr := range ep.Addresses {
+				out.Ready = append(out.Ready, metallbspr.Endpoint{
+					IP:       addr,
+					NodeName: ep.NodeName,
+				})
+			}
 		}
 		// See above comment in convertEndpoints() for why we only append
 		// "ready" endpoints.
 	}
 	return out
+}
+
+func isConditionReadyForSliceV1(conditions slim_discover_v1.EndpointConditions) bool {
+	if conditions.Ready == nil {
+		return true
+	}
+	return *conditions.Ready
 }
 
 func convertEndpointSliceV1Beta1(in *slim_discover_v1beta1.EndpointSlice) *metallbspr.Endpoints {
@@ -441,16 +451,25 @@ func convertEndpointSliceV1Beta1(in *slim_discover_v1beta1.EndpointSlice) *metal
 	}
 	out := new(metallbspr.Endpoints)
 	for _, ep := range in.Endpoints {
-		for _, addr := range ep.Addresses {
-			out.Ready = append(out.Ready, metallbspr.Endpoint{
-				IP:       addr,
-				NodeName: ep.NodeName,
-			})
+		if isConditionReadyForSliceV1Beta1(ep.Conditions) {
+			for _, addr := range ep.Addresses {
+				out.Ready = append(out.Ready, metallbspr.Endpoint{
+					IP:       addr,
+					NodeName: ep.NodeName,
+				})
+			}
 		}
 		// See above comment in convertEndpoints() for why we only append
 		// "ready" endpoints.
 	}
 	return out
+}
+
+func isConditionReadyForSliceV1Beta1(conditions slim_discover_v1beta1.EndpointConditions) bool {
+	if conditions.Ready == nil {
+		return true
+	}
+	return *conditions.Ready
 }
 
 // nodeLabels copies the provided labels and returns

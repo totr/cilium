@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,10 +8,10 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	ciliumClient "github.com/cilium/cilium/pkg/client"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 // healthGetCmd represents the get command
@@ -26,7 +26,7 @@ var healthGetCmd = &cobra.Command{
 		}
 		sr := result.Payload
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(sr); err != nil {
 				os.Exit(1)
 			}
@@ -44,5 +44,5 @@ var healthGetCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(healthGetCmd)
-	command.AddJSONOutput(healthGetCmd)
+	command.AddOutputOption(healthGetCmd)
 }

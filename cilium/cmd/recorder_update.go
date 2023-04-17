@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cilium/cilium/api/v1/models"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/api/v1/models"
 )
 
 var (

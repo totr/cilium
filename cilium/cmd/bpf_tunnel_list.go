@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/maps/tunnel"
-
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -26,11 +26,11 @@ var bpfTunnelListCmd = &cobra.Command{
 		common.RequireRootPrivilege("cilium bpf tunnel list")
 
 		tunnelList := make(map[string][]string)
-		if err := tunnel.TunnelMap.Dump(tunnelList); err != nil {
+		if err := tunnel.TunnelMap().Dump(tunnelList); err != nil {
 			os.Exit(1)
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(tunnelList); err != nil {
 				os.Exit(1)
 			}
@@ -43,5 +43,5 @@ var bpfTunnelListCmd = &cobra.Command{
 
 func init() {
 	bpfTunnelCmd.AddCommand(bpfTunnelListCmd)
-	command.AddJSONOutput(bpfTunnelListCmd)
+	command.AddOutputOption(bpfTunnelListCmd)
 }

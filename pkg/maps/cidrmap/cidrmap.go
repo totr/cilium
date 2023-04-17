@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cidrmap
 
@@ -8,11 +8,11 @@ import (
 	"net"
 	"unsafe"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-
-	"github.com/sirupsen/logrus"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "map-cidr")
@@ -166,21 +166,9 @@ func OpenMapElems(path string, prefixlen int, prefixdyn bool, maxelem uint32) (*
 	)
 
 	if err != nil {
-		log.Debug("Kernel does not support CIDR maps, using hash table instead.")
-		typeMap = bpf.MapTypeHash
-		fd, isNewMap, err = bpf.OpenOrCreateMap(
-			path,
-			typeMap,
-			uint32(unsafe.Sizeof(uint32(0))+uintptr(bytes)),
-			uint32(LPM_MAP_VALUE_SIZE),
-			maxelem,
-			bpf.BPF_F_NO_PREALLOC, 0, true,
-		)
-		if err != nil {
-			scopedLog := log.WithError(err).WithField(logfields.Path, path)
-			scopedLog.Warning("Failed to create CIDR map")
-			return nil, false, err
-		}
+		scopedLog := log.WithError(err).WithField(logfields.Path, path)
+		scopedLog.Warning("Failed to create CIDR map")
+		return nil, false, err
 	}
 
 	m := &CIDRMap{

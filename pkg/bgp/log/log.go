@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 // Package log provides a central logging package that wraps MetalLB's logging.
 package log
@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cilium/cilium/pkg/option"
-
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/option"
 )
 
 // Log logs messages from the MetalLB code. The messages are noisy and

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package lbmap
 
@@ -10,6 +10,7 @@ import (
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/byteorder"
 	"github.com/cilium/cilium/pkg/loadbalancer"
+	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/types"
 )
 
@@ -28,6 +29,8 @@ var (
 
 // initAffinity creates the BPF maps for implementing session affinity.
 func initAffinity(params InitParams) {
+	AffinityMapMaxEntries = params.AffinityMapMaxEntries
+
 	AffinityMatchMap = bpf.NewMap(
 		AffinityMatchMapName,
 		bpf.MapTypeHash,
@@ -35,10 +38,11 @@ func initAffinity(params InitParams) {
 		int(unsafe.Sizeof(AffinityMatchKey{})),
 		&AffinityMatchValue{},
 		int(unsafe.Sizeof(AffinityMatchValue{})),
-		MaxEntries,
+		AffinityMapMaxEntries,
 		0, 0,
 		bpf.ConvertKeyValue,
-	).WithCache().WithPressureMetric()
+	).WithCache().WithPressureMetric().
+		WithEvents(option.Config.GetEventBufferConfig(AffinityMatchMapName))
 
 	if params.IPv4 {
 		Affinity4Map = bpf.NewMap(
@@ -48,7 +52,7 @@ func initAffinity(params InitParams) {
 			int(unsafe.Sizeof(Affinity4Key{})),
 			&AffinityValue{},
 			int(unsafe.Sizeof(AffinityValue{})),
-			MaxEntries,
+			AffinityMapMaxEntries,
 			0,
 			0,
 			bpf.ConvertKeyValue,
@@ -63,7 +67,7 @@ func initAffinity(params InitParams) {
 			int(unsafe.Sizeof(Affinity6Key{})),
 			&AffinityValue{},
 			int(unsafe.Sizeof(AffinityValue{})),
-			MaxEntries,
+			AffinityMapMaxEntries,
 			0,
 			0,
 			bpf.ConvertKeyValue,

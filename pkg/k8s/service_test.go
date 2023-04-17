@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package k8s
 
@@ -11,16 +8,18 @@ import (
 	"reflect"
 	"testing"
 
+	"gopkg.in/check.v1"
+	corev1 "k8s.io/api/core/v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/cidr"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	fakeDatapath "github.com/cilium/cilium/pkg/datapath/fake"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/option"
 	serviceStore "github.com/cilium/cilium/pkg/service/store"
-
-	"gopkg.in/check.v1"
 )
 
 func (s *K8sSuite) TestGetAnnotationIncludeExternal(c *check.C) {
@@ -30,19 +29,24 @@ func (s *K8sSuite) TestGetAnnotationIncludeExternal(c *check.C) {
 	c.Assert(getAnnotationIncludeExternal(svc), check.Equals, false)
 
 	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
-		Annotations: map[string]string{"io.cilium/global-service": "True"},
+		Annotations: map[string]string{"service.cilium.io/global": "True"},
 	}}
 	c.Assert(getAnnotationIncludeExternal(svc), check.Equals, true)
 
 	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
-		Annotations: map[string]string{"io.cilium/global-service": "false"},
+		Annotations: map[string]string{"service.cilium.io/global": "false"},
 	}}
 	c.Assert(getAnnotationIncludeExternal(svc), check.Equals, false)
 
 	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
-		Annotations: map[string]string{"io.cilium/global-service": ""},
+		Annotations: map[string]string{"service.cilium.io/global": ""},
 	}}
 	c.Assert(getAnnotationIncludeExternal(svc), check.Equals, false)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"io.cilium/global-service": "True"},
+	}}
+	c.Assert(getAnnotationIncludeExternal(svc), check.Equals, true)
 }
 
 func (s *K8sSuite) TestGetAnnotationShared(c *check.C) {
@@ -51,19 +55,56 @@ func (s *K8sSuite) TestGetAnnotationShared(c *check.C) {
 	}}
 	c.Assert(getAnnotationShared(svc), check.Equals, false)
 	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
-		Annotations: map[string]string{"io.cilium/global-service": "true"},
+		Annotations: map[string]string{"service.cilium.io/global": "true"},
 	}}
 	c.Assert(getAnnotationShared(svc), check.Equals, true)
 
 	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
-		Annotations: map[string]string{"io.cilium/shared-service": "True"},
-	}}
-	c.Assert(getAnnotationShared(svc), check.Equals, true)
-
-	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
-		Annotations: map[string]string{"io.cilium/global-service": "true", "io.cilium/shared-service": "false"},
+		Annotations: map[string]string{"service.cilium.io/shared": "true"},
 	}}
 	c.Assert(getAnnotationShared(svc), check.Equals, false)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/global": "true", "service.cilium.io/shared": "True"},
+	}}
+	c.Assert(getAnnotationShared(svc), check.Equals, true)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/global": "true", "service.cilium.io/shared": "false"},
+	}}
+	c.Assert(getAnnotationShared(svc), check.Equals, false)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/global": "true", "io.cilium/shared-service": "false"},
+	}}
+	c.Assert(getAnnotationShared(svc), check.Equals, false)
+}
+
+func (s *K8sSuite) TestGetAnnotationServiceAffinity(c *check.C) {
+	svc := &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/global": "true", "service.cilium.io/affinity": "local"},
+	}}
+	c.Assert(getAnnotationServiceAffinity(svc), check.Equals, serviceAffinityLocal)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/global": "true", "service.cilium.io/affinity": "remote"},
+	}}
+	c.Assert(getAnnotationServiceAffinity(svc), check.Equals, serviceAffinityRemote)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/global": "true", "io.cilium/service-affinity": "local"},
+	}}
+	c.Assert(getAnnotationServiceAffinity(svc), check.Equals, serviceAffinityLocal)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{"service.cilium.io/affinity": "remote"},
+	}}
+	c.Assert(getAnnotationServiceAffinity(svc), check.Equals, serviceAffinityNone)
+
+	svc = &slim_corev1.Service{ObjectMeta: slim_metav1.ObjectMeta{
+		Annotations: map[string]string{},
+	}}
+	c.Assert(getAnnotationServiceAffinity(svc), check.Equals, serviceAffinityNone)
 }
 
 func (s *K8sSuite) TestParseServiceID(c *check.C) {
@@ -100,7 +141,8 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 	id, svc := ParseService(k8sSvc, fakeDatapath.NewNodeAddressing())
 	c.Assert(id, checker.DeepEquals, ServiceID{Namespace: "bar", Name: "foo"})
 	c.Assert(svc, checker.DeepEquals, &Service{
-		TrafficPolicy:            loadbalancer.SVCTrafficPolicyCluster,
+		ExtTrafficPolicy:         loadbalancer.SVCTrafficPolicyCluster,
+		IntTrafficPolicy:         loadbalancer.SVCTrafficPolicyCluster,
 		FrontendIPs:              []net.IP{net.ParseIP("127.0.0.1")},
 		Selector:                 map[string]string{"foo": "bar"},
 		Labels:                   map[string]string{"foo": "bar"},
@@ -122,7 +164,8 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 	c.Assert(id, checker.DeepEquals, ServiceID{Namespace: "bar", Name: "foo"})
 	c.Assert(svc, checker.DeepEquals, &Service{
 		IsHeadless:               true,
-		TrafficPolicy:            loadbalancer.SVCTrafficPolicyCluster,
+		ExtTrafficPolicy:         loadbalancer.SVCTrafficPolicyCluster,
+		IntTrafficPolicy:         loadbalancer.SVCTrafficPolicyCluster,
 		Labels:                   map[string]string{"foo": "bar"},
 		Ports:                    map[loadbalancer.FEPortName]*loadbalancer.L4Addr{},
 		NodePorts:                map[loadbalancer.FEPortName]NodePortToFrontend{},
@@ -136,6 +179,7 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 			ClusterIP:             "127.0.0.1",
 			Type:                  slim_corev1.ServiceTypeNodePort,
 			ExternalTrafficPolicy: slim_corev1.ServiceExternalTrafficPolicyTypeLocal,
+			InternalTrafficPolicy: slim_corev1.ServiceInternalTrafficPolicyTypeLocal,
 		},
 	}
 
@@ -143,7 +187,8 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 	c.Assert(id, checker.DeepEquals, ServiceID{Namespace: "bar", Name: "foo"})
 	c.Assert(svc, checker.DeepEquals, &Service{
 		FrontendIPs:              []net.IP{net.ParseIP("127.0.0.1")},
-		TrafficPolicy:            loadbalancer.SVCTrafficPolicyLocal,
+		ExtTrafficPolicy:         loadbalancer.SVCTrafficPolicyLocal,
+		IntTrafficPolicy:         loadbalancer.SVCTrafficPolicyLocal,
 		Labels:                   map[string]string{"foo": "bar"},
 		Ports:                    map[loadbalancer.FEPortName]*loadbalancer.L4Addr{},
 		NodePorts:                map[loadbalancer.FEPortName]NodePortToFrontend{},
@@ -157,7 +202,7 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 		option.Config.EnableNodePort = oldNodePort
 	}()
 	objMeta.Annotations = map[string]string{
-		annotationTopologyAwareHints: "auto",
+		corev1.AnnotationTopologyAwareHints: "auto",
 	}
 	k8sSvc = &slim_corev1.Service{
 		ObjectMeta: objMeta,
@@ -182,13 +227,17 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 		},
 	}
 
+	ipv4ZeroAddrCluster := cmtypes.MustParseAddrCluster("0.0.0.0")
+	ipv4InternalAddrCluster := cmtypes.MustAddrClusterFromIP(fakeDatapath.IPv4InternalAddress)
+	ipv4NodePortAddrCluster := cmtypes.MustAddrClusterFromIP(fakeDatapath.IPv4NodePortAddress)
+
 	lbID := loadbalancer.ID(0)
 	tcpProto := loadbalancer.L4Type(slim_corev1.ProtocolTCP)
-	zeroFE := loadbalancer.NewL3n4AddrID(tcpProto, net.IPv4(0, 0, 0, 0), 31111,
+	zeroFE := loadbalancer.NewL3n4AddrID(tcpProto, ipv4ZeroAddrCluster, 31111,
 		loadbalancer.ScopeExternal, lbID)
-	internalFE := loadbalancer.NewL3n4AddrID(tcpProto, fakeDatapath.IPv4InternalAddress, 31111,
+	internalFE := loadbalancer.NewL3n4AddrID(tcpProto, ipv4InternalAddrCluster, 31111,
 		loadbalancer.ScopeExternal, lbID)
-	nodePortFE := loadbalancer.NewL3n4AddrID(tcpProto, fakeDatapath.IPv4NodePortAddress, 31111,
+	nodePortFE := loadbalancer.NewL3n4AddrID(tcpProto, ipv4NodePortAddrCluster, 31111,
 		loadbalancer.ScopeExternal, lbID)
 
 	id, svc = ParseService(k8sSvc, fakeDatapath.NewIPv4OnlyNodeAddressing())
@@ -200,7 +249,8 @@ func (s *K8sSuite) TestParseService(c *check.C) {
 			"http": loadbalancer.NewL4Addr(loadbalancer.L4Type(slim_corev1.ProtocolTCP), uint16(80)),
 			"tftp": loadbalancer.NewL4Addr(loadbalancer.L4Type(slim_corev1.ProtocolUDP), uint16(69)),
 		},
-		TrafficPolicy: loadbalancer.SVCTrafficPolicyCluster,
+		ExtTrafficPolicy: loadbalancer.SVCTrafficPolicyCluster,
+		IntTrafficPolicy: loadbalancer.SVCTrafficPolicyCluster,
 		NodePorts: map[loadbalancer.FEPortName]NodePortToFrontend{
 			"http": {
 				zeroFE.String():     zeroFE,
@@ -281,6 +331,8 @@ func TestService_Equals(t *testing.T) {
 						Port:     1,
 					},
 				},
+				Shared:          true,
+				IncludeExternal: true,
 				NodePorts: map[loadbalancer.FEPortName]NodePortToFrontend{
 					loadbalancer.FEPortName("foo"): {
 						"0.0.0.0:31000": {
@@ -289,7 +341,7 @@ func TestService_Equals(t *testing.T) {
 									Protocol: loadbalancer.NONE,
 									Port:     31000,
 								},
-								IP: net.IPv4(0, 0, 0, 0),
+								AddrCluster: cmtypes.MustParseAddrCluster("0.0.0.0"),
 							},
 							ID: 1,
 						},
@@ -313,6 +365,8 @@ func TestService_Equals(t *testing.T) {
 							Port:     1,
 						},
 					},
+					Shared:          true,
+					IncludeExternal: true,
 					NodePorts: map[loadbalancer.FEPortName]NodePortToFrontend{
 						loadbalancer.FEPortName("foo"): {
 							"0.0.0.0:31000": {
@@ -321,7 +375,7 @@ func TestService_Equals(t *testing.T) {
 										Protocol: loadbalancer.NONE,
 										Port:     31000,
 									},
-									IP: net.IPv4(0, 0, 0, 0),
+									AddrCluster: cmtypes.MustParseAddrCluster("0.0.0.0"),
 								},
 								ID: 1,
 							},
@@ -367,6 +421,74 @@ func TestService_Equals(t *testing.T) {
 					Labels: map[string]string{
 						"foo": "bar",
 					},
+					Selector: map[string]string{
+						"baz": "foz",
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "different shared",
+			fields: &Service{
+				FrontendIPs: []net.IP{net.ParseIP("1.1.1.1")},
+				IsHeadless:  true,
+				Ports: map[loadbalancer.FEPortName]*loadbalancer.L4Addr{
+					loadbalancer.FEPortName("foo"): {
+						Protocol: loadbalancer.NONE,
+						Port:     1,
+					},
+				},
+				Shared:   true,
+				Labels:   map[string]string{},
+				Selector: map[string]string{},
+			},
+			args: args{
+				o: &Service{
+					FrontendIPs: []net.IP{net.ParseIP("1.1.1.1")},
+					IsHeadless:  true,
+					Ports: map[loadbalancer.FEPortName]*loadbalancer.L4Addr{
+						loadbalancer.FEPortName("foo"): {
+							Protocol: loadbalancer.NONE,
+							Port:     1,
+						},
+					},
+					Shared: false,
+					Labels: map[string]string{},
+					Selector: map[string]string{
+						"baz": "foz",
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "different include external",
+			fields: &Service{
+				FrontendIPs: []net.IP{net.ParseIP("1.1.1.1")},
+				IsHeadless:  true,
+				Ports: map[loadbalancer.FEPortName]*loadbalancer.L4Addr{
+					loadbalancer.FEPortName("foo"): {
+						Protocol: loadbalancer.NONE,
+						Port:     1,
+					},
+				},
+				IncludeExternal: true,
+				Labels:          map[string]string{},
+				Selector:        map[string]string{},
+			},
+			args: args{
+				o: &Service{
+					FrontendIPs: []net.IP{net.ParseIP("1.1.1.1")},
+					IsHeadless:  true,
+					Ports: map[loadbalancer.FEPortName]*loadbalancer.L4Addr{
+						loadbalancer.FEPortName("foo"): {
+							Protocol: loadbalancer.NONE,
+							Port:     1,
+						},
+					},
+					IncludeExternal: false,
+					Labels:          map[string]string{},
 					Selector: map[string]string{
 						"baz": "foz",
 					},
@@ -543,7 +665,7 @@ func TestService_Equals(t *testing.T) {
 									Protocol: loadbalancer.NONE,
 									Port:     31000,
 								},
-								IP: net.IPv4(1, 1, 1, 1),
+								AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 							},
 							ID: 1,
 						},
@@ -575,7 +697,7 @@ func TestService_Equals(t *testing.T) {
 										Protocol: loadbalancer.NONE,
 										Port:     31000,
 									},
-									IP: net.IPv4(0, 0, 0, 0),
+									AddrCluster: cmtypes.MustParseAddrCluster("0.0.0.0"),
 								},
 								ID: 1,
 							},

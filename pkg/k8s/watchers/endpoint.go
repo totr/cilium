@@ -1,52 +1,57 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package watchers
 
 import (
-	"github.com/cilium/cilium/pkg/ipcache"
+	"net/netip"
+
+	"github.com/sirupsen/logrus"
+	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/tools/cache"
+
+	ipcacheTypes "github.com/cilium/cilium/pkg/ipcache/types"
 	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/cilium/cilium/pkg/k8s/informer"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
+	slimclientset "github.com/cilium/cilium/pkg/k8s/slim/k8s/client/clientset/versioned"
+	"github.com/cilium/cilium/pkg/k8s/utils"
+	"github.com/cilium/cilium/pkg/k8s/watchers/resources"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/source"
-
-	v1 "k8s.io/api/core/v1"
-	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
 )
 
-func (k *K8sWatcher) endpointsInit(k8sClient kubernetes.Interface, swgEps *lock.StoppableWaitGroup, optsModifier func(*v1meta.ListOptions)) {
+func (k *K8sWatcher) endpointsInit(slimClient slimclientset.Interface, swgEps *lock.StoppableWaitGroup, optsModifier func(*v1meta.ListOptions)) {
 	epOptsModifier := func(options *v1meta.ListOptions) {
 		options.FieldSelector = fields.ParseSelectorOrDie(option.Config.K8sWatcherEndpointSelector).String()
 		optsModifier(options)
 	}
-
+	apiGroup := resources.K8sAPIGroupEndpointV1Core
 	_, endpointController := informer.NewInformer(
-		cache.NewFilteredListWatchFromClient(k8sClient.CoreV1().RESTClient(),
-			"endpoints", v1.NamespaceAll,
-			epOptsModifier,
-		),
+		utils.ListerWatcherWithModifier(
+			utils.ListerWatcherFromTyped[*slim_corev1.EndpointsList](slimClient.CoreV1().Endpoints("")),
+			epOptsModifier),
 		&slim_corev1.Endpoints{},
 		0,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				var valid, equal bool
-				defer func() { k.K8sEventReceived(metricEndpoint, metricCreate, valid, equal) }()
+				defer func() {
+					k.K8sEventReceived(apiGroup, resources.MetricEndpoint, resources.MetricCreate, valid, equal)
+				}()
 				if k8sEP := k8s.ObjToV1Endpoints(obj); k8sEP != nil {
 					valid = true
 					err := k.addK8sEndpointV1(k8sEP, swgEps)
-					k.K8sEventProcessed(metricEndpoint, metricCreate, err == nil)
+					k.K8sEventProcessed(resources.MetricEndpoint, resources.MetricCreate, err == nil)
 				}
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				var valid, equal bool
-				defer func() { k.K8sEventReceived(metricEndpoint, metricUpdate, valid, equal) }()
+				defer func() { k.K8sEventReceived(apiGroup, resources.MetricEndpoint, resources.MetricUpdate, valid, equal) }()
 				if oldk8sEP := k8s.ObjToV1Endpoints(oldObj); oldk8sEP != nil {
 					if newk8sEP := k8s.ObjToV1Endpoints(newObj); newk8sEP != nil {
 						valid = true
@@ -56,27 +61,27 @@ func (k *K8sWatcher) endpointsInit(k8sClient kubernetes.Interface, swgEps *lock.
 						}
 
 						err := k.updateK8sEndpointV1(oldk8sEP, newk8sEP, swgEps)
-						k.K8sEventProcessed(metricEndpoint, metricUpdate, err == nil)
+						k.K8sEventProcessed(resources.MetricEndpoint, resources.MetricUpdate, err == nil)
 					}
 				}
 			},
 			DeleteFunc: func(obj interface{}) {
 				var valid, equal bool
-				defer func() { k.K8sEventReceived(metricEndpoint, metricDelete, valid, equal) }()
+				defer func() { k.K8sEventReceived(apiGroup, resources.MetricEndpoint, resources.MetricDelete, valid, equal) }()
 				k8sEP := k8s.ObjToV1Endpoints(obj)
 				if k8sEP == nil {
 					return
 				}
 				valid = true
 				err := k.deleteK8sEndpointV1(k8sEP, swgEps)
-				k.K8sEventProcessed(metricEndpoint, metricDelete, err == nil)
+				k.K8sEventProcessed(resources.MetricEndpoint, resources.MetricDelete, err == nil)
 			},
 		},
 		nil,
 	)
-	k.blockWaitGroupToSyncResources(wait.NeverStop, swgEps, endpointController.HasSynced, K8sAPIGroupEndpointV1Core)
-	go endpointController.Run(wait.NeverStop)
-	k.k8sAPIGroups.AddAPI(K8sAPIGroupEndpointV1Core)
+	k.blockWaitGroupToSyncResources(k.stop, swgEps, endpointController.HasSynced, resources.K8sAPIGroupEndpointV1Core)
+	go endpointController.Run(k.stop)
+	k.k8sAPIGroups.AddAPI(apiGroup)
 }
 
 func (k *K8sWatcher) addK8sEndpointV1(ep *slim_corev1.Endpoints, swg *lock.StoppableWaitGroup) error {
@@ -107,14 +112,8 @@ func (k *K8sWatcher) deleteK8sEndpointV1(ep *slim_corev1.Endpoints, swg *lock.St
 //
 // The actual implementation of this logic down to the datapath is handled
 // asynchronously.
-func (k *K8sWatcher) handleKubeAPIServerServiceEPChanges(desiredIPs map[string]struct{}) {
-	// Use CustomResource as the source similar to the way the CiliumNode
-	// (pkg/node/manager.Manager) handler does because the ipcache entry needs
-	// to be overwrite-able by this handler and the CiliumNode handler. If we
-	// used Kubernetes as the source, then the ipcache entries inserted (first)
-	// by the CN handler wouldn't be overwrite-able by the entries inserted
-	// from this handler.
-	src := source.CustomResource
+func (k *K8sWatcher) handleKubeAPIServerServiceEPChanges(desiredIPs map[netip.Prefix]struct{}, rid ipcacheTypes.ResourceID) {
+	src := source.KubeAPIServer
 
 	// We must perform a diff on the ipcache.identityMetadata map in order to
 	// figure out which IPs are stale and should be removed, before we inject
@@ -131,29 +130,27 @@ func (k *K8sWatcher) handleKubeAPIServerServiceEPChanges(desiredIPs map[string]s
 	//     an update event.
 	//   * if the entire object is deleted, then it will quickly be recreated
 	//     and this will be in the form of an add event.
-	oldAPIServerIPs := ipcache.FilterMetadataByLabels(labels.LabelKubeAPIServer)
-	toRemove := make(map[string]labels.Labels)
-	for _, ip := range oldAPIServerIPs {
-		if _, ok := desiredIPs[ip]; !ok {
-			toRemove[ip] = labels.LabelKubeAPIServer
-		}
-	}
-	ipcache.RemoveLabelsFromIPs(
-		toRemove,
-		src,
-		k.policyRepository.GetSelectorCache(),
-		k.policyManager,
+	k.ipcache.RemoveLabelsExcluded(
+		labels.LabelKubeAPIServer,
+		desiredIPs,
+		rid,
 	)
 
 	for ip := range desiredIPs {
-		ipcache.UpsertMetadata(ip, labels.LabelKubeAPIServer)
+		k.ipcache.UpsertLabels(ip, labels.LabelKubeAPIServer, src, rid)
 	}
+}
 
-	ipcache.IPIdentityCache.TriggerLabelInjection(
-		src,
-		k.policyRepository.GetSelectorCache(),
-		k.policyManager,
-	)
+func insertK8sPrefix(desiredIPs map[netip.Prefix]struct{}, addr string, resource ipcacheTypes.ResourceID) {
+	a, err := netip.ParseAddr(addr)
+	if err != nil {
+		log.WithFields(logrus.Fields{
+			logfields.IPAddr:   addr,
+			logfields.Resource: resource,
+		}).Warning("Received malformatted IP address from kube-apiserver. This IP will not be used to determine kube-apiserver policy.")
+		return
+	}
+	desiredIPs[netip.PrefixFrom(a, a.BitLen())] = struct{}{}
 }
 
 // TODO(christarazi): Convert to subscriber model along with the corresponding
@@ -163,12 +160,17 @@ func (k *K8sWatcher) addKubeAPIServerServiceEPs(ep *slim_corev1.Endpoints) {
 		return
 	}
 
-	desiredIPs := make(map[string]struct{})
+	resource := ipcacheTypes.NewResourceID(
+		ipcacheTypes.ResourceKindEndpoint,
+		ep.ObjectMeta.GetNamespace(),
+		ep.ObjectMeta.GetName(),
+	)
+
+	desiredIPs := make(map[netip.Prefix]struct{})
 	for _, sub := range ep.Subsets {
 		for _, addr := range sub.Addresses {
-			desiredIPs[addr.IP] = struct{}{}
+			insertK8sPrefix(desiredIPs, addr.IP, resource)
 		}
 	}
-
-	k.handleKubeAPIServerServiceEPChanges(desiredIPs)
+	k.handleKubeAPIServerServiceEPChanges(desiredIPs, resource)
 }

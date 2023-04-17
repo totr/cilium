@@ -1,4 +1,4 @@
-# Copyright 2017-2020 Authors of Cilium
+# Copyright Authors of Cilium
 # SPDX-License-Identifier: Apache-2.0
 
 include ../Makefile.defs
@@ -25,6 +25,10 @@ install:
 	$(QUIET)$(INSTALL) -m 0755 -d $(DESTDIR)$(LIBDIR)
 	$(QUIET)$(INSTALL) -m 0755 $(TARGET).$(VERSION_MAJOR) $(DESTDIR)$(LIBDIR)
 	ln -sf $(TARGET).$(VERSION_MAJOR) $(DESTDIR)$(LIBDIR)/$(TARGET)
+
+header: libcilium.h
+libcilium.h: proxylib.go
+	$(GO) tool cgo -exportheader libcilium.h proxylib.go
 
 install-binary: install
 

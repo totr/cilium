@@ -20,12 +20,12 @@ cilium policy wait <revision> [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium policy](../cilium_policy)	 - Manage security policies
+* [cilium policy](cilium_policy.md)	 - Manage security policies
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/maps/ipcache"
-
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	ipCacheListUsage = "List endpoint IPs (local and remote) and their corresponding security identities.\n" + lpmKernelVersionWarning("cilium_ipcache")
+	ipCacheListUsage = "List endpoint IPs (local and remote) and their corresponding security identities."
 )
 
 var bpfIPCacheListCmd = &cobra.Command{
@@ -32,21 +32,21 @@ var bpfIPCacheListCmd = &cobra.Command{
 		common.RequireRootPrivilege("cilium bpf ipcache list")
 
 		bpfIPCacheList := make(map[string][]string)
-		if err := ipcache.IPCache.Dump(bpfIPCacheList); err != nil {
+		if err := ipcache.IPCacheMap().Dump(bpfIPCacheList); err != nil {
 			fmt.Fprintf(os.Stderr, "error dumping contents of map: %s\n", err)
 			os.Exit(1)
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(bpfIPCacheList); err != nil {
-				fmt.Fprintf(os.Stderr, "error getting output of map in JSON: %s\n", err)
+				fmt.Fprintf(os.Stderr, "error getting output of map in %s: %s\n", command.OutputOptionString(), err)
 				os.Exit(1)
 			}
 			return
 		}
 
 		if len(bpfIPCacheList) == 0 {
-			fmt.Fprintf(os.Stderr, "No entries found.\n%v\n", lpmKernelVersionWarning("cilium_ipcache"))
+			fmt.Fprintf(os.Stderr, "No entries found.\n")
 		} else {
 			TablePrinter(ipAddrTitle, identityTitle, bpfIPCacheList)
 		}
@@ -55,5 +55,5 @@ var bpfIPCacheListCmd = &cobra.Command{
 
 func init() {
 	bpfIPCacheCmd.AddCommand(bpfIPCacheListCmd)
-	command.AddJSONOutput(bpfIPCacheListCmd)
+	command.AddOutputOption(bpfIPCacheListCmd)
 }

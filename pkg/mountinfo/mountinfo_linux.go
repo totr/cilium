@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package mountinfo
 
@@ -19,8 +19,8 @@ const (
 )
 
 // IsMountFS returns two boolean values, checking
-//  - whether the path is a mount point;
-//  - if yes, whether its filesystem type is mntType.
+//   - whether the path is a mount point;
+//   - if yes, whether its filesystem type is mntType.
 //
 // Note that this function can not detect bind mounts,
 // and is not working properly when path="/".

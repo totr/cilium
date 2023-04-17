@@ -1,54 +1,57 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package linux
 
 import (
 	"net"
 
+	"github.com/vishvananda/netlink"
+
 	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/node"
-
-	"github.com/vishvananda/netlink"
+	"github.com/cilium/cilium/pkg/option"
 )
 
 // FIXME: This currently maps to the code in pkg/node/node_address.go. That
 // code should really move into this package.
 
 func listLocalAddresses(family int) ([]net.IP, error) {
+	var addresses []net.IP
+
 	ipsToExclude := node.GetExcludedIPs()
 	addrs, err := netlink.AddrList(nil, family)
 	if err != nil {
 		return nil, err
 	}
 
-	var addresses []net.IP
-
 	for _, addr := range addrs {
-		if addr.Scope == int(netlink.SCOPE_LINK) {
+		if addr.Scope > option.Config.AddressScopeMax {
 			continue
 		}
-		if ip.IsExcluded(ipsToExclude, addr.IP) {
+		if ip.ListContainsIP(ipsToExclude, addr.IP) {
 			continue
 		}
-		if addr.IP.IsLoopback() {
+		if addr.IP.IsLoopback() || addr.IP.IsLinkLocalUnicast() {
 			continue
 		}
 
 		addresses = append(addresses, addr.IP)
 	}
 
-	if hostDevice, err := netlink.LinkByName(defaults.HostDevice); hostDevice != nil && err == nil {
-		addrs, err = netlink.AddrList(hostDevice, family)
-		if err != nil {
-			return nil, err
-		}
-		for _, addr := range addrs {
-			if addr.Scope == int(netlink.SCOPE_LINK) {
-				addresses = append(addresses, addr.IP)
+	if option.Config.AddressScopeMax < int(netlink.SCOPE_LINK) {
+		if hostDevice, err := netlink.LinkByName(defaults.HostDevice); hostDevice != nil && err == nil {
+			addrs, err = netlink.AddrList(hostDevice, family)
+			if err != nil {
+				return nil, err
+			}
+			for _, addr := range addrs {
+				if addr.Scope == int(netlink.SCOPE_LINK) {
+					addresses = append(addresses, addr.IP)
+				}
 			}
 		}
 	}
@@ -71,7 +74,17 @@ func (a *addressFamilyIPv4) AllocationCIDR() *cidr.CIDR {
 }
 
 func (a *addressFamilyIPv4) LocalAddresses() ([]net.IP, error) {
-	return listLocalAddresses(netlink.FAMILY_V4)
+	addrs, err := listLocalAddresses(netlink.FAMILY_V4)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if externalAddress := node.GetK8sExternalIPv4(); externalAddress != nil {
+		addrs = append(addrs, externalAddress)
+	}
+
+	return addrs, nil
 }
 
 // LoadBalancerNodeAddresses returns all IPv4 node addresses on which the
@@ -97,7 +110,17 @@ func (a *addressFamilyIPv6) AllocationCIDR() *cidr.CIDR {
 }
 
 func (a *addressFamilyIPv6) LocalAddresses() ([]net.IP, error) {
-	return listLocalAddresses(netlink.FAMILY_V6)
+	addrs, err := listLocalAddresses(netlink.FAMILY_V6)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if externalAddress := node.GetK8sExternalIPv6(); externalAddress != nil {
+		addrs = append(addrs, externalAddress)
+	}
+
+	return addrs, nil
 }
 
 // LoadBalancerNodeAddresses returns all IPv6 node addresses on which the
@@ -114,14 +137,14 @@ type linuxNodeAddressing struct {
 }
 
 // NewNodeAddressing returns a new linux node addressing model
-func NewNodeAddressing() datapath.NodeAddressing {
+func NewNodeAddressing() types.NodeAddressing {
 	return &linuxNodeAddressing{}
 }
 
-func (n *linuxNodeAddressing) IPv6() datapath.NodeAddressingFamily {
+func (n *linuxNodeAddressing) IPv6() types.NodeAddressingFamily {
 	return &n.ipv6
 }
 
-func (n *linuxNodeAddressing) IPv4() datapath.NodeAddressingFamily {
+func (n *linuxNodeAddressing) IPv4() types.NodeAddressingFamily {
 	return &n.ipv4
 }

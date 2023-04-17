@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package metrics
 
@@ -7,22 +7,24 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/cilium/cilium/operator/metrics"
 )
 
 // PrometheusMetrics is an implementation of Prometheus metrics for external
 // API usage
 type PrometheusMetrics struct {
-	registry    *prometheus.Registry
-	ApiDuration *prometheus.HistogramVec
+	registry    metrics.RegisterGatherer
+	APIDuration *prometheus.HistogramVec
 	RateLimit   *prometheus.HistogramVec
 }
 
 // NewPrometheusMetrics returns a new metrics tracking implementation to cover
 // external API usage.
-func NewPrometheusMetrics(namespace, subsystem string, registry *prometheus.Registry) *PrometheusMetrics {
+func NewPrometheusMetrics(namespace, subsystem string, registry metrics.RegisterGatherer) *PrometheusMetrics {
 	m := &PrometheusMetrics{registry: registry}
 
-	m.ApiDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	m.APIDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "api_duration_seconds",
@@ -36,7 +38,7 @@ func NewPrometheusMetrics(namespace, subsystem string, registry *prometheus.Regi
 		Help:      "Duration of client-side rate limiter blocking",
 	}, []string{"operation"})
 
-	registry.MustRegister(m.ApiDuration)
+	registry.MustRegister(m.APIDuration)
 	registry.MustRegister(m.RateLimit)
 
 	return m
@@ -45,7 +47,7 @@ func NewPrometheusMetrics(namespace, subsystem string, registry *prometheus.Regi
 // ObserveAPICall must be called on every API call made with the operation
 // performed, the status code received and the duration of the call
 func (p *PrometheusMetrics) ObserveAPICall(operation, status string, duration float64) {
-	p.ApiDuration.WithLabelValues(operation, status).Observe(duration)
+	p.APIDuration.WithLabelValues(operation, status).Observe(duration)
 }
 
 // ObserveRateLimit must be called in case an API call was subject to rate limiting

@@ -37,12 +37,6 @@ fi
 
 # container runtime options
 case "${RUNTIME}" in
-    "containerd" | "containerD")
-        container_runtime_name="containerd"
-        container_runtime_kubelet="remote"
-        container_runtime_endpoint="--container-runtime-endpoint=unix:///var/run/containerd/containerd.sock"
-        cgroup_driver='--cgroup-driver=/system.slice/containerd.service'
-        ;;
     "crio" | "cri-o")
         container_runtime_name="crio"
         container_runtime_kubelet="remote"
@@ -50,9 +44,10 @@ case "${RUNTIME}" in
         cgroup_driver='--cgroup-driver=systemd'
         ;;
     *)
-        container_runtime_name="docker"
-        container_runtime_kubelet="docker"
-        container_runtime_endpoint="--docker-endpoint=unix:///var/run/docker.sock"
+        container_runtime_name="containerd"
+        container_runtime_kubelet="remote"
+        container_runtime_endpoint="--container-runtime-endpoint=unix:///var/run/containerd/containerd.sock"
+        cgroup_driver='--cgroup-driver=/system.slice/containerd.service'
         ;;
 esac
 
@@ -61,10 +56,10 @@ kubernetes_master="${controllers_ips[0]}"
 # Default values for IPv4 and IPv6
 #
 # CIDR Range for Pods in cluster.
-k8s_cluster_cidr=${K8S_CLUSTER_CIDR:-"10.16.0.0/12,FD02::/96"} # 10.16.0.1-10.31.255.255
+k8s_cluster_cidr=${K8S_CLUSTER_CIDR:-"10.11.0.0/20,FD04::/96"} # 10.11.0.1-10.11.15.255
 # Mask size for node cidr in cluster.
-k8s_node_cidr_v4_mask_size=${K8S_NODE_CIDR_MASK_SIZE:-"16"} # 1st Node: 10.16.0.1-10.16.255.254, 2nd Node: 10.17.0.1-10.17.255.254...
-k8s_node_cidr_v6_mask_size=${K8S_NODE_CIDR_V6_MASK_SIZE:-"112"} # 1st Node: 10.16.0.1-10.16.255.254, 2nd Node: 10.17.0.1-10.17.255.254...
+k8s_node_cidr_v4_mask_size=${K8S_NODE_CIDR_MASK_SIZE:-"24"} # 1st Node: 10.11.0.1-10.11.0.255, 2nd Node: 10.11.1.1-10.11.1.255..
+k8s_node_cidr_v6_mask_size=${K8S_NODE_CIDR_V6_MASK_SIZE:-"112"} # 1st Node: 10.11.0.1-10.11.0.255, 2nd Node: 10.11.1.1-10.11.1.255...
 # CIDR Range for Services in cluster.
 k8s_service_cluster_ip_range=${K8S_SERVICE_CLUSTER_IP_RANGE:-"172.20.0.0/24,FD03::/112"}
 cluster_dns_ip=${K8S_CLUSTER_DNS_IP:-"172.20.0.10"}
@@ -72,8 +67,8 @@ cluster_dns_ipv6=${K8S_CLUSTER_DNS_IPV6:-"FD03::A"}
 cluster_api_server_ipv4=${K8S_CLUSTER_API_SERVER_IPV4:-"172.20.0.1"}
 cluster_api_server_ipv6=${K8S_CLUSTER_API_SERVER_IPV6:-"FD03::1"}
 
-k8s_version="v1.23.0-rc.0"
-etcd_version="v3.5.1"
+k8s_version="v1.26.0-rc.0"
+etcd_version="v3.5.5"
 
 function restore_flag {
   check_num_params "$#" "2"

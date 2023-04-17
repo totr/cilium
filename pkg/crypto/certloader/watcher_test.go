@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package certloader
 
@@ -68,8 +65,20 @@ func TestRotation(t *testing.T) {
 	assert.Nil(t, err)
 	defer w.Stop()
 
+	prevKeypairGeneration, prevCaCertPoolGeneration := w.generations()
 	rotate(t, hubble, relay)
-	<-time.After(testReloadDelay)
+
+	// wait until both keypair and caCertPool have been reloaded
+	ticker := time.NewTicker(testReloadDelay)
+	defer ticker.Stop()
+	for range ticker.C {
+		keypairGeneration, caCertPoolGeneration := w.generations()
+		keypairUpdated := keypairGeneration > prevKeypairGeneration
+		caCertPoolUpdated := caCertPoolGeneration > prevCaCertPoolGeneration
+		if keypairUpdated && caCertPoolUpdated {
+			break
+		}
+	}
 
 	keypair, caCertPool := w.KeypairAndCACertPool()
 	assert.Equal(t, &expectedKeypair, keypair)
@@ -95,12 +104,7 @@ func TestFutureWatcherImmediately(t *testing.T) {
 	assert.Nil(t, err)
 
 	// the files already exists, expect the watcher to be readily available.
-	var w *Watcher
-	select {
-	case w = <-ch:
-	case <-time.After(testReloadDelay):
-		t.Fatal("FutureWatcher should be ready immediately")
-	}
+	w := <-ch
 	defer w.Stop()
 
 	keypair, caCertPool := w.KeypairAndCACertPool()
@@ -138,11 +142,7 @@ func TestFutureWatcher(t *testing.T) {
 	setup(t, hubble, relay)
 
 	// the files exists now, expect the watcher to become ready.
-	select {
-	case w = <-ch:
-	case <-time.After(testReloadDelay):
-		t.Fatal("FutureWatcher should be ready once the TLS files exists")
-	}
+	w = <-ch
 	defer w.Stop()
 
 	keypair, caCertPool := w.KeypairAndCACertPool()
@@ -169,12 +169,7 @@ func TestKubernetesMount(t *testing.T) {
 	k8Setup(t, dir)
 
 	// the files exists now, expect the watcher to become ready.
-	var w *Watcher
-	select {
-	case w = <-ch:
-	case <-time.After(testReloadDelay):
-		t.Fatal("FutureWatcher should be ready once the TLS files exists")
-	}
+	w := <-ch
 	defer w.Stop()
 
 	expectedInitialCaCertPool := x509.NewCertPool()
@@ -190,8 +185,20 @@ func TestKubernetesMount(t *testing.T) {
 	assert.Equal(t, &expectedInitialKeypair, keypair)
 	assert.Equal(t, expectedInitialCaCertPool.Subjects(), caCertPool.Subjects())
 
+	prevKeypairGeneration, prevCaCertPoolGeneration := w.generations()
 	k8sRotate(t, dir)
-	<-time.After(testReloadDelay)
+
+	// wait until both keypair and caCertPool have been reloaded
+	ticker := time.NewTicker(testReloadDelay)
+	defer ticker.Stop()
+	for range ticker.C {
+		keypairGeneration, caCertPoolGeneration := w.generations()
+		keypairUpdated := keypairGeneration > prevKeypairGeneration
+		caCertPoolUpdated := caCertPoolGeneration > prevCaCertPoolGeneration
+		if keypairUpdated && caCertPoolUpdated {
+			break
+		}
+	}
 
 	expectedRotatedCaCertPool := x509.NewCertPool()
 	if ok := expectedRotatedCaCertPool.AppendCertsFromPEM(rotatedHubbleServerCA); !ok {

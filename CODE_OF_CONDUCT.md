@@ -1,7 +1,7 @@
 ## Community Code of Conduct v1.0
 
 This is Code of Conduct is based on the [CNCF Code of
-Conduct](https://github.com/cncf/foundation/edit/master/code-of-conduct.md).
+Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
 See the referred document for translated versions into different languages. The
 text below is modified with Cilium community specific contact details.
 
@@ -38,8 +38,8 @@ This code of conduct applies both within project spaces and in public spaces
 when an individual is representing the project or its community.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported by contacting the project maintainers or our mediator, Beatriz
-Martinez <beatriz@cilium.io>.
+reported by contacting the code of conduct team via 
+[conduct@cilium.io](mailto:conduct@cilium.io).
 
 This Code of Conduct is adapted from the Contributor Covenant
 (http://contributor-covenant.org), version 1.2.0, available at

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,14 +7,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-openapi/runtime/middleware"
+
 	restapi "github.com/cilium/cilium/api/v1/server/restapi/metrics"
 	"github.com/cilium/cilium/pkg/api"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/spanstat"
-
-	"github.com/go-openapi/runtime/middleware"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type getMetrics struct {
@@ -54,6 +53,7 @@ type bootstrapStatistics struct {
 	k8sInit         spanstat.SpanStat
 	restore         spanstat.SpanStat
 	healthCheck     spanstat.SpanStat
+	ingressIPAM     spanstat.SpanStat
 	initAPI         spanstat.SpanStat
 	initDaemon      spanstat.SpanStat
 	cleanup         spanstat.SpanStat
@@ -67,15 +67,20 @@ type bootstrapStatistics struct {
 	fqdn            spanstat.SpanStat
 	enableConntrack spanstat.SpanStat
 	kvstore         spanstat.SpanStat
+	deleteQueue     spanstat.SpanStat
 }
 
 func (b *bootstrapStatistics) updateMetrics() {
+	if !option.Config.MetricsConfig.BootstrapTimesEnabled {
+		return
+	}
+
 	for scope, stat := range b.getMap() {
 		if stat.SuccessTotal() != time.Duration(0) {
-			metricBootstrapTimes.WithLabelValues(scope, metrics.LabelValueOutcomeSuccess).Observe(stat.SuccessTotal().Seconds())
+			metrics.BootstrapTimes.WithLabelValues(scope, metrics.LabelValueOutcomeSuccess).Observe(stat.SuccessTotal().Seconds())
 		}
 		if stat.FailureTotal() != time.Duration(0) {
-			metricBootstrapTimes.WithLabelValues(scope, metrics.LabelValueOutcomeFail).Observe(stat.FailureTotal().Seconds())
+			metrics.BootstrapTimes.WithLabelValues(scope, metrics.LabelValueOutcomeFail).Observe(stat.FailureTotal().Seconds())
 		}
 	}
 }
@@ -87,6 +92,7 @@ func (b *bootstrapStatistics) getMap() map[string]*spanstat.SpanStat {
 		"k8sInit":         &b.k8sInit,
 		"restore":         &b.restore,
 		"healthCheck":     &b.healthCheck,
+		"ingressIPAM":     &b.ingressIPAM,
 		"initAPI":         &b.initAPI,
 		"initDaemon":      &b.initDaemon,
 		"cleanup":         &b.cleanup,
@@ -100,22 +106,6 @@ func (b *bootstrapStatistics) getMap() map[string]*spanstat.SpanStat {
 		"fqdn":            &b.fqdn,
 		"enableConntrack": &b.enableConntrack,
 		"kvstore":         &b.kvstore,
-	}
-}
-
-var (
-	metricBootstrapTimes prometheus.ObserverVec
-)
-
-func registerBootstrapMetrics() {
-	metricBootstrapTimes = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: metrics.Namespace,
-		Subsystem: metrics.SubsystemAgent,
-		Name:      "bootstrap_seconds",
-		Help:      "Duration of bootstrap sequence",
-	}, []string{metrics.LabelScope, metrics.LabelOutcome})
-
-	if err := metrics.Register(metricBootstrapTimes); err != nil {
-		log.WithError(err).Fatal("unable to register prometheus metric")
+		"deleteQueue":     &b.deleteQueue,
 	}
 }

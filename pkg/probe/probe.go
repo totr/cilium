@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package probe
 
@@ -9,9 +9,10 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/cilium/cilium/pkg/bpf"
-
 	"golang.org/x/sys/unix"
+
+	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/cilium/cilium/pkg/option"
 )
 
 type probeKey struct {
@@ -41,26 +42,12 @@ func (p *probeValue) DeepCopyMapValue() bpf.MapValue { return &probeValue{p.Valu
 // with proper bpf.GetNextKey() traversal. Needs 4.16 or higher.
 func HaveFullLPM() bool {
 	haveFullLPMOnce.Do(func() {
-
-		var oldLim unix.Rlimit
-
-		tmpLim := unix.Rlimit{
-			Cur: unix.RLIM_INFINITY,
-			Max: unix.RLIM_INFINITY,
-		}
-		if err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &oldLim); err != nil {
-			return
-		}
-		// Otherwise opening the map might fail with EPERM
-		if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &tmpLim); err != nil {
-			return
-		}
-		defer unix.Setrlimit(unix.RLIMIT_MEMLOCK, &oldLim)
-
-		m := bpf.NewMap("cilium_test", bpf.MapTypeLPMTrie,
+		mapName := "cilium_test"
+		m := bpf.NewMap(mapName, bpf.MapTypeLPMTrie,
 			&probeKey{}, int(unsafe.Sizeof(probeKey{})),
 			&probeValue{}, int(unsafe.Sizeof(probeValue{})),
-			1, bpf.BPF_F_NO_PREALLOC, 0, bpf.ConvertKeyValue).WithCache()
+			1, bpf.BPF_F_NO_PREALLOC, 0, bpf.ConvertKeyValue).WithCache().
+			WithEvents(option.Config.GetEventBufferConfig(mapName))
 		err := m.CreateUnpinned()
 		defer m.Close()
 		if err != nil {

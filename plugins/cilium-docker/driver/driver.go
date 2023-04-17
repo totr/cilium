@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package driver
 
@@ -14,6 +14,15 @@ import (
 	"strings"
 	"time"
 
+	apiTypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/events"
+	dockerCliAPI "github.com/docker/docker/client"
+	"github.com/docker/libnetwork/drivers/remote/api"
+	lnTypes "github.com/docker/libnetwork/types"
+	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/client"
 	"github.com/cilium/cilium/pkg/datapath/connector"
@@ -25,15 +34,6 @@ import (
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-
-	apiTypes "github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/events"
-	dockerCliAPI "github.com/docker/docker/client"
-	"github.com/docker/libnetwork/drivers/remote/api"
-	lnTypes "github.com/docker/libnetwork/types"
-	"github.com/gorilla/mux"
-	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "cilium-docker-driver")
@@ -189,7 +189,7 @@ func (driver *driver) updateCiliumEP(event events.Message) {
 		ContainerID:   event.Actor.ID,
 		ContainerName: strings.TrimPrefix(cont.Name, "/"),
 		Labels:        addLbls,
-		State:         models.EndpointStateWaitingForIdentity,
+		State:         models.EndpointStateWaitingDashForDashIdentity.Pointer(),
 	}
 	err = driver.client.EndpointPatch(endpointID(epID), ecr)
 	if err != nil {
@@ -374,7 +374,7 @@ func (driver *driver) createEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	endpoint := &models.EndpointChangeRequest{
 		SyncBuildEndpoint: true,
-		State:             models.EndpointStateWaitingForIdentity,
+		State:             models.EndpointStateWaitingDashForDashIdentity.Pointer(),
 		DockerEndpointID:  create.EndpointID,
 		DockerNetworkID:   create.NetworkID,
 		Addressing: &models.AddressPair{
@@ -397,16 +397,8 @@ func (driver *driver) createEndpoint(w http.ResponseWriter, r *http.Request) {
 	switch driver.conf.DatapathMode {
 	case datapathOption.DatapathModeVeth:
 		var veth *netlink.Veth
-		veth, _, _, err = connector.SetupVeth(create.EndpointID, int(driver.conf.DeviceMTU), endpoint)
+		veth, _, _, err = connector.SetupVeth(create.EndpointID, int(driver.conf.DeviceMTU), int(driver.conf.GROMaxSize), int(driver.conf.GSOMaxSize), endpoint)
 		defer removeLinkOnErr(veth)
-	case datapathOption.DatapathModeIpvlan:
-		var ipvlan *netlink.IPVlan
-		ipvlan, _, _, err = connector.CreateIpvlanSlave(
-			create.EndpointID, int(driver.conf.DeviceMTU),
-			int(driver.conf.IpvlanConfiguration.MasterDeviceIndex),
-			driver.conf.IpvlanConfiguration.OperationMode, endpoint,
-		)
-		defer removeLinkOnErr(ipvlan)
 	}
 	if err != nil {
 		sendError(w,
@@ -450,8 +442,6 @@ func (driver *driver) deleteEndpoint(w http.ResponseWriter, r *http.Request) {
 	switch driver.conf.DatapathMode {
 	case datapathOption.DatapathModeVeth:
 		ifName = connector.Endpoint2IfName(del.EndpointID)
-	case datapathOption.DatapathModeIpvlan:
-		ifName = connector.Endpoint2TempIfName(del.EndpointID)
 	}
 
 	if err := link.DeleteByName(ifName); err != nil {

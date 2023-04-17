@@ -29,6 +29,8 @@ permissions:
   pull-requests: read
   # So that Sibz/github-status-action can write into the status API
   statuses: write
+  # Required to generate OIDC tokens for `az` authentication
+  id-token: write
 
 concurrency:
   # Structure:
@@ -64,7 +66,9 @@ env:
   name: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}
   location: westeurope
   cost_reduction: --node-vm-size Standard_B2s --node-osdisk-size 30
-  cilium_cli_version: v0.10.0
+  k8s_version: 1.23
+  # renovate: datasource=github-releases depName=cilium/cilium-cli
+  cilium_cli_version: v0.13.1
   check_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
@@ -75,7 +79,7 @@ jobs:
         github.event.comment.body == '/ci-aks-1.11' ||
         github.event.comment.body == '/test-backport-1.11'
       )) ||
-      (github.event_name == 'schedule' && github.repository == 'cilium/cilium') ||
+      github.event_name == 'schedule' ||
       github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
@@ -85,7 +89,7 @@ jobs:
       # paths-filter to work.
       - name: Checkout code
         if: ${{ github.event.issue.pull_request }}
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
       - name: Retrieve pull request's base and head
@@ -93,11 +97,11 @@ jobs:
         id: pr
         run: |
           curl ${{ github.event.issue.pull_request.url }} > pr.json
-          echo "::set-output name=base::$(jq -r '.base.sha' pr.json)"
-          echo "::set-output name=head::$(jq -r '.head.sha' pr.json)"
+          echo "base=$(jq -r '.base.sha' pr.json)" >> $GITHUB_OUTPUT
+          echo "head=$(jq -r '.head.sha' pr.json)" >> $GITHUB_OUTPUT
       - name: Check code changes
         if: ${{ github.event.issue.pull_request }}
-        uses: dorny/paths-filter@b2feaf19c27470162a626bd6fa8438ae5b263721
+        uses: dorny/paths-filter@4512585405083f25c027a35db413c2b3b9006d50 # v2.11.1
         id: tested-tree
         with:
           base: ${{ steps.pr.outputs.base }}
@@ -115,11 +119,19 @@ jobs:
         github.event.comment.body == '/ci-aks-1.11' ||
         (github.event.comment.body == '/test-backport-1.11' && needs.check_changes.outputs.tested == 'true')
       )) ||
-      (github.event_name == 'schedule' && github.repository == 'cilium/cilium') ||
+      github.event_name == 'schedule' ||
       github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
+      - name: Checkout master branch to access local actions
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set Environment Variables
+        uses: ./.github/actions/set-env-variables
+
       - name: Set up job variables
         id: vars
         run: |
@@ -136,22 +148,38 @@ jobs:
           fi
 
           CILIUM_INSTALL_DEFAULTS="--cluster-name=${{ env.name }} \
-            --agent-image=quay.io/${{ github.repository_owner }}/cilium-ci \
-            --operator-image=quay.io/${{ github.repository_owner }}/operator-azure-ci \
-            --version=${SHA} \
+            --chart-directory=install/kubernetes/cilium \
+            --helm-set=image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/cilium-ci \
+            --helm-set=image.useDigest=false \
+            --helm-set=image.tag=${SHA} \
+            --helm-set=operator.image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/operator \
+            --helm-set=operator.image.suffix=-ci \
+            --helm-set=operator.image.tag=${SHA} \
+            --helm-set=operator.image.useDigest=false \
+            --helm-set=clustermesh.apiserver.image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/clustermesh-apiserver-ci \
+            --helm-set=clustermesh.apiserver.image.tag=${SHA} \
+            --helm-set=clustermesh.apiserver.image.useDigest=false \
+            --helm-set=hubble.relay.image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/hubble-relay-ci \
+            --helm-set=hubble.relay.image.tag=${SHA} \
+            --helm-set=debug.enabled=true \
             --azure-resource-group ${{ env.name }} \
             --wait=false \
             --rollback=false \
-            --config monitor-aggregation=none"
-          HUBBLE_ENABLE_DEFAULTS="--relay-image=quay.io/${{ github.repository_owner }}/hubble-relay-ci \
+            --config monitor-aggregation=none \
+            --version="
+          HUBBLE_ENABLE_DEFAULTS="--chart-directory=install/kubernetes/cilium \
+            --relay-image=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/hubble-relay-ci:${SHA} \
             --relay-version=${SHA}"
-          echo ::set-output name=cilium_install_defaults::${CILIUM_INSTALL_DEFAULTS}
-          echo ::set-output name=hubble_enable_defaults::${HUBBLE_ENABLE_DEFAULTS}
-          echo ::set-output name=sha::${SHA}
-          echo ::set-output name=owner::${OWNER}
+          CONNECTIVITY_TEST_DEFAULTS="--flow-validation=disabled \
+            --hubble=false --collect-sysdump-on-failure --external-cidr 8.0.0.0/8 --external-ip 8.8.4.4 --external-other-ip 8.8.8.8"
+          echo cilium_install_defaults=${CILIUM_INSTALL_DEFAULTS} >> $GITHUB_OUTPUT
+          echo hubble_enable_defaults=${HUBBLE_ENABLE_DEFAULTS} >> $GITHUB_OUTPUT
+          echo connectivity_test_defaults=${CONNECTIVITY_TEST_DEFAULTS} >> $GITHUB_OUTPUT
+          echo sha=${SHA} >> $GITHUB_OUTPUT
+          echo owner=${OWNER} >> $GITHUB_OUTPUT
 
       - name: Set commit status to pending
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -169,16 +197,15 @@ jobs:
           cilium version
 
       - name: Login to Azure
-        uses: azure/login@66d2e78565ab7af265d2b627085bc34c73ce6abb
+        uses: azure/login@92a5484dfaf04ca78a94597f4f19fea633851fa2 # v1.4.7
         with:
-          creds: ${{ secrets.AZURE_PR_SP_CREDS }}
+          client-id: ${{ secrets.AZURE_PR_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_PR_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_PR_SUBSCRIPTION_ID }}
 
-      - name: Display Azure CLI info
-        uses: azure/CLI@7378ce2ca3c38b4b063feb7a4cbe384fef978055
-        with:
-          azcliversion: 2.0.72
-          inlineScript: |
-            az account show
+      - name: Display az version
+        run: |
+            az version
 
       - name: Create AKS cluster
         run: |
@@ -193,42 +220,11 @@ jobs:
             --resource-group ${{ env.name }} \
             --name ${{ env.name }} \
             --location ${{ env.location }} \
+            --kubernetes-version ${{ env.k8s_version }} \
             --network-plugin azure \
-            --node-count 1 \
+            --node-count 2 \
             ${{ env.cost_reduction }} \
             --generate-ssh-keys
-
-          # Get name of initial system node pool
-          nodepool_to_delete=$(az aks nodepool list --resource-group ${{ env.name }} --cluster-name ${{ env.name }} --output tsv --query "[0].name")
-
-          # Create system node pool tainted with `CriticalAddonsOnly=true:NoSchedule`
-          az aks nodepool add \
-            --resource-group ${{ env.name }} \
-            --cluster-name ${{ env.name }} \
-            --name systempool \
-            --mode system \
-            --node-count 1 \
-            --node-taints "CriticalAddonsOnly=true:NoSchedule" \
-            ${{ env.cost_reduction }} \
-            --no-wait
-
-          # Create user node pool tainted with `node.cilium.io/agent-not-ready=true:NoSchedule`
-          az aks nodepool add \
-            --resource-group ${{ env.name }} \
-            --cluster-name ${{ env.name }} \
-            --name userpool \
-            --mode user \
-            --node-count 2 \
-            --node-taints "node.cilium.io/agent-not-ready=true:NoSchedule" \
-            ${{ env.cost_reduction }} \
-            --no-wait
-
-          # Delete the initial system node pool
-          az aks nodepool delete \
-            --resource-group ${{ env.name }} \
-            --cluster-name ${{ env.name }} \
-            --name "${nodepool_to_delete}" \
-            --no-wait
 
       - name: Get cluster credentials
         run: |
@@ -241,8 +237,15 @@ jobs:
         shell: bash
         run: |
           for image in cilium-ci operator-azure-ci hubble-relay-ci ; do
-            until curl --silent -f -lSL "https://quay.io/api/v1/repository/${{ github.repository_owner }}/$image/tag/${{ steps.vars.outputs.sha }}/images" &> /dev/null; do sleep 45s; done
+            until docker manifest inspect quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/$image:${{ steps.vars.outputs.sha }} &> /dev/null; do sleep 45s; done
           done
+
+      # Checkout source code to install Cilium using local Helm chart.
+      - name: Checkout code
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
+        with:
+          ref: ${{ steps.vars.outputs.sha }}
+          persist-credentials: false
 
       - name: Install Cilium
         run: |
@@ -260,50 +263,42 @@ jobs:
 
       - name: Run connectivity test
         run: |
-          cilium connectivity test --flow-validation=disabled
+          cilium connectivity test ${{ steps.vars.outputs.connectivity_test_defaults }}
 
-      # AKS testing with encryption is disabled due to https://github.com/cilium/cilium-cli/issues/342
-      # Re-enabling tracked in: https://github.com/cilium/cilium/issues/17644
       - name: Clean up Cilium
-        if: ${{ false }} # see comment above for details
         run: |
-          cilium uninstall --wait
           pkill -f "cilium.*hubble.*port-forward|kubectl.*port-forward.*hubble-relay"
+          cilium uninstall --chart-directory=install/kubernetes/cilium --wait
 
       - name: Create custom IPsec secret
-        if: ${{ false }} # see comment above for details
         run: |
           kubectl create -n kube-system secret generic cilium-ipsec-keys --from-literal=keys="15 rfc4106(gcm(aes)) $(echo $(dd if=/dev/urandom count=20 bs=1 2> /dev/null | xxd -p -c 64)) 128"
 
       - name: Install Cilium with encryption
-        if: ${{ false }} # see comment above for details
         run: |
           cilium install ${{ steps.vars.outputs.cilium_install_defaults }} \
             --encryption=ipsec
 
       - name: Enable Relay
-        if: ${{ false }} # see comment above for details
         run: |
           cilium hubble enable ${{ steps.vars.outputs.hubble_enable_defaults }}
 
       - name: Port forward Relay
-        if: ${{ false }} # see comment above for details
         run: |
           cilium hubble port-forward&
           sleep 10s
           [[ $(pgrep -f "cilium.*hubble.*port-forward|kubectl.*port-forward.*hubble-relay" | wc -l) == 2 ]]
 
       - name: Run connectivity test
-        if: ${{ false }} # see comment above for details
         run: |
-          cilium connectivity test --force-deploy --flow-validation=disabled
+          cilium connectivity test ${{ steps.vars.outputs.connectivity_test_defaults }} --force-deploy
 
       - name: Post-test information gathering
         if: ${{ !success() }}
         run: |
           kubectl get pods --all-namespaces -o wide
           cilium status
-          cilium sysdump --output-filename cilium-sysdump-out
+          cilium sysdump --output-filename cilium-sysdump-final
         shell: bash {0} # Disable default fail-fast behaviour so that all commands run independently
 
       - name: Clean up AKS
@@ -314,15 +309,15 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ !success() }}
-        uses: actions/upload-artifact@da838ae9595ac94171fa2d4de5a2f117b3e7ac32
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
-          name: cilium-sysdump-out.zip
-          path: cilium-sysdump-out.zip
+          name: cilium-sysdumps
+          path: cilium-sysdump-*.zip
           retention-days: 5
 
       - name: Set commit status to success
         if: ${{ success() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -333,7 +328,7 @@ jobs:
 
       - name: Set commit status to failure
         if: ${{ failure() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -344,7 +339,7 @@ jobs:
 
       - name: Set commit status to cancelled
         if: ${{ cancelled() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -352,12 +347,3 @@ jobs:
           description: Connectivity test cancelled
           state: error
           target_url: ${{ env.check_url }}
-
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

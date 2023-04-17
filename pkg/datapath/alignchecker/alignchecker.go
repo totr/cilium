@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package alignchecker
 
@@ -8,10 +8,10 @@ import (
 
 	check "github.com/cilium/cilium/pkg/alignchecker"
 	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/cilium/cilium/pkg/maps/authmap"
 	"github.com/cilium/cilium/pkg/maps/bwmap"
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	"github.com/cilium/cilium/pkg/maps/egressmap"
-	"github.com/cilium/cilium/pkg/maps/eppolicymap"
 	"github.com/cilium/cilium/pkg/maps/eventsmap"
 	"github.com/cilium/cilium/pkg/maps/fragmap"
 	ipcachemap "github.com/cilium/cilium/pkg/maps/ipcache"
@@ -22,15 +22,15 @@ import (
 	"github.com/cilium/cilium/pkg/maps/policymap"
 	"github.com/cilium/cilium/pkg/maps/recorder"
 	"github.com/cilium/cilium/pkg/maps/signalmap"
-	"github.com/cilium/cilium/pkg/maps/sockmap"
+	"github.com/cilium/cilium/pkg/maps/srv6map"
 	"github.com/cilium/cilium/pkg/maps/tunnel"
+	"github.com/cilium/cilium/pkg/maps/vtep"
 )
 
 // CheckStructAlignments checks whether size and offsets of the C and Go
 // structs for the datapath match.
 //
-// C struct size info is extracted from the given ELF object file debug section
-// encoded in DWARF.
+// C struct layout is extracted from the given ELF object file's BTF info.
 //
 // To find a matching C struct field, a Go field has to be tagged with
 // `align:"field_name_in_c_struct". In the case of unnamed union field, such
@@ -46,35 +46,36 @@ func CheckStructAlignments(path string) error {
 		"remote_endpoint_info": {reflect.TypeOf(ipcachemap.RemoteEndpointInfo{})},
 		"lb4_key":              {reflect.TypeOf(lbmap.Service4Key{})},
 		"lb4_service":          {reflect.TypeOf(lbmap.Service4Value{})},
-		"lb4_backend":          {reflect.TypeOf(lbmap.Backend4Value{})},
+		"lb4_backend":          {reflect.TypeOf(lbmap.Backend4ValueV3{})},
 		"lb6_key":              {reflect.TypeOf(lbmap.Service6Key{})},
 		"lb6_service":          {reflect.TypeOf(lbmap.Service6Value{})},
-		"lb6_backend":          {reflect.TypeOf(lbmap.Backend6Value{})},
+		"lb6_backend":          {reflect.TypeOf(lbmap.Backend6ValueV3{})},
 		"endpoint_info":        {reflect.TypeOf(lxcmap.EndpointInfo{})},
 		"metrics_key":          {reflect.TypeOf(metricsmap.Key{})},
 		"metrics_value":        {reflect.TypeOf(metricsmap.Value{})},
 		"policy_key":           {reflect.TypeOf(policymap.PolicyKey{})},
 		"policy_entry":         {reflect.TypeOf(policymap.PolicyEntry{})},
-		"sock_key":             {reflect.TypeOf(sockmap.SockmapKey{})},
 		"ipv4_revnat_tuple":    {reflect.TypeOf(lbmap.SockRevNat4Key{})},
 		"ipv4_revnat_entry":    {reflect.TypeOf(lbmap.SockRevNat4Value{})},
 		"ipv6_revnat_tuple":    {reflect.TypeOf(lbmap.SockRevNat6Key{})},
 		"ipv6_revnat_entry":    {reflect.TypeOf(lbmap.SockRevNat6Value{})},
-		"v6addr":               {reflect.TypeOf(neighborsmap.Key6{})},
-		"macaddr":              {reflect.TypeOf(neighborsmap.Value{})},
-		"ipv4_frag_id":         {reflect.TypeOf(fragmap.FragmentKey{})},
-		"ipv4_frag_l4ports":    {reflect.TypeOf(fragmap.FragmentValue{})},
-		"capture4_wcard":       {reflect.TypeOf(recorder.CaptureWcard4{})},
-		"capture6_wcard":       {reflect.TypeOf(recorder.CaptureWcard6{})},
-		"capture_rule":         {reflect.TypeOf(recorder.CaptureRule4{})},
+		"v6addr": {
+			reflect.TypeOf(neighborsmap.Key6{}),
+			reflect.TypeOf(srv6map.PolicyValue{}),
+			reflect.TypeOf(srv6map.SIDKey{}),
+		},
+		"macaddr":           {reflect.TypeOf(neighborsmap.Value{})},
+		"ipv4_frag_id":      {reflect.TypeOf(fragmap.FragmentKey{})},
+		"ipv4_frag_l4ports": {reflect.TypeOf(fragmap.FragmentValue{})},
+		"capture4_wcard":    {reflect.TypeOf(recorder.CaptureWcard4{})},
+		"capture6_wcard":    {reflect.TypeOf(recorder.CaptureWcard6{})},
+		"capture_rule":      {reflect.TypeOf(recorder.CaptureRule4{})},
 		// TODO: alignchecker does not support nested structs yet.
 		// "capture_rule":      {reflect.TypeOf(recorder.CaptureRule6{})},
 		// "ipv4_nat_entry":    {reflect.TypeOf(nat.NatEntry4{})},
 		// "ipv6_nat_entry":    {reflect.TypeOf(nat.NatEntry6{})},
 		"endpoint_key": {
 			reflect.TypeOf(bpf.EndpointKey{}),
-			reflect.TypeOf(eppolicymap.EndpointKey{}),
-			reflect.TypeOf(tunnel.TunnelEndpoint{}),
 		},
 		"lb4_affinity_key":       {reflect.TypeOf(lbmap.Affinity4Key{})},
 		"lb6_affinity_key":       {reflect.TypeOf(lbmap.Affinity6Key{})},
@@ -86,6 +87,16 @@ func CheckStructAlignments(path string) error {
 		"edt_info":               {reflect.TypeOf(bwmap.EdtInfo{})},
 		"egress_gw_policy_key":   {reflect.TypeOf(egressmap.EgressPolicyKey4{})},
 		"egress_gw_policy_entry": {reflect.TypeOf(egressmap.EgressPolicyVal4{})},
+		"srv6_vrf_key4":          {reflect.TypeOf(srv6map.VRFKey4{})},
+		"srv6_vrf_key6":          {reflect.TypeOf(srv6map.VRFKey6{})},
+		"srv6_policy_key4":       {reflect.TypeOf(srv6map.PolicyKey4{})},
+		"srv6_policy_key6":       {reflect.TypeOf(srv6map.PolicyKey6{})},
+		"tunnel_key":             {reflect.TypeOf(tunnel.TunnelKey{})},
+		"tunnel_value":           {reflect.TypeOf(tunnel.TunnelValue{})},
+		"vtep_key":               {reflect.TypeOf(vtep.Key{})},
+		"vtep_value":             {reflect.TypeOf(vtep.VtepEndpointInfo{})},
+		"auth_key":               {reflect.TypeOf(authmap.AuthKey{})},
+		"auth_info":              {reflect.TypeOf(authmap.AuthInfo{})},
 	}
 	if err := check.CheckStructAlignments(path, toCheck, true); err != nil {
 		return err
@@ -98,18 +109,16 @@ func CheckStructAlignments(path string) error {
 			reflect.TypeOf(lbmap.RevNat6Key{}),
 		},
 		"__u32": {
-			reflect.TypeOf(lbmap.Backend4KeyV2{}),
-			reflect.TypeOf(lbmap.Backend6KeyV2{}),
+			reflect.TypeOf(lbmap.Backend4KeyV3{}),
+			reflect.TypeOf(lbmap.Backend6KeyV3{}),
 			reflect.TypeOf(signalmap.Key{}),
 			reflect.TypeOf(signalmap.Value{}),
 			reflect.TypeOf(eventsmap.Key{}),
 			reflect.TypeOf(eventsmap.Value{}),
 			reflect.TypeOf(policymap.CallKey{}),
 			reflect.TypeOf(policymap.CallValue{}),
-		},
-		"int": {
-			reflect.TypeOf(sockmap.SockmapValue{}),
-			reflect.TypeOf(eppolicymap.EPPolicyValue{}),
+			reflect.TypeOf(srv6map.VRFValue{}),
+			reflect.TypeOf(srv6map.SIDValue{}),
 		},
 		"__be32": {reflect.TypeOf(neighborsmap.Key4{})},
 	}

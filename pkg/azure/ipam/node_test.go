@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package ipam
 
 import (
-	"github.com/cilium/cilium/pkg/azure/types"
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/azure/types"
 )
 
 func (e *IPAMSuite) TestGetMaximumAllocatableIPv4(c *check.C) {

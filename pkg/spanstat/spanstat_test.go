@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package spanstat
 
@@ -67,7 +64,8 @@ func (s *SpanStatTestSuite) TestSpanStat(c *C) {
 	c.Assert(span1.FailureTotal(), Equals, spanFailureTotal1)
 
 	span1.Start()
-	span1.End(false)
+	time.Sleep(time.Millisecond * 100)
+	span1.End(false) // ensure second measure is different from first.
 	c.Assert(span1.Total(), Not(Equals), spanTotal1)
 	c.Assert(span1.SuccessTotal(), Equals, spanSuccessTotal1)
 	c.Assert(span1.FailureTotal(), Not(Equals), spanFailureTotal1)

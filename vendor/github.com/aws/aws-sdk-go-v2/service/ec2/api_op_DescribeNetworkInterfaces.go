@@ -114,6 +114,13 @@ type DescribeNetworkInterfacesInput struct {
 	// * ipv6-addresses.ipv6-address - An IPv6 address
 	// associated with the network interface.
 	//
+	// * interface-type - The type of network
+	// interface (api_gateway_managed | aws_codestar_connections_managed | branch | efa
+	// | gateway_load_balancer | gateway_load_balancer_endpoint |
+	// global_accelerator_managed | interface | iot_rules_managed | lambda |
+	// load_balancer | nat_gateway | network_load_balancer | quicksight |
+	// transit_gateway | trunk | vpc_endpoint).
+	//
 	// * mac-address - The MAC address of the
 	// network interface.
 	//
@@ -169,8 +176,7 @@ type DescribeNetworkInterfacesInput struct {
 	// same request.
 	MaxResults *int32
 
-	// One or more network interface IDs. Default: Describes all your network
-	// interfaces.
+	// The network interface IDs. Default: Describes all your network interfaces.
 	NetworkInterfaceIds []string
 
 	// The token to retrieve the next page of results.
@@ -307,12 +313,13 @@ func NewDescribeNetworkInterfacesPaginator(client DescribeNetworkInterfacesAPICl
 		client:    client,
 		params:    params,
 		firstPage: true,
+		nextToken: params.NextToken,
 	}
 }
 
 // HasMorePages returns a boolean indicating whether more pages are available
 func (p *DescribeNetworkInterfacesPaginator) HasMorePages() bool {
-	return p.firstPage || p.nextToken != nil
+	return p.firstPage || (p.nextToken != nil && len(*p.nextToken) != 0)
 }
 
 // NextPage retrieves the next DescribeNetworkInterfaces page.
@@ -339,7 +346,10 @@ func (p *DescribeNetworkInterfacesPaginator) NextPage(ctx context.Context, optFn
 	prevToken := p.nextToken
 	p.nextToken = result.NextToken
 
-	if p.options.StopOnDuplicateToken && prevToken != nil && p.nextToken != nil && *prevToken == *p.nextToken {
+	if p.options.StopOnDuplicateToken &&
+		prevToken != nil &&
+		p.nextToken != nil &&
+		*prevToken == *p.nextToken {
 		p.nextToken = nil
 	}
 

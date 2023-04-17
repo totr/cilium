@@ -4,7 +4,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.6.2
+    controller-gen.kubebuilder.io/version: v0.7.0
   creationTimestamp: null
   name: ciliumnodes.cilium.io
 spec:
@@ -21,7 +21,20 @@ spec:
     singular: ciliumnode
   scope: Cluster
   versions:
-  - name: v2
+  - additionalPrinterColumns:
+    - description: Cilium internal IP for this node
+      jsonPath: .spec.addresses[?(@.type=="CiliumInternalIP")].ip
+      name: CiliumInternalIP
+      type: string
+    - description: IP of the node
+      jsonPath: .spec.addresses[?(@.type=="InternalIP")].ip
+      name: InternalIP
+      type: string
+    - description: Time duration since creation of Ciliumnode
+      jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v2
     schema:
       openAPIV3Schema:
         description: CiliumNode represents a node managed by Cilium. It contains a
@@ -126,6 +139,17 @@ spec:
                       is not set the default behavior is to delete the ENI on instance
                       termination.
                     type: boolean
+                  disable-prefix-delegation:
+                    description: DisablePrefixDelegation determines whether ENI prefix
+                      delegation should be disabled on this node.
+                    type: boolean
+                  exclude-interface-tags:
+                    additionalProperties:
+                      type: string
+                    description: ExcludeInterfaceTags is the list of tags to use when
+                      excluding ENIs for Cilium IP allocation. Any interface matching
+                      this set of tags will not be managed by Cilium.
+                    type: object
                   first-interface-index:
                     description: FirstInterfaceIndex is the index of the first ENI
                       to use for IP allocation, e.g. if the node has eth0, eth1, eth2
@@ -161,6 +185,11 @@ spec:
                       field is obsolete, please use Spec.IPAM.MinAllocate"
                     minimum: 0
                     type: integer
+                  node-subnet-id:
+                    description: NodeSubnetID is the subnet of the primary ENI the
+                      instance was brought up with. It is used as a sensible default
+                      subnet to create ENIs in.
+                    type: string
                   pre-allocate:
                     description: "PreAllocate defines the number of IP addresses that
                       must be available for allocation in the IPAMspec. It defines
@@ -193,6 +222,10 @@ spec:
                     description: SubnetTags is the list of tags to use when evaluating
                       what AWS subnets to use for ENI and IP allocation.
                     type: object
+                  use-primary-address:
+                    description: UsePrimaryAddress determines whether an ENI's primary
+                      address should be available for allocations on the node
+                    type: boolean
                   vpc-id:
                     description: VpcID is the VPC ID to use when allocating ENIs.
                     type: string
@@ -206,6 +239,15 @@ spec:
                     type: string
                   ipv6:
                     description: IPv6 is the IPv6 address of the IPv4 health endpoint.
+                    type: string
+                type: object
+              ingress:
+                description: IngressAddressing is the addressing information for Ingress
+                  listener.
+                properties:
+                  ipv4:
+                    type: string
+                  ipv6:
                     type: string
                 type: object
               instance-id:
@@ -242,6 +284,25 @@ spec:
                       the minimum base socket of addresses that must be available.
                       After reaching this watermark, the PreAllocate and MaxAboveWatermark
                       logic takes over to continue allocating IPs.
+                    minimum: 0
+                    type: integer
+                  pod-cidr-allocation-threshold:
+                    description: PodCIDRAllocationThreshold defines the minimum number
+                      of free IPs which must be available to this node via its pod
+                      CIDR pool. If the total number of IP addresses in the pod CIDR
+                      pool is less than this value, the pod CIDRs currently in-use
+                      by this node will be marked as depleted and cilium-operator
+                      will allocate a new pod CIDR to this node. This value effectively
+                      defines the buffer of IP addresses available immediately without
+                      requiring cilium-operator to get involved.
+                    minimum: 0
+                    type: integer
+                  pod-cidr-release-threshold:
+                    description: PodCIDRReleaseThreshold defines the maximum number
+                      of free IPs which may be available to this node via its pod
+                      CIDR pool. While the total number of free IP addresses in the
+                      pod CIDR pool is larger than this value, cilium-agent will attempt
+                      to release currently unused pod CIDRs.
                     minimum: 0
                     type: integer
                   podCIDRs:
@@ -469,6 +530,12 @@ spec:
                           description: Number is the interface index, it used in combination
                             with FirstInterfaceIndex
                           type: integer
+                        prefixes:
+                          description: Prefixes is the list of all /28 prefixes associated
+                            with the ENI
+                          items:
+                            type: string
+                          type: array
                         security-groups:
                           description: SecurityGroups are the security groups associated
                             with the ENI
@@ -486,6 +553,12 @@ spec:
                             id:
                               description: ID is the ID of the subnet
                               type: string
+                          type: object
+                        tags:
+                          additionalProperties:
+                            type: string
+                          description: Tags is the set of tags of the ENI. Used to
+                            detect ENIs which should not be managed by Cilium
                           type: object
                         vpc:
                           description: VPC is the VPC information to which the ENI
@@ -518,6 +591,20 @@ spec:
                       error:
                         description: Error is the error message set by cilium-operator.
                         type: string
+                    type: object
+                  pod-cidrs:
+                    additionalProperties:
+                      properties:
+                        status:
+                          description: Status describes the status of a pod CIDR
+                          enum:
+                          - released
+                          - depleted
+                          - in-use
+                          type: string
+                      type: object
+                    description: PodCIDRs lists the status of each pod CIDR allocated
+                      to this node.
                     type: object
                   release-ips:
                     additionalProperties:

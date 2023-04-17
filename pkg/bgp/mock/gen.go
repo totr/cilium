@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package mock
 
 import (
 	"fmt"
 
+	metallbbgp "go.universe.tf/metallb/pkg/bgp"
+	metallbspr "go.universe.tf/metallb/pkg/speaker"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/cilium/cilium/pkg/cidr"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/ipam/types"
 	"github.com/cilium/cilium/pkg/k8s"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	nodetypes "github.com/cilium/cilium/pkg/node/types"
-
-	metallbbgp "go.universe.tf/metallb/pkg/bgp"
-	metallbspr "go.universe.tf/metallb/pkg/speaker"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // GenTestNodeAndAdvertisements generates a v1.Node with its
@@ -156,7 +157,8 @@ func GenTestServicePairs() (slim_corev1.Service, v1.Service, metallbspr.Service,
 			LoadBalancer: v1.LoadBalancerStatus{
 				Ingress: []v1.LoadBalancerIngress{
 					{
-						IP: IP,
+						IP:    IP,
+						Ports: nil,
 					},
 				},
 			},
@@ -188,8 +190,8 @@ func GenTestEndpointsPairs() (k8s.Endpoints, slim_corev1.Endpoints, metallbspr.E
 	backend := k8s.Backend{
 		NodeName: NodeName,
 	}
-	backends := map[string]*k8s.Backend{
-		IP: &backend,
+	backends := map[cmtypes.AddrCluster]*k8s.Backend{
+		cmtypes.MustParseAddrCluster(IP): &backend,
 	}
 	endpoints := k8s.Endpoints{Backends: backends}
 	slimEndpoints := slim_corev1.Endpoints{

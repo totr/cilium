@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package endpoint
 
 import (
 	"context"
 
+	"gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/completion"
-	"github.com/cilium/cilium/pkg/datapath"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/fqdn/restore"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
@@ -24,8 +25,8 @@ import (
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/proxy/logger"
 	"github.com/cilium/cilium/pkg/revert"
+	testipcache "github.com/cilium/cilium/pkg/testutils/ipcache"
 	"github.com/cilium/cilium/pkg/u8proto"
-	"gopkg.in/check.v1"
 )
 
 type RedirectSuite struct{}
@@ -43,7 +44,7 @@ type RedirectSuiteProxy struct {
 
 // CreateOrUpdateRedirect returns the proxy port for the given L7Parser from the
 // ProxyPolicy parameter.
-func (r *RedirectSuiteProxy) CreateOrUpdateRedirect(l4 policy.ProxyPolicy, id string, localEndpoint logger.EndpointUpdater, wg *completion.WaitGroup) (proxyPort uint16, err error, finalizeFunc revert.FinalizeFunc, revertFunc revert.RevertFunc) {
+func (r *RedirectSuiteProxy) CreateOrUpdateRedirect(ctx context.Context, l4 policy.ProxyPolicy, id string, localEndpoint logger.EndpointUpdater, wg *completion.WaitGroup) (proxyPort uint16, err error, finalizeFunc revert.FinalizeFunc, revertFunc revert.RevertFunc) {
 	pp := r.parserProxyPortMap[l4.GetL7Parser()]
 	return pp, nil, nil, nil
 }
@@ -132,7 +133,7 @@ func (d *DummyOwner) UpdateIdentities(added, deleted cache.IdentityCache) {}
 func (s *RedirectSuite) TestAddVisibilityRedirects(c *check.C) {
 	// Setup dependencies for endpoint.
 	kvstore.SetupDummy("etcd")
-	defer kvstore.Client().Close()
+	defer kvstore.Client().Close(context.TODO())
 
 	identity.InitWellKnownIdentities(&fakeConfig.Config{})
 	idAllocatorOwner := &DummyIdentityAllocatorOwner{}
@@ -142,7 +143,7 @@ func (s *RedirectSuite) TestAddVisibilityRedirects(c *check.C) {
 	defer mgr.Close()
 
 	do := &DummyOwner{
-		repo: policy.NewPolicyRepository(nil, nil, nil),
+		repo: policy.NewPolicyRepository(nil, nil, nil, nil),
 	}
 	identitymanager.Subscribe(do.repo)
 
@@ -162,10 +163,10 @@ func (s *RedirectSuite) TestAddVisibilityRedirects(c *check.C) {
 		redirectPortUserMap: make(map[uint16][]string),
 	}
 
-	ep := NewEndpointWithState(do, do, rsp, mgr, 12345, StateRegenerating)
+	ep := NewEndpointWithState(do, do, testipcache.NewMockIPCache(), rsp, mgr, 12345, StateRegenerating)
 
 	qaBarLbls := labels.Labels{lblBar.Key: lblBar, lblQA.Key: lblQA}
-	epIdentity, _, err := mgr.AllocateIdentity(context.Background(), qaBarLbls, true)
+	epIdentity, _, err := mgr.AllocateIdentity(context.Background(), qaBarLbls, true, identity.InvalidIdentity)
 	c.Assert(err, check.IsNil)
 	ep.SetIdentity(epIdentity, true)
 

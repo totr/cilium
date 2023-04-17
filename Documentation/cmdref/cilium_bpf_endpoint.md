@@ -13,14 +13,14 @@ Local endpoint map
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf endpoint delete](../cilium_bpf_endpoint_delete)	 - Delete local endpoint entries
-* [cilium bpf endpoint list](../cilium_bpf_endpoint_list)	 - List local endpoint entries
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf endpoint delete](cilium_bpf_endpoint_delete.md)	 - Delete local endpoint entries
+* [cilium bpf endpoint list](cilium_bpf_endpoint_list.md)	 - List local endpoint entries
 

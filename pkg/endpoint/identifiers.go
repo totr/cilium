@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
 import (
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/cilium/cilium/pkg/endpoint/id"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 )
@@ -144,11 +146,11 @@ func (e *Endpoint) IdentifiersLocked() id.Identifiers {
 		refs[id.DockerEndpointPrefix] = e.dockerEndpointID
 	}
 
-	if e.IPv4.IsSet() {
+	if e.IPv4.IsValid() {
 		refs[id.IPv4Prefix] = e.IPv4.String()
 	}
 
-	if e.IPv6.IsSet() {
+	if e.IPv6.IsValid() {
 		refs[id.IPv6Prefix] = e.IPv6.String()
 	}
 
@@ -170,4 +172,18 @@ func (e *Endpoint) Identifiers() (id.Identifiers, error) {
 	defer e.runlock()
 
 	return e.IdentifiersLocked(), nil
+}
+
+// GetCiliumEndpointUID returns the UID of the CiliumEndpoint.
+func (e *Endpoint) GetCiliumEndpointUID() types.UID {
+	e.unconditionalRLock()
+	defer e.runlock()
+	return e.ciliumEndpointUID
+}
+
+// SetCiliumEndpointUID modifies the endpoint's CiliumEndpoint UID.
+func (e *Endpoint) SetCiliumEndpointUID(uid types.UID) {
+	e.unconditionalLock()
+	e.ciliumEndpointUID = uid
+	e.unlock()
 }

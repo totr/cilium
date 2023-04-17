@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package identity
 
 import (
-	"fmt"
 	"net"
-	"sync"
+	"strconv"
 
 	"github.com/cilium/cilium/pkg/labels"
+)
+
+const (
+	NodeLocalIdentityType    = "node_local"
+	ReservedIdentityType     = "reserved"
+	ClusterLocalIdentityType = "cluster_local"
+	WellKnownIdentityType    = "well_known"
 )
 
 // Identity is the representation of the security context for a particular set of
@@ -18,11 +24,6 @@ type Identity struct {
 	ID NumericIdentity `json:"id"`
 	// Set of labels that belong to this Identity.
 	Labels labels.Labels `json:"labels"`
-
-	// onceLabelSHA256 makes sure LabelsSHA256 is only set once
-	onceLabelSHA256 sync.Once
-	// SHA256 of labels.
-	LabelsSHA256 string `json:"labelsSHA256"`
 
 	// LabelArray contains the same labels as Labels in a form of a list, used
 	// for faster lookup.
@@ -80,18 +81,6 @@ func (id *Identity) Sanitize() {
 	if id.Labels != nil {
 		id.LabelArray = id.Labels.LabelArray()
 	}
-}
-
-// GetLabelsSHA256 returns the SHA256 of the labels associated with the
-// identity. The SHA is calculated if not already cached.
-func (id *Identity) GetLabelsSHA256() string {
-	id.onceLabelSHA256.Do(func() {
-		if id.LabelsSHA256 == "" {
-			id.LabelsSHA256 = id.Labels.SHA256Sum()
-		}
-	})
-
-	return id.LabelsSHA256
 }
 
 // StringID returns the identity identifier as string
@@ -154,21 +143,14 @@ func (pair *IPIdentityPair) IsHost() bool {
 // format w.x.y.z if 'host' is true, or as a prefix in the format the w.x.y.z/N
 // if 'host' is false.
 func (pair *IPIdentityPair) PrefixString() string {
-	var suffix string
-	if !pair.IsHost() {
-		var ones int
-		if pair.Mask == nil {
-			if pair.IP.To4() != nil {
-				ones = net.IPv4len
-			} else {
-				ones = net.IPv6len
-			}
-		} else {
-			ones, _ = pair.Mask.Size()
-		}
-		suffix = fmt.Sprintf("/%d", ones)
+	ipstr := pair.IP.String()
+
+	if pair.IsHost() {
+		return ipstr
 	}
-	return fmt.Sprintf("%s%s", pair.IP.String(), suffix)
+
+	ones, _ := pair.Mask.Size()
+	return ipstr + "/" + strconv.Itoa(ones)
 }
 
 // RequiresGlobalIdentity returns true if the label combination requires a
@@ -269,10 +251,7 @@ func LookupReservedIdentityByLabels(lbls labels.Labels) *Identity {
 			}
 
 			if createID {
-				identity := NewIdentity(id, lbls)
-				// Pre-calculate the SHA256 hash.
-				identity.GetLabelsSHA256()
-				return identity
+				return NewIdentity(id, lbls)
 			}
 
 			// If it doesn't contain a fixed-identity then make sure the set of

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package api
 
@@ -10,32 +10,29 @@ import (
 	"net"
 	"time"
 
-	eniTypes "github.com/cilium/cilium/pkg/alibabacloud/eni/types"
-	"github.com/cilium/cilium/pkg/alibabacloud/types"
-	"github.com/cilium/cilium/pkg/api/helpers"
-	"github.com/cilium/cilium/pkg/cidr"
-	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
-	"github.com/cilium/cilium/pkg/math"
-	"github.com/cilium/cilium/pkg/spanstat"
-
 	httperr "github.com/aliyun/alibaba-cloud-sdk-go/sdk/errors"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	eniTypes "github.com/cilium/cilium/pkg/alibabacloud/eni/types"
+	"github.com/cilium/cilium/pkg/alibabacloud/types"
+	"github.com/cilium/cilium/pkg/api/helpers"
+	"github.com/cilium/cilium/pkg/cidr"
+	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
+	"github.com/cilium/cilium/pkg/spanstat"
 )
 
 const (
 	VPCID = "VPCID"
-
-	MaxListByTagSize = 20
 )
 
 var maxAttachRetries = wait.Backoff{
-	Duration: 4 * time.Second,
+	Duration: 2500 * time.Millisecond,
 	Factor:   1,
 	Jitter:   0.1,
-	Steps:    4,
+	Steps:    6,
 	Cap:      0,
 }
 
@@ -43,7 +40,7 @@ var maxAttachRetries = wait.Backoff{
 type Client struct {
 	vpcClient  *vpc.Client
 	ecsClient  *ecs.Client
-	limiter    *helpers.ApiLimiter
+	limiter    *helpers.APILimiter
 	metricsAPI MetricsAPI
 	filters    map[string]string
 }
@@ -59,7 +56,7 @@ func NewClient(vpcClient *vpc.Client, client *ecs.Client, metrics MetricsAPI, ra
 	return &Client{
 		vpcClient:  vpcClient,
 		ecsClient:  client,
-		limiter:    helpers.NewApiLimiter(metrics, rateLimit, burst),
+		limiter:    helpers.NewAPILimiter(metrics, rateLimit, burst),
 		metricsAPI: metrics,
 		filters:    filters,
 	}
@@ -69,7 +66,7 @@ func NewClient(vpcClient *vpc.Client, client *ecs.Client, metrics MetricsAPI, ra
 func (c *Client) GetInstances(ctx context.Context, vpcs ipamTypes.VirtualNetworkMap, subnets ipamTypes.SubnetMap) (*ipamTypes.InstanceMap, error) {
 	instances := ipamTypes.NewInstanceMap()
 
-	networkInterfaceSets, err := c.describeNetworkInterfaces(ctx, subnets)
+	networkInterfaceSets, err := c.describeNetworkInterfaces(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -90,12 +87,10 @@ func (c *Client) GetInstances(ctx context.Context, vpcs ipamTypes.VirtualNetwork
 // GetVSwitches returns all ecs vSwitches as a subnetMap
 func (c *Client) GetVSwitches(ctx context.Context) (ipamTypes.SubnetMap, error) {
 	var result ipamTypes.SubnetMap
-	vsws := []string{}
 	for i := 1; ; {
 		req := vpc.CreateDescribeVSwitchesRequest()
 		req.PageNumber = requests.NewInteger(i)
 		req.PageSize = requests.NewInteger(50)
-		req.VpcId = c.filters[VPCID]
 		c.limiter.Limit(ctx, "DescribeVSwitches")
 		resp, err := c.vpcClient.DescribeVSwitches(req)
 		if err != nil {
@@ -122,35 +117,14 @@ func (c *Client) GetVSwitches(ctx context.Context) (ipamTypes.SubnetMap, error) 
 				AvailableAddresses: int(v.AvailableIpAddressCount),
 				Tags:               map[string]string{},
 			}
-			vsws = append(vsws, v.VSwitchId)
+			for _, tag := range v.Tags.Tag {
+				result[v.VSwitchId].Tags[tag.Key] = tag.Value
+			}
 		}
 		if resp.TotalCount < resp.PageNumber*resp.PageSize {
 			break
 		}
 		i++
-	}
-
-	for i := 0; i <= (len(vsws)-1)/MaxListByTagSize; i++ {
-		var ids []string
-
-		tail := math.IntMin((i+1)*MaxListByTagSize, len(vsws))
-		ids = vsws[i*MaxListByTagSize : tail]
-
-		req := vpc.CreateListTagResourcesRequest()
-		req.ResourceType = "VSWITCH"
-		req.ResourceId = &ids
-		c.limiter.Limit(ctx, "ListTagResources")
-		resp, err := c.vpcClient.ListTagResources(req)
-		if err != nil {
-			return nil, err
-		}
-		for _, tagRes := range resp.TagResources.TagResource {
-			subnet, ok := result[tagRes.ResourceId]
-			if !ok {
-				continue
-			}
-			subnet.Tags[tagRes.TagKey] = tagRes.TagValue
-		}
 	}
 
 	return result, nil
@@ -266,7 +240,10 @@ func (c *Client) DescribeNetworkInterface(ctx context.Context, eniID string) (*e
 // CreateNetworkInterface creates an ENI with the given parameters
 func (c *Client) CreateNetworkInterface(ctx context.Context, secondaryPrivateIPCount int, vSwitchID string, groups []string, tags map[string]string) (string, *eniTypes.ENI, error) {
 	req := ecs.CreateCreateNetworkInterfaceRequest()
-	req.SecondaryPrivateIpAddressCount = requests.NewInteger(secondaryPrivateIPCount)
+	// SecondaryPrivateIpAddressCount is optional but must not be zero
+	if secondaryPrivateIPCount > 0 {
+		req.SecondaryPrivateIpAddressCount = requests.NewInteger(secondaryPrivateIPCount)
+	}
 	req.VSwitchId = vSwitchID
 	req.SecurityGroupIds = &groups
 	reqTag := make([]ecs.CreateNetworkInterfaceTag, 0, len(tags))
@@ -382,31 +359,25 @@ func (c *Client) UnassignPrivateIPAddresses(ctx context.Context, eniID string, a
 	return err
 }
 
-func (c *Client) describeNetworkInterfaces(ctx context.Context, subnets ipamTypes.SubnetMap) ([]ecs.NetworkInterfaceSet, error) {
+func (c *Client) describeNetworkInterfaces(ctx context.Context) ([]ecs.NetworkInterfaceSet, error) {
 	var result []ecs.NetworkInterfaceSet
+	req := ecs.CreateDescribeNetworkInterfacesRequest()
+	req.MaxResults = requests.NewInteger(500)
 
-	for _, subnet := range subnets {
-		for i := 1; ; {
-			req := ecs.CreateDescribeNetworkInterfacesRequest()
-			req.PageNumber = requests.NewInteger(i)
-			req.PageSize = requests.NewInteger(50)
-			req.VSwitchId = subnet.ID
-			c.limiter.Limit(ctx, "DescribeNetworkInterfaces")
-			resp, err := c.ecsClient.DescribeNetworkInterfaces(req)
-			if err != nil {
-				return nil, err
-			}
-			if len(resp.NetworkInterfaceSets.NetworkInterfaceSet) == 0 {
-				break
-			}
+	for {
+		c.limiter.Limit(ctx, "DescribeNetworkInterfaces")
+		resp, err := c.ecsClient.DescribeNetworkInterfaces(req)
+		if err != nil {
+			return nil, err
+		}
 
-			for _, v := range resp.NetworkInterfaceSets.NetworkInterfaceSet {
-				result = append(result, v)
-			}
-			if resp.TotalCount < resp.PageNumber*resp.PageSize {
-				break
-			}
-			i++
+		for _, v := range resp.NetworkInterfaceSets.NetworkInterfaceSet {
+			result = append(result, v)
+		}
+		if resp.NextToken == "" {
+			break
+		} else {
+			req.NextToken = resp.NextToken
 		}
 	}
 

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package clustermesh
 
@@ -15,16 +14,18 @@ import (
 	"testing"
 	"time"
 
+	. "gopkg.in/check.v1"
+
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
+	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/kvstore/store"
 	"github.com/cilium/cilium/pkg/lock"
 	fakeConfig "github.com/cilium/cilium/pkg/option/fake"
 	"github.com/cilium/cilium/pkg/testutils"
-	"github.com/cilium/cilium/pkg/testutils/identity"
-
-	. "gopkg.in/check.v1"
+	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
 )
 
 func Test(t *testing.T) {
@@ -90,7 +91,7 @@ func (o *testObserver) OnDelete(k store.NamedKey) {
 
 func (s *ClusterMeshTestSuite) TestClusterMesh(c *C) {
 	kvstore.SetupDummy("etcd")
-	defer kvstore.Client().Close()
+	defer kvstore.Client().Close(context.TODO())
 
 	identity.InitWellKnownIdentities(&fakeConfig.Config{})
 	// The nils are only used by k8s CRD identities. We default to kvstore.
@@ -104,6 +105,19 @@ func (s *ClusterMeshTestSuite) TestClusterMesh(c *C) {
 
 	etcdConfig := []byte(fmt.Sprintf("endpoints:\n- %s\n", kvstore.EtcdDummyAddress()))
 
+	// cluster3 doesn't have cluster configuration on kvstore. This emulates
+	// the old Cilium version which doesn't support cluster configuration
+	// feature. We should be able to connect to such a cluster for
+	// compatibility.
+	for i, name := range []string{"test2", "cluster1", "cluster2"} {
+		config := cmtypes.CiliumClusterConfig{
+			ID: uint32(i),
+		}
+
+		err = SetClusterConfig(name, &config, kvstore.Client())
+		c.Assert(err, IsNil)
+	}
+
 	config1 := path.Join(dir, "cluster1")
 	err = os.WriteFile(config1, etcdConfig, 0644)
 	c.Assert(err, IsNil)
@@ -112,12 +126,23 @@ func (s *ClusterMeshTestSuite) TestClusterMesh(c *C) {
 	err = os.WriteFile(config2, etcdConfig, 0644)
 	c.Assert(err, IsNil)
 
+	config3 := path.Join(dir, "cluster3")
+	err = os.WriteFile(config3, etcdConfig, 0644)
+	c.Assert(err, IsNil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ipc := ipcache.NewIPCache(&ipcache.Configuration{
+		Context: ctx,
+	})
+	defer ipc.Shutdown()
 	cm, err := NewClusterMesh(Configuration{
 		Name:                  "test2",
 		ConfigDirectory:       dir,
 		NodeKeyCreator:        testNodeCreator,
 		nodeObserver:          &testObserver{},
 		RemoteIdentityWatcher: mgr,
+		IPCache:               ipc,
 	})
 	c.Assert(err, IsNil)
 	c.Assert(cm, Not(IsNil))
@@ -126,7 +151,7 @@ func (s *ClusterMeshTestSuite) TestClusterMesh(c *C) {
 
 	// wait for both clusters to appear in the list of cm clusters
 	c.Assert(testutils.WaitUntil(func() bool {
-		return cm.NumReadyClusters() == 2
+		return cm.NumReadyClusters() == 3
 	}, 10*time.Second), IsNil)
 
 	cm.mutex.RLock()
@@ -144,24 +169,25 @@ func (s *ClusterMeshTestSuite) TestClusterMesh(c *C) {
 	c.Assert(testutils.WaitUntil(func() bool {
 		nodesMutex.RLock()
 		defer nodesMutex.RUnlock()
-		return len(nodes) == 2*len(nodeNames)
+		return len(nodes) == 3*len(nodeNames)
 	}, 10*time.Second), IsNil)
 
 	os.RemoveAll(config2)
 
 	// wait for the removed cluster to disappear
 	c.Assert(testutils.WaitUntil(func() bool {
-		return cm.NumReadyClusters() == 1
+		return cm.NumReadyClusters() == 2
 	}, 5*time.Second), IsNil)
 
 	// wait for the nodes of the removed cluster to disappear
 	c.Assert(testutils.WaitUntil(func() bool {
 		nodesMutex.RLock()
 		defer nodesMutex.RUnlock()
-		return len(nodes) == len(nodeNames)
+		return len(nodes) == 2*len(nodeNames)
 	}, 10*time.Second), IsNil)
 
 	os.RemoveAll(config1)
+	os.RemoveAll(config3)
 
 	// wait for the removed cluster to disappear
 	c.Assert(testutils.WaitUntil(func() bool {

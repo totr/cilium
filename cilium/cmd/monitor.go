@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -14,15 +14,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
+	"github.com/cilium/cilium/pkg/datapath/link"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/monitor"
 	"github.com/cilium/cilium/pkg/monitor/agent/listener"
 	"github.com/cilium/cilium/pkg/monitor/format"
 	"github.com/cilium/cilium/pkg/monitor/payload"
-
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 const (
@@ -44,7 +44,8 @@ programs attached to endpoints and devices. This includes:
 			runMonitor(args)
 		},
 	}
-	printer    = format.NewMonitorFormatter(format.INFO)
+	linkCache  = link.NewLinkCache()
+	printer    = format.NewMonitorFormatter(format.INFO, linkCache)
 	socketPath = ""
 	verbosity  = []bool{}
 )
@@ -61,8 +62,8 @@ func init() {
 	monitorCmd.Flags().BoolVarP(&printer.JSONOutput, "json", "j", false, "Enable json output. Shadows -v flag")
 	monitorCmd.Flags().BoolVarP(&printer.Numeric, "numeric", "n", false, "Display all security identities as numeric values")
 	monitorCmd.Flags().StringVar(&socketPath, "monitor-socket", "", "Configure monitor socket path")
-	viper.BindEnv("monitor-socket", "CILIUM_MONITOR_SOCK")
-	viper.BindPFlags(monitorCmd.Flags())
+	vp.BindEnv("monitor-socket", "CILIUM_MONITOR_SOCK")
+	vp.BindPFlags(monitorCmd.Flags())
 }
 
 func setVerbosity() {
@@ -85,7 +86,7 @@ func setupSigHandler() {
 	signal.Notify(signalChan, os.Interrupt)
 	go func() {
 		for range signalChan {
-			fmt.Printf("\nReceived an interrupt, disconnecting from monitor...\n\n")
+			fmt.Fprintf(os.Stderr, "\nReceived an interrupt, disconnecting from monitor...\n\n")
 			os.Exit(0)
 		}
 	}()
@@ -226,7 +227,7 @@ func validateEndpointsFilters() {
 
 func runMonitor(args []string) {
 	if len(args) > 0 {
-		fmt.Println("Error: arguments not recognized")
+		fmt.Fprintln(os.Stderr, "Error: arguments not recognized")
 		os.Exit(1)
 	}
 
@@ -235,17 +236,17 @@ func runMonitor(args []string) {
 	setupSigHandler()
 	if resp, err := client.Daemon.GetHealthz(nil); err == nil {
 		if nm := resp.Payload.NodeMonitor; nm != nil {
-			fmt.Printf("Listening for events on %d CPUs with %dx%d of shared memory\n",
+			fmt.Fprintf(os.Stderr, "Listening for events on %d CPUs with %dx%d of shared memory\n",
 				nm.Cpus, nm.Npages, nm.Pagesize)
 		}
 	}
-	fmt.Printf("Press Ctrl-C to quit\n")
+	fmt.Fprintf(os.Stderr, "Press Ctrl-C to quit\n")
 
 	// On EOF, retry
 	// On other errors, exit
 	// always wait connTimeout when retrying
 	for ; ; time.Sleep(connTimeout) {
-		conn, version, err := openMonitorSock(viper.GetString("monitor-socket"))
+		conn, version, err := openMonitorSock(vp.GetString("monitor-socket"))
 		if err != nil {
 			log.WithError(err).Error("Cannot open monitor socket")
 			return
@@ -256,7 +257,7 @@ func runMonitor(args []string) {
 		case err == nil:
 		// no-op
 
-		case err == io.EOF, errors.Is(err, io.ErrUnexpectedEOF):
+		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
 			log.WithError(err).Warn("connection closed")
 			continue
 

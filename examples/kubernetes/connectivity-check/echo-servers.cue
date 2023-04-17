@@ -2,7 +2,7 @@ package connectivity_check
 
 // Default parameters for echo servers (may be overridden).
 _echoDeployment: {
-	_image:       "quay.io/cilium/json-mock:v1.3.0@sha256:2729064827fa9dbfface8d3df424feb6c792a0ba07117b844349635c93c06d2b"
+	_image:       "quay.io/cilium/json-mock:v1.3.2@sha256:bc6c46c74efadb135bc996c2467cece6989302371ef4e3f068361460abaf39be"
 	_probeTarget: *"localhost:8080" | string
 	_probePath:   ""
 }
@@ -33,7 +33,7 @@ deployment: "echo-b": _echoDeployment & {
 }
 // Expose hostport by deploying a host pod and adding a headless service with no port.
 deployment: "echo-b-host": _echoDeploymentWithHostPort & {
-	_serverPort: "41000"
+	_serverPort: "31000"
 	_affinity:   "echo-b"
 
 	metadata: labels: component: "services-check"
@@ -72,7 +72,7 @@ ingressCNP: "echo-c": ingressL7Policy & {}
 // Expose hostport by deploying a host pod and adding a headless service with no port.
 // No ingress policy will apply in this case.
 deployment: "echo-c-host": _echoDeploymentWithHostPort & {
-	_serverPort: "41002"
+	_serverPort: "31002"
 	_affinity:   "echo-c"
 	metadata: labels: component: "proxy-check"
 }

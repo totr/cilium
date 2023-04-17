@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package loader
 
@@ -9,12 +9,12 @@ import (
 	"path"
 	"strings"
 
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netlink/nl"
+
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/mac"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netlink/nl"
 )
 
 func xdpModeToFlag(xdpMode string) uint32 {
@@ -39,7 +39,8 @@ func maybeUnloadObsoleteXDPPrograms(xdpDevs []string, xdpMode string) {
 	}
 
 	for _, link := range links {
-		if link.Attrs().Xdp == nil {
+		linkxdp := link.Attrs().Xdp
+		if linkxdp == nil || !linkxdp.Attached {
 			// No XDP program is attached
 			continue
 		}
@@ -51,7 +52,7 @@ func maybeUnloadObsoleteXDPPrograms(xdpDevs []string, xdpMode string) {
 		used := false
 		for _, xdpDev := range xdpDevs {
 			if link.Attrs().Name == xdpDev &&
-				link.Attrs().Xdp.Flags&xdpModeToFlag(xdpMode) != 0 {
+				linkxdp.Flags&xdpModeToFlag(xdpMode) != 0 {
 				// XDP mode matches; don't unload, otherwise we might introduce
 				// intermittent connectivity problems
 				used = true
@@ -117,5 +118,12 @@ func compileAndLoadXDPProg(ctx context.Context, xdpDev, xdpMode string, extraCAr
 	}
 
 	objPath := path.Join(dirs.Output, prog.Output)
-	return replaceDatapath(ctx, xdpDev, objPath, symbolFromHostNetdevEp, "", true, xdpMode)
+	progs := []progDefinition{{progName: symbolFromHostNetdevXDP, direction: ""}}
+	finalize, err := replaceDatapath(ctx, xdpDev, objPath, progs, xdpMode)
+	if err != nil {
+		return err
+	}
+	finalize()
+
+	return err
 }

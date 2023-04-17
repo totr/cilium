@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Hubble
+// Copyright Authors of Hubble
 
 package filters
 
@@ -77,9 +77,9 @@ func (f OnBuildFilterFunc) OnBuildFilter(ctx context.Context, flow *flowpb.FlowF
 }
 
 // BuildFilter builds a filter based on a FlowFilter. It returns:
-// - the FilterFunc to be used to filter packets based on the requested
-//   FlowFilter;
-// - an error in case something went wrong.
+//   - the FilterFunc to be used to filter packets based on the requested
+//     FlowFilter;
+//   - an error in case something went wrong.
 func BuildFilter(ctx context.Context, ff *flowpb.FlowFilter, auxFilters []OnBuildFilter) (FilterFuncs, error) {
 	var fs []FilterFunc
 
@@ -98,9 +98,9 @@ func BuildFilter(ctx context.Context, ff *flowpb.FlowFilter, auxFilters []OnBuil
 
 // BuildFilterList constructs a list of filter functions representing the list
 // of FlowFilter. It returns:
-// - the FilterFunc to be used to filter packets based on the requested
-//   FlowFilter;
-// - an error in case something went wrong.
+//   - the FilterFunc to be used to filter packets based on the requested
+//     FlowFilter;
+//   - an error in case something went wrong.
 func BuildFilterList(ctx context.Context, ff []*flowpb.FlowFilter, auxFilters []OnBuildFilter) (FilterFuncs, error) {
 	filterList := make([]FilterFunc, 0, len(ff))
 
@@ -124,6 +124,7 @@ func BuildFilterList(ctx context.Context, ff []*flowpb.FlowFilter, auxFilters []
 
 // DefaultFilters is the list of default filters
 var DefaultFilters = []OnBuildFilter{
+	&UUIDFilter{},
 	&EventTypeFilter{},
 	&VerdictFilter{},
 	&ReplyFilter{},
@@ -131,6 +132,7 @@ var DefaultFilters = []OnBuildFilter{
 	&ProtocolFilter{},
 	&IPFilter{},
 	&PodFilter{},
+	&WorkloadFilter{},
 	&ServiceFilter{},
 	&FQDNFilter{},
 	&LabelsFilter{},
@@ -139,4 +141,6 @@ var DefaultFilters = []OnBuildFilter{
 	&TCPFilter{},
 	&NodeNameFilter{},
 	&IPVersionFilter{},
+	&TraceIDFilter{},
+	&TrafficDirectionFilter{},
 }

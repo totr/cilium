@@ -1,33 +1,33 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
-
-//go:build privileged_tests
-// +build privileged_tests
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
 	"encoding/hex"
+	"net"
+	"runtime"
+
+	"github.com/cilium/cilium/pkg/testutils"
+
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	. "gopkg.in/check.v1"
-	"net"
-	"runtime"
-	"testing"
 )
 
-// Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) {
-	TestingT(t)
+type EncryptStatusSuite struct {
+	currentNetNS netns.NsHandle
 }
-
-type EncryptStatusSuite struct{}
 
 var _ = Suite(&EncryptStatusSuite{})
 
-const (
-	procTestFixtures = "fixtures/proc"
-)
+func (s *EncryptStatusSuite) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
+
+	var err error
+	s.currentNetNS, err = netns.Get()
+	c.Assert(err, IsNil)
+}
 
 func getXfrmState(src string, dst string, spi int, key string) *netlink.XfrmState {
 	k, _ := hex.DecodeString(key)
@@ -47,8 +47,12 @@ func getXfrmState(src string, dst string, spi int, key string) *netlink.XfrmStat
 
 func (s *EncryptStatusSuite) TestCountUniqueIPsecKeys(c *C) {
 	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ns, err := netns.New()
 	c.Assert(err, IsNil)
+	defer func() { c.Assert(ns.Close(), IsNil) }()
+	defer func() { c.Assert(netns.Set(s.currentNetNS), IsNil) }()
 
 	keys := countUniqueIPsecKeys()
 	c.Assert(keys, Equals, 0)
@@ -68,10 +72,9 @@ func (s *EncryptStatusSuite) TestCountUniqueIPsecKeys(c *C) {
 
 	keys = countUniqueIPsecKeys()
 	c.Assert(keys, Equals, 2)
-
-	ns.Close()
-	runtime.UnlockOSThread()
 }
+
+const procTestFixtures = "fixtures/proc"
 
 func (s *EncryptStatusSuite) TestGetXfrmStats(c *C) {
 	errCount, m := getXfrmStats(procTestFixtures)

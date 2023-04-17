@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/byteorder"
@@ -22,8 +24,6 @@ import (
 	"github.com/cilium/cilium/pkg/maps/policymap"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -31,10 +31,10 @@ var (
 	allList  bool
 )
 
-// bpfPolicyListCmd represents the bpf_policy_list command
-var bpfPolicyListCmd = &cobra.Command{
+// bpfPolicyGetCmd represents the bpf_policy_get command
+var bpfPolicyGetCmd = &cobra.Command{
 	Use:   "get",
-	Short: "List contents of a policy BPF map",
+	Short: "Get contents of a policy BPF map",
 	Run: func(cmd *cobra.Command, args []string) {
 		common.RequireRootPrivilege("cilium bpf policy get")
 		if allList {
@@ -47,19 +47,24 @@ var bpfPolicyListCmd = &cobra.Command{
 }
 
 func init() {
-	bpfPolicyCmd.AddCommand(bpfPolicyListCmd)
-	bpfPolicyListCmd.Flags().BoolVarP(&printIDs, "numeric", "n", false, "Do not resolve IDs")
-	bpfPolicyListCmd.Flags().BoolVarP(&allList, "all", "", false, "Dump all policy maps")
-	command.AddJSONOutput(bpfPolicyListCmd)
+	bpfPolicyCmd.AddCommand(bpfPolicyGetCmd)
+	bpfPolicyGetCmd.Flags().BoolVarP(&printIDs, "numeric", "n", false, "Do not resolve IDs")
+	bpfPolicyGetCmd.Flags().BoolVarP(&allList, "all", "", false, "Dump all policy maps")
+	command.AddOutputOption(bpfPolicyGetCmd)
 }
 
 func listAllMaps() {
-	mapRootPrefixPath := bpf.MapPrefixPath()
+	mapRootPrefixPath := bpf.TCGlobalsPath()
 	mapMatchExpr := filepath.Join(mapRootPrefixPath, "cilium_policy_*")
 
 	matchFiles, err := filepath.Glob(mapMatchExpr)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if len(matchFiles) == 0 {
+		fmt.Println("no maps found")
+		return
 	}
 
 	for _, file := range matchFiles {
@@ -94,7 +99,7 @@ func dumpMap(file string) {
 	}
 	sort.Slice(statsMap, statsMap.Less)
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(statsMap); err != nil {
 			os.Exit(1)
 		}

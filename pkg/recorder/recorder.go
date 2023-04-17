@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package recorder
 
@@ -15,8 +15,8 @@ import (
 	"github.com/cilium/cilium/pkg/byteorder"
 	"github.com/cilium/cilium/pkg/cidr"
 	"github.com/cilium/cilium/pkg/common"
-	"github.com/cilium/cilium/pkg/datapath"
 	"github.com/cilium/cilium/pkg/datapath/loader"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -480,7 +480,7 @@ func (r *Recorder) RetrieveRecorder(id ID) (*RecInfo, error) {
 
 // RetrieveRecorderSet will return a list of all existing recorder objects.
 func (r *Recorder) RetrieveRecorderSet() []*RecInfo {
-	recList := []*RecInfo{}
+	recList := make([]*RecInfo, 0, len(r.recByID))
 	r.RLock()
 	defer r.RUnlock()
 	for id := range r.recByID {
@@ -492,7 +492,7 @@ func (r *Recorder) RetrieveRecorderSet() []*RecInfo {
 
 // RetrieveRecorderMaskSet will return a list of all existing recorder masks.
 func (r *Recorder) RetrieveRecorderMaskSet() []*RecMask {
-	recMaskList := []*RecMask{}
+	recMaskList := make([]*RecMask, 0, len(r.recMask))
 	r.RLock()
 	defer r.RUnlock()
 	for _, mask := range r.recMask {
@@ -547,6 +547,8 @@ func ModelToRecorder(mo *models.RecorderSpec) (*RecInfo, error) {
 			f.Proto = u8proto.TCP
 		case models.RecorderFilterProtocolUDP:
 			f.Proto = u8proto.UDP
+		case models.RecorderFilterProtocolSCTP:
+			f.Proto = u8proto.SCTP
 		case models.RecorderFilterProtocolANY:
 			f.Proto = u8proto.ANY
 		default:
@@ -576,6 +578,8 @@ func RecorderToModel(ri *RecInfo) (*models.RecorderSpec, error) {
 			mf.Protocol = models.RecorderFilterProtocolTCP
 		case u8proto.UDP:
 			mf.Protocol = models.RecorderFilterProtocolUDP
+		case u8proto.SCTP:
+			mf.Protocol = models.RecorderFilterProtocolSCTP
 		case u8proto.ANY:
 			mf.Protocol = models.RecorderFilterProtocolANY
 		default:

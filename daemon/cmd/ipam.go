@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,22 +9,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-openapi/runtime/middleware"
+	"github.com/go-openapi/swag"
+
 	"github.com/cilium/cilium/api/v1/models"
 	ipamapi "github.com/cilium/cilium/api/v1/server/restapi/ipam"
 	"github.com/cilium/cilium/pkg/api"
 	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/datapath"
 	linuxrouting "github.com/cilium/cilium/pkg/datapath/linux/routing"
+	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/defaults"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipam"
 	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/go-openapi/runtime/middleware"
-	"github.com/go-openapi/swag"
 )
 
 type postIPAM struct {
@@ -40,11 +41,12 @@ func NewPostIPAMHandler(d *Daemon) ipamapi.PostIpamHandler {
 func (h *postIPAM) Handle(params ipamapi.PostIpamParams) middleware.Responder {
 	family := strings.ToLower(swag.StringValue(params.Family))
 	owner := swag.StringValue(params.Owner)
+	pool := ipam.PoolOrDefault(swag.StringValue(params.Pool))
 	var expirationTimeout time.Duration
 	if swag.BoolValue(params.Expiration) {
 		expirationTimeout = defaults.IPAMExpiration
 	}
-	ipv4Result, ipv6Result, err := h.daemon.ipam.AllocateNextWithExpiration(family, owner, expirationTimeout)
+	ipv4Result, ipv6Result, err := h.daemon.ipam.AllocateNextWithExpiration(family, owner, pool, expirationTimeout)
 	if err != nil {
 		return api.Error(ipamapi.PostIpamFailureCode, err)
 	}
@@ -95,7 +97,8 @@ func NewPostIPAMIPHandler(d *Daemon) ipamapi.PostIpamIPHandler {
 // Handle incoming requests address allocation requests for the daemon.
 func (h *postIPAMIP) Handle(params ipamapi.PostIpamIPParams) middleware.Responder {
 	owner := swag.StringValue(params.Owner)
-	if err := h.daemon.ipam.AllocateIPString(params.IP, owner); err != nil {
+	pool := ipam.PoolOrDefault(swag.StringValue(params.Pool))
+	if err := h.daemon.ipam.AllocateIPString(params.IP, owner, pool); err != nil {
 		return api.Error(ipamapi.PostIpamIPFailureCode, err)
 	}
 
@@ -120,7 +123,8 @@ func (h *deleteIPAMIP) Handle(params ipamapi.DeleteIpamIPParams) middleware.Resp
 		return api.Error(ipamapi.DeleteIpamIPFailureCode, fmt.Errorf("IP is in use by endpoint %d", ep.ID))
 	}
 
-	if err := h.daemon.ipam.ReleaseIPString(params.IP); err != nil {
+	pool := ipam.PoolOrDefault(swag.StringValue(params.Pool))
+	if err := h.daemon.ipam.ReleaseIPString(params.IP, pool); err != nil {
 		return api.Error(ipamapi.DeleteIpamIPFailureCode, err)
 	}
 
@@ -135,12 +139,12 @@ func (d *Daemon) DumpIPAM() *models.IPAMStatus {
 		Status: st,
 	}
 
-	v4 := []string{}
+	v4 := make([]string, 0, len(allocv4))
 	for ip := range allocv4 {
 		v4 = append(v4, ip)
 	}
 
-	v6 := []string{}
+	v6 := make([]string, 0, len(allocv6))
 	if allocv4 == nil {
 		allocv4 = map[string]string{}
 	}
@@ -163,7 +167,7 @@ func (d *Daemon) DumpIPAM() *models.IPAMStatus {
 	return status
 }
 
-func (d *Daemon) allocateRouterIPv4(family datapath.NodeAddressingFamily) (net.IP, error) {
+func (d *Daemon) allocateRouterIPv4(family types.NodeAddressingFamily) (net.IP, error) {
 	if option.Config.LocalRouterIPv4 != "" {
 		routerIP := net.ParseIP(option.Config.LocalRouterIPv4)
 		if routerIP == nil {
@@ -178,7 +182,7 @@ func (d *Daemon) allocateRouterIPv4(family datapath.NodeAddressingFamily) (net.I
 	}
 }
 
-func (d *Daemon) allocateRouterIPv6(family datapath.NodeAddressingFamily) (net.IP, error) {
+func (d *Daemon) allocateRouterIPv6(family types.NodeAddressingFamily) (net.IP, error) {
 	if option.Config.LocalRouterIPv6 != "" {
 		routerIP := net.ParseIP(option.Config.LocalRouterIPv6)
 		if routerIP == nil {
@@ -193,9 +197,25 @@ func (d *Daemon) allocateRouterIPv6(family datapath.NodeAddressingFamily) (net.I
 	}
 }
 
-func (d *Daemon) allocateDatapathIPs(family datapath.NodeAddressingFamily) (routerIP net.IP, err error) {
-	// Blacklist allocation of the external IP
-	d.ipam.BlacklistIP(family.PrimaryExternal(), "node-ip")
+// Coalesce CIDRS when allocating the DatapathIPs and healthIPs. GH #18868
+func coalesceCIDRs(rCIDRs []string) (result []string) {
+	cidrs := make([]*net.IPNet, 0, len(rCIDRs))
+	for _, k := range rCIDRs {
+		ip, mask, _ := net.ParseCIDR(k)
+		cidrs = append(cidrs, &net.IPNet{IP: ip, Mask: mask.Mask})
+	}
+	ipv4cidr, ipv6cidr := iputil.CoalesceCIDRs(cidrs)
+	combinedcidrs := append(ipv4cidr, ipv6cidr...)
+	result = make([]string, len(combinedcidrs))
+	for i, k := range combinedcidrs {
+		result[i] = k.String()
+	}
+	return
+}
+
+func (d *Daemon) allocateDatapathIPs(family types.NodeAddressingFamily) (routerIP net.IP, err error) {
+	// Avoid allocating external IP
+	d.ipam.ExcludeIP(family.PrimaryExternal(), "node-ip", ipam.PoolDefault)
 
 	// (Re-)allocate the router IP. If not possible, allocate a fresh IP.
 	// In that case, removal and re-creation of the cilium_host is
@@ -204,7 +224,7 @@ func (d *Daemon) allocateDatapathIPs(family datapath.NodeAddressingFamily) (rout
 	var result *ipam.AllocationResult
 	routerIP = family.Router()
 	if routerIP != nil {
-		result, err = d.ipam.AllocateIPWithoutSyncUpstream(routerIP, "router")
+		result, err = d.ipam.AllocateIPWithoutSyncUpstream(routerIP, "router", ipam.PoolDefault)
 		if err != nil {
 			log.Warn("Router IP could not be re-allocated. Need to re-allocate. This will cause brief network disruption")
 
@@ -219,17 +239,29 @@ func (d *Daemon) allocateDatapathIPs(family datapath.NodeAddressingFamily) (rout
 
 	if routerIP == nil {
 		family := ipam.DeriveFamily(family.PrimaryExternal())
-		result, err = d.ipam.AllocateNextFamilyWithoutSyncUpstream(family, "router")
+		result, err = d.ipam.AllocateNextFamilyWithoutSyncUpstream(family, "router", ipam.PoolDefault)
 		if err != nil {
 			err = fmt.Errorf("Unable to allocate router IP for family %s: %s", family, err)
 			return
 		}
 		routerIP = result.IP
 	}
-	if (option.Config.IPAM == ipamOption.IPAMENI || option.Config.IPAM == ipamOption.IPAMAlibabaCloud) && result != nil {
+
+	// Coalescing multiple CIDRs. GH #18868
+	if option.Config.EnableIPv4Masquerade &&
+		option.Config.IPAM == ipamOption.IPAMENI &&
+		result != nil &&
+		len(result.CIDRs) > 0 {
+		result.CIDRs = coalesceCIDRs(result.CIDRs)
+	}
+
+	if (option.Config.IPAM == ipamOption.IPAMENI ||
+		option.Config.IPAM == ipamOption.IPAMAlibabaCloud ||
+		option.Config.IPAM == ipamOption.IPAMAzure) && result != nil {
 		var routingInfo *linuxrouting.RoutingInfo
 		routingInfo, err = linuxrouting.NewRoutingInfo(result.GatewayIP, result.CIDRs,
-			result.PrimaryMAC, result.InterfaceNumber, option.Config.EnableIPv4Masquerade)
+			result.PrimaryMAC, result.InterfaceNumber, option.Config.IPAM,
+			option.Config.EnableIPv4Masquerade)
 		if err != nil {
 			err = fmt.Errorf("failed to create router info %w", err)
 			return
@@ -244,38 +276,155 @@ func (d *Daemon) allocateHealthIPs() error {
 	bootstrapStats.healthCheck.Start()
 	if option.Config.EnableHealthChecking && option.Config.EnableEndpointHealthChecking {
 		if option.Config.EnableIPv4 {
-			result, err := d.ipam.AllocateNextFamilyWithoutSyncUpstream(ipam.IPv4, "health")
+			result, err := d.ipam.AllocateNextFamilyWithoutSyncUpstream(ipam.IPv4, "health", ipam.PoolDefault)
 			if err != nil {
-				return fmt.Errorf("unable to allocate health IPs: %s,see https://cilium.link/ipam-range-full", err)
+				return fmt.Errorf("unable to allocate health IPs: %s, see https://cilium.link/ipam-range-full", err)
+			}
+
+			// Coalescing multiple CIDRs. GH #18868
+			if option.Config.EnableIPv4Masquerade &&
+				option.Config.IPAM == ipamOption.IPAMENI &&
+				result != nil &&
+				len(result.CIDRs) > 0 {
+				result.CIDRs = coalesceCIDRs(result.CIDRs)
 			}
 
 			log.Debugf("IPv4 health endpoint address: %s", result.IP)
-			d.nodeDiscovery.LocalNode.IPv4HealthIP = result.IP
+			node.SetEndpointHealthIPv4(result.IP)
 
 			// In ENI and AlibabaCloud ENI mode, we require the gateway, CIDRs, and the ENI MAC addr
 			// in order to set up rules and routes on the local node to direct
 			// endpoint traffic out of the ENIs.
 			if option.Config.IPAM == ipamOption.IPAMENI || option.Config.IPAM == ipamOption.IPAMAlibabaCloud {
-				if err := d.parseHealthEndpointInfo(result); err != nil {
+				var err error
+				if d.healthEndpointRouting, err = parseRoutingInfo(result); err != nil {
 					log.WithError(err).Warn("Unable to allocate health information for ENI")
 				}
 			}
 		}
 
 		if option.Config.EnableIPv6 {
-			result, err := d.ipam.AllocateNextFamilyWithoutSyncUpstream(ipam.IPv6, "health")
+			result, err := d.ipam.AllocateNextFamilyWithoutSyncUpstream(ipam.IPv6, "health", ipam.PoolDefault)
 			if err != nil {
-				if d.nodeDiscovery.LocalNode.IPv4HealthIP != nil {
-					d.ipam.ReleaseIP(d.nodeDiscovery.LocalNode.IPv4HealthIP)
+				if healthIPv4 := node.GetEndpointHealthIPv4(); healthIPv4 != nil {
+					d.ipam.ReleaseIP(healthIPv4, ipam.PoolDefault)
+					node.SetEndpointHealthIPv4(nil)
 				}
-				return fmt.Errorf("unable to allocate health IPs: %s,see https://cilium.link/ipam-range-full", err)
+				return fmt.Errorf("unable to allocate health IPs: %s, see https://cilium.link/ipam-range-full", err)
 			}
 
-			d.nodeDiscovery.LocalNode.IPv6HealthIP = result.IP
+			// Coalescing multiple CIDRs. GH #18868
+			if option.Config.EnableIPv6Masquerade &&
+				option.Config.IPAM == ipamOption.IPAMENI &&
+				result != nil &&
+				len(result.CIDRs) > 0 {
+				result.CIDRs = coalesceCIDRs(result.CIDRs)
+			}
+
+			node.SetEndpointHealthIPv6(result.IP)
 			log.Debugf("IPv6 health endpoint address: %s", result.IP)
 		}
 	}
 	bootstrapStats.healthCheck.End(true)
+	return nil
+}
+
+func (d *Daemon) allocateIngressIPs() error {
+	bootstrapStats.ingressIPAM.Start()
+	if option.Config.EnableEnvoyConfig {
+		if option.Config.EnableIPv4 {
+			var result *ipam.AllocationResult
+			var err error
+
+			// Reallocate the same address as before, if possible
+			ingressIPv4 := node.GetIngressIPv4()
+			if ingressIPv4 != nil {
+				result, err = d.ipam.AllocateIPWithoutSyncUpstream(ingressIPv4, "ingress", ipam.PoolDefault)
+				if err != nil {
+					log.WithError(err).WithField(logfields.SourceIP, ingressIPv4).Warn("unable to re-allocate ingress IPv4.")
+					result = nil
+				}
+			}
+
+			// Allocate a fresh IP if not restored, or the reallocation of the restored
+			// IP failed
+			if result == nil {
+				result, err = d.ipam.AllocateNextFamilyWithoutSyncUpstream(ipam.IPv4, "ingress", ipam.PoolDefault)
+				if err != nil {
+					return fmt.Errorf("unable to allocate ingress IPs: %s, see https://cilium.link/ipam-range-full", err)
+				}
+			}
+
+			// Coalescing multiple CIDRs. GH #18868
+			if option.Config.EnableIPv4Masquerade &&
+				option.Config.IPAM == ipamOption.IPAMENI &&
+				result != nil &&
+				len(result.CIDRs) > 0 {
+				result.CIDRs = coalesceCIDRs(result.CIDRs)
+			}
+
+			node.SetIngressIPv4(result.IP)
+			log.Infof("  Ingress IPv4: %s", node.GetIngressIPv4())
+
+			// In ENI and AlibabaCloud ENI mode, we require the gateway, CIDRs, and the
+			// ENI MAC addr in order to set up rules and routes on the local node to
+			// direct ingress traffic out of the ENIs.
+			if option.Config.IPAM == ipamOption.IPAMENI || option.Config.IPAM == ipamOption.IPAMAlibabaCloud {
+				if ingressRouting, err := parseRoutingInfo(result); err != nil {
+					log.WithError(err).Warn("Unable to allocate ingress information for ENI")
+				} else {
+					if err := ingressRouting.Configure(
+						result.IP,
+						d.mtuConfig.GetDeviceMTU(),
+						option.Config.EgressMultiHomeIPRuleCompat,
+					); err != nil {
+						log.WithError(err).Warn("Error while configuring ingress IP rules and routes.")
+					}
+				}
+			}
+		}
+
+		// Only allocate if enabled and not restored already
+		if option.Config.EnableIPv6 {
+			var result *ipam.AllocationResult
+			var err error
+
+			// Reallocate the same address as before, if possible
+			ingressIPv6 := node.GetIngressIPv6()
+			if ingressIPv6 != nil {
+				result, err = d.ipam.AllocateIPWithoutSyncUpstream(ingressIPv6, "ingress", ipam.PoolDefault)
+				if err != nil {
+					log.WithError(err).WithField(logfields.SourceIP, ingressIPv6).Warn("unable to re-allocate ingress IPv6.")
+					result = nil
+				}
+			}
+
+			// Allocate a fresh IP if not restored, or the reallocation of the restored
+			// IP failed
+			if result == nil {
+				result, err = d.ipam.AllocateNextFamilyWithoutSyncUpstream(ipam.IPv6, "ingress", ipam.PoolDefault)
+				if err != nil {
+					if ingressIPv4 := node.GetIngressIPv4(); ingressIPv4 != nil {
+						d.ipam.ReleaseIP(ingressIPv4, ipam.PoolDefault)
+						node.SetIngressIPv4(nil)
+					}
+					return fmt.Errorf("unable to allocate ingress IPs: %s, see https://cilium.link/ipam-range-full", err)
+				}
+			}
+
+			// Coalescing multiple CIDRs. GH #18868
+			if option.Config.EnableIPv6Masquerade &&
+				option.Config.IPAM == ipamOption.IPAMENI &&
+				result != nil &&
+				len(result.CIDRs) > 0 {
+				result.CIDRs = coalesceCIDRs(result.CIDRs)
+			}
+
+			node.SetIngressIPv6(result.IP)
+			log.Infof("  Ingress IPv6: %s", node.GetIngressIPv6())
+		}
+	}
+	bootstrapStats.ingressIPAM.End(true)
 	return nil
 }
 
@@ -355,6 +504,13 @@ func (d *Daemon) allocateIPs() error {
 	}
 
 	bootstrapStats.ipam.End(true)
+
+	if option.Config.EnableEnvoyConfig {
+		if err := d.allocateIngressIPs(); err != nil {
+			return err
+		}
+	}
+
 	return d.allocateHealthIPs()
 }
 
@@ -397,18 +553,17 @@ func (d *Daemon) startIPAM() {
 	bootstrapStats.ipam.Start()
 	log.Info("Initializing node addressing")
 	// Set up ipam conf after init() because we might be running d.conf.KVStoreIPv4Registration
-	d.ipam = ipam.NewIPAM(d.datapath.LocalNodeAddressing(), option.Config, d.nodeDiscovery, d.k8sWatcher, &d.mtuConfig)
+	d.ipam = ipam.NewIPAM(d.datapath.LocalNodeAddressing(), option.Config, d.nodeDiscovery, d.k8sWatcher, &d.mtuConfig, d.clientset)
 	bootstrapStats.ipam.End(true)
 }
 
-func (d *Daemon) parseHealthEndpointInfo(result *ipam.AllocationResult) error {
-	var err error
-	d.healthEndpointRouting, err = linuxrouting.NewRoutingInfo(
+func parseRoutingInfo(result *ipam.AllocationResult) (*linuxrouting.RoutingInfo, error) {
+	return linuxrouting.NewRoutingInfo(
 		result.GatewayIP,
 		result.CIDRs,
 		result.PrimaryMAC,
 		result.InterfaceNumber,
+		option.Config.IPAM,
 		option.Config.EnableIPv4Masquerade,
 	)
-	return err
 }

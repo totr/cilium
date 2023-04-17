@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,19 +8,19 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/cilium/cilium/pkg/command"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/pkg/command"
 )
 
-// policyGetCmd represents the policy_get command
+// policyCacheGetCmd represents the policy selectors command
 var policyCacheGetCmd = &cobra.Command{
 	Use:   "selectors",
 	Short: "Display cached information about selectors",
 	Run: func(cmd *cobra.Command, args []string) {
 		if resp, err := client.PolicyCacheGet(); err != nil {
 			Fatalf("Cannot get policy: %s\n", err)
-		} else if command.OutputJSON() {
+		} else if command.OutputOption() {
 			if err := command.PrintOutput(resp); err != nil {
 				os.Exit(1)
 			}
@@ -52,5 +52,5 @@ var policyCacheGetCmd = &cobra.Command{
 
 func init() {
 	policyCmd.AddCommand(policyCacheGetCmd)
-	command.AddJSONOutput(policyCacheGetCmd)
+	command.AddOutputOption(policyCacheGetCmd)
 }

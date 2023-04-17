@@ -1,41 +1,32 @@
-// Copyright 2021 Authors of Cilium
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package ciliumendpointslice
 
 import (
+	"context"
+	"sync"
 	"time"
-
-	"github.com/cilium/cilium/operator/metrics"
-	operatorOption "github.com/cilium/cilium/operator/option"
-	"github.com/cilium/cilium/pkg/k8s"
-	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
-	capi_v2a1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
-	csv2 "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2"
-	csv2a1 "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2alpha1"
-	"github.com/cilium/cilium/pkg/k8s/informer"
-	"github.com/cilium/cilium/pkg/logging"
-	"github.com/cilium/cilium/pkg/logging/logfields"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/time/rate"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/cilium/cilium/operator/metrics"
+	operatorOption "github.com/cilium/cilium/operator/option"
+	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	capi_v2a1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
+	csv2 "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2"
+	csv2a1 "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2alpha1"
+	"github.com/cilium/cilium/pkg/k8s/informer"
+	"github.com/cilium/cilium/pkg/k8s/utils"
+	"github.com/cilium/cilium/pkg/logging"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 const (
@@ -59,8 +50,9 @@ const (
 	// Delayed CES Synctime, CES's are synced with k8s-apiserver after certain delay
 	// Some CES's are delayed to sync with k8s-apiserver.
 	DelayedCESSyncTime = 15 * time.Second
-	// Default CES Synctime, sync instantaeously with k8s-apiserver.
-	DefaultCESSyncTime = 0
+	// Default CES Synctime, multiple consecutive syncs with k8s-apiserver are
+	// batched and synced together after a short delay.
+	DefaultCESSyncTime = 500 * time.Millisecond
 )
 
 type CiliumEndpointSliceController struct {
@@ -105,7 +97,10 @@ func GetCEPNameFromCCEP(cep *capi_v2a1.CoreCiliumEndpoint, namespace string) str
 }
 
 // NewCESController, creates and initializes the CES controller
-func NewCESController(client *k8s.K8sCiliumClient,
+func NewCESController(
+	ctx context.Context,
+	wg *sync.WaitGroup,
+	clientset k8sClient.Clientset,
 	maxCEPsInCES int,
 	slicingMode string,
 	qpsLimit float64,
@@ -136,7 +131,7 @@ func NewCESController(client *k8s.K8sCiliumClient,
 	if slicingMode == cesIdentityBasedSlicing {
 		manager = newCESManagerIdentity(rlQueue, maxCEPsInCES)
 	}
-	cesStore := ciliumEndpointSliceInit(client.CiliumV2alpha1(), wait.NeverStop)
+	cesStore := ciliumEndpointSliceInit(clientset.CiliumV2alpha1(), ctx, wg)
 
 	// List all existing CESs from the api-server and cache it locally.
 	// This sync should happen before starting CEP watcher, because CEP watcher
@@ -146,9 +141,9 @@ func NewCESController(client *k8s.K8sCiliumClient,
 	// to sync existing CESs before starting a CEP watcher.
 	syncCESsInLocalCache(cesStore, manager)
 	return &CiliumEndpointSliceController{
-		clientV2:                 client.CiliumV2(),
-		clientV2a1:               client.CiliumV2alpha1(),
-		reconciler:               newReconciler(client.CiliumV2alpha1(), manager),
+		clientV2:                 clientset.CiliumV2(),
+		clientV2a1:               clientset.CiliumV2alpha1(),
+		reconciler:               newReconciler(clientset.CiliumV2alpha1(), manager),
 		Manager:                  manager,
 		queue:                    rlQueue,
 		ciliumEndpointSliceStore: cesStore,
@@ -158,7 +153,7 @@ func NewCESController(client *k8s.K8sCiliumClient,
 }
 
 // start the worker thread, reconciles the modified CESs with api-server
-func (c *CiliumEndpointSliceController) Run(ces cache.Indexer, stopCh chan struct{}) {
+func (c *CiliumEndpointSliceController) Run(ces cache.Indexer, stopCh <-chan struct{}) {
 	log.Info("Bootstrap ces controller")
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
@@ -167,7 +162,7 @@ func (c *CiliumEndpointSliceController) Run(ces cache.Indexer, stopCh chan struc
 	c.ciliumEndpointStore = ces
 
 	// On operator warm boot, remove stale CEP entries present in CES
-	c.removeStaleCEPEntries()
+	c.removeStaleAndDuplicatedCEPEntries()
 
 	log.WithFields(logrus.Fields{
 		logfields.CESSliceMode: c.slicingMode,
@@ -188,24 +183,67 @@ func (c *CiliumEndpointSliceController) Run(ces cache.Indexer, stopCh chan struc
 // Upon warm boot[restart], Iterate over all CEPs which we got from the api-server
 // and compare it with CEPs packed inside CES.
 // If there are any stale CEPs present in CESs, remove them from their CES.
-func (c *CiliumEndpointSliceController) removeStaleCEPEntries() {
-	log.Info("Remove stale CEP entries in CES")
+// If there are any duplicated CEPs present in CESs, remove all but one trying
+// to keep the CEP with matching identity if it's present.
+func (c *CiliumEndpointSliceController) removeStaleAndDuplicatedCEPEntries() {
+	log.Info("Remove stale and duplicated CEP entries in CES")
+
+	type cepMapping struct {
+		identity int64
+		cesName  string
+	}
+
+	cepsMapping := make(map[string][]cepMapping)
 
 	// Get all CEPs from local datastore
-	staleCEPs := c.Manager.getAllCEPNames()
+	// Map CEP Names to list of whole structure + CES Name
+	for _, ces := range c.Manager.getAllCESs() {
+		for _, cep := range ces.getAllCEPs() {
+			cepName := ces.getCEPNameFromCCEP(&cep)
+			cepsMapping[cepName] = append(cepsMapping[cepName], cepMapping{identity: cep.IdentityID, cesName: ces.getCESName()})
+		}
+	}
 
-	// Remove stale CEP entries present in CES
-	for _, cepName := range staleCEPs {
+	for cepName, mappings := range cepsMapping {
+		storeCep, exists, err := c.ciliumEndpointStore.GetByKey(cepName)
 		// Ignore error from below api, this is added to avoid accidental cep rmeoval from cache
-		if _, exists, err := c.ciliumEndpointStore.GetByKey(cepName); err == nil && exists || err != nil {
+		if err != nil {
 			continue
 		}
-		log.WithFields(logrus.Fields{
-			logfields.CEPName: cepName,
-		}).Debug("Removing stale CEP entry.")
-		c.Manager.RemoveCEPFromCache(cepName, DefaultCESSyncTime)
+		if !exists {
+			// Remove stale CEP entries present in CES
+			for _, mapping := range mappings {
+				log.WithFields(logrus.Fields{
+					logfields.CEPName: cepName,
+				}).Debug("Removing stale CEP entry.")
+				c.Manager.removeCEPFromCES(cepName, mapping.cesName, DefaultCESSyncTime, 0, false)
+			}
+		} else if len(mappings) > 1 {
+			// Remove duplicated CEP entries present in CES
+			found := false
+			cep := storeCep.(*cilium_api_v2.CiliumEndpoint)
+			// Skip first element for now
+			for _, mapping := range mappings[1:] {
+				if !found && mapping.identity == cep.Status.Identity.ID {
+					// Don't remove the first element for which identity matches
+					found = true
+					// All others elements will be removed so update mapping to make sure
+					// it points to the element that was kept
+					c.Manager.updateCEPToCESMapping(cepName, mapping.cesName)
+					continue
+				}
+				c.Manager.removeCEPFromCES(cepName, mapping.cesName, DefaultCESSyncTime, mapping.identity, true)
+			}
+			if found {
+				// Remove first element if element with matching identity was found
+				c.Manager.removeCEPFromCES(cepName, mappings[0].cesName, DefaultCESSyncTime, mappings[0].identity, true)
+			} else {
+				// All others elements were removed so update mapping to make sure
+				// it points to the only element left
+				c.Manager.updateCEPToCESMapping(cepName, mappings[0].cesName)
+			}
+		}
 	}
-	return
 }
 
 // Sync all CESs from cesStore to manager cache.
@@ -246,6 +284,14 @@ func (c *CiliumEndpointSliceController) processNextWorkItem() bool {
 	defer c.queue.Done(cKey)
 
 	err := c.syncCES(cKey.(string))
+	if operatorOption.Config.EnableMetrics {
+		if err != nil {
+			metrics.CiliumEndpointSliceSyncTotal.WithLabelValues(metrics.LabelValueOutcomeFail).Inc()
+		} else {
+			metrics.CiliumEndpointSliceSyncTotal.WithLabelValues(metrics.LabelValueOutcomeSuccess).Inc()
+		}
+	}
+
 	c.handleErr(err, cKey)
 
 	return true
@@ -312,18 +358,20 @@ func (c *CiliumEndpointSliceController) syncCES(key string) error {
 
 // Initialize and start CES watcher
 // TODO Watch for CES's, make sure only CES controller Create/Update/Delete the CES not bad actors.
-func ciliumEndpointSliceInit(client csv2a1.CiliumV2alpha1Interface, stopCh <-chan struct{}) cache.Store {
-	cesStore := cache.NewStore(cache.DeletionHandlingMetaNamespaceKeyFunc)
-	cesController := informer.NewInformerWithStore(
-		cache.NewListWatchFromClient(client.RESTClient(),
-			capi_v2a1.CESPluralName, v1.NamespaceAll, fields.Everything()),
+func ciliumEndpointSliceInit(client csv2a1.CiliumV2alpha1Interface, ctx context.Context, wg *sync.WaitGroup) cache.Store {
+	cesStore, cesController := informer.NewInformer(
+		utils.ListerWatcherFromTyped[*capi_v2a1.CiliumEndpointSliceList](
+			client.CiliumEndpointSlices()),
 		&capi_v2a1.CiliumEndpointSlice{},
 		0,
 		cache.ResourceEventHandlerFuncs{},
 		nil,
-		cesStore,
 	)
-	go cesController.Run(stopCh)
-	cache.WaitForCacheSync(stopCh, cesController.HasSynced)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		cesController.Run(ctx.Done())
+	}()
+	cache.WaitForCacheSync(ctx.Done(), cesController.HasSynced)
 	return cesStore
 }

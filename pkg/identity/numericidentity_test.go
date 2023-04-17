@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package identity
 
 import (
-	"github.com/cilium/cilium/pkg/clustermesh/types"
+	"testing"
 
 	. "gopkg.in/check.v1"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/cilium/cilium/pkg/clustermesh/types"
 )
 
 func (s *IdentityTestSuite) TestLocalIdentity(c *C) {
@@ -25,7 +26,7 @@ func (s *IdentityTestSuite) TestLocalIdentity(c *C) {
 func (s *IdentityTestSuite) TestClusterID(c *C) {
 	tbl := []struct {
 		identity  uint32
-		clusterID int
+		clusterID uint32
 	}{
 		{
 			identity:  0x000000,
@@ -55,5 +56,16 @@ func (s *IdentityTestSuite) TestClusterID(c *C) {
 
 	for _, item := range tbl {
 		c.Assert(NumericIdentity(item.identity).ClusterID(), Equals, item.clusterID)
+	}
+}
+
+func TestGetAllReservedIdentities(t *testing.T) {
+	allReservedIdentities := GetAllReservedIdentities()
+	require.NotNil(t, allReservedIdentities)
+	require.Len(t, allReservedIdentities, len(reservedIdentities))
+	for i, id := range allReservedIdentities {
+		// NOTE: identity 0 is unknown, so the reserved identities start at 1
+		// hence the plus one here.
+		require.Equal(t, uint32(i+1), id.Uint32())
 	}
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package proxy
 
@@ -28,9 +28,21 @@ type RedirectImplementation interface {
 	Close(wg *completion.WaitGroup) (revert.FinalizeFunc, revert.RevertFunc)
 }
 
+// Redirect type for custom Listeners, which are managed externally.
+type CRDRedirect struct{}
+
+func (r *CRDRedirect) UpdateRules(wg *completion.WaitGroup) (revert.RevertFunc, error) {
+	return func() error { return nil }, nil
+}
+
+func (r *CRDRedirect) Close(wg *completion.WaitGroup) (revert.FinalizeFunc, revert.RevertFunc) {
+	return nil, func() error { return nil }
+}
+
 type Redirect struct {
 	// The following fields are only written to during initialization, it
 	// is safe to read these fields without locking the mutex
+	name           string
 	listener       *ProxyPort
 	dstPort        uint16
 	endpointID     uint64
@@ -43,8 +55,9 @@ type Redirect struct {
 	rules policy.L7DataMap
 }
 
-func newRedirect(localEndpoint logger.EndpointUpdater, listener *ProxyPort, dstPort uint16) *Redirect {
+func newRedirect(localEndpoint logger.EndpointUpdater, name string, listener *ProxyPort, dstPort uint16) *Redirect {
 	return &Redirect{
+		name:          name,
 		listener:      listener,
 		dstPort:       dstPort,
 		endpointID:    localEndpoint.GetID(),

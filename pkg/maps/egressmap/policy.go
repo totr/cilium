@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package egressmap
 
@@ -21,16 +21,16 @@ const (
 // EgressPolicyKey4 is the key of an egress policy map.
 type EgressPolicyKey4 struct {
 	// PrefixLen is full 32 bits of SourceIP + DestCIDR's mask bits
-	PrefixLen uint32
+	PrefixLen uint32 `align:"lpm_key"`
 
-	SourceIP types.IPv4
-	DestCIDR types.IPv4
+	SourceIP types.IPv4 `align:"saddr"`
+	DestCIDR types.IPv4 `align:"daddr"`
 }
 
 // EgressPolicyVal4 is the value of an egress policy map.
 type EgressPolicyVal4 struct {
-	EgressIP  types.IPv4
-	GatewayIP types.IPv4
+	EgressIP  types.IPv4 `align:"egress_ip"`
+	GatewayIP types.IPv4 `align:"gateway_ip"`
 }
 
 // egressPolicyMap is the internal representation of an egress policy map.
@@ -39,7 +39,7 @@ type egressPolicyMap struct {
 }
 
 // initEgressPolicyMap initializes the egress policy map.
-func initEgressPolicyMap(policyMapName string, create bool) error {
+func initEgressPolicyMap(policyMapName string, maxPolicyEntries int, create bool) error {
 	var m *ebpf.Map
 
 	if create {
@@ -48,7 +48,7 @@ func initEgressPolicyMap(policyMapName string, create bool) error {
 			Type:       ebpf.LPMTrie,
 			KeySize:    uint32(unsafe.Sizeof(EgressPolicyKey4{})),
 			ValueSize:  uint32(unsafe.Sizeof(EgressPolicyVal4{})),
-			MaxEntries: uint32(MaxPolicyEntries),
+			MaxEntries: uint32(maxPolicyEntries),
 			Pinning:    ebpf.PinByName,
 		})
 
@@ -58,7 +58,7 @@ func initEgressPolicyMap(policyMapName string, create bool) error {
 	} else {
 		var err error
 
-		if m, err = ebpf.OpenMap(policyMapName); err != nil {
+		if m, err = ebpf.LoadRegisterMap(policyMapName); err != nil {
 			return err
 		}
 	}

@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package xds
 
@@ -15,16 +12,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/checker"
-	"github.com/cilium/cilium/pkg/completion"
 	envoy_config_core "github.com/cilium/proxy/go/envoy/config/core/v3"
 	envoy_config_route "github.com/cilium/proxy/go/envoy/config/route/v3"
-	envoy_service_disacovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
-
-	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes/any"
+	envoy_service_discovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
 	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
+	"github.com/cilium/cilium/pkg/completion"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -59,9 +56,9 @@ type ResponseMatchesChecker struct {
 }
 
 func (c *ResponseMatchesChecker) Check(params []interface{}, names []string) (result bool, error string) {
-	response, ok := params[0].(*envoy_service_disacovery.DiscoveryResponse)
+	response, ok := params[0].(*envoy_service_discovery.DiscoveryResponse)
 	if !ok {
-		return false, "response must be an *envoy_service_disacovery.DiscoveryResponse"
+		return false, "response must be an *envoy_service_discovery.DiscoveryResponse"
 	}
 	if response == nil {
 		return false, "response is nil"
@@ -94,17 +91,13 @@ func (c *ResponseMatchesChecker) Check(params []interface{}, names []string) (re
 	if result && len(resources) > 0 {
 		// Convert the resources into Any protocol buffer messages, which is
 		// the type of Resources in the response, so that we can compare them.
-		resourcesAny := make([]*any.Any, 0, len(resources))
+		resourcesAny := make([]*anypb.Any, 0, len(resources))
 		for _, res := range resources {
-			data, err := proto.Marshal(res)
+			any, err := anypb.New(res)
 			if err != nil {
 				return false, fmt.Sprintf("error marshalling protocol buffer %v", res)
 			}
-			resourcesAny = append(resourcesAny,
-				&any.Any{
-					TypeUrl: typeURL,
-					Value:   data,
-				})
+			resourcesAny = append(resourcesAny, any)
 		}
 		// Sort both lists.
 		sort.Slice(response.Resources, func(i, j int) bool {
@@ -136,8 +129,8 @@ func (s *ServerSuite) TestRequestAllResources(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 	var v uint64
 	var mod bool
 
@@ -164,7 +157,7 @@ func (s *ServerSuite) TestRequestAllResources(c *C) {
 	}()
 
 	// Request all resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -181,7 +174,7 @@ func (s *ServerSuite) TestRequestAllResources(c *C) {
 	c.Assert(resp.Nonce, Equals, resp.VersionInfo)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -210,7 +203,7 @@ func (s *ServerSuite) TestRequestAllResources(c *C) {
 	c.Assert(mod, Equals, true)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -227,7 +220,7 @@ func (s *ServerSuite) TestRequestAllResources(c *C) {
 	c.Assert(resp, ResponseMatches, "3", []proto.Message{resources[0], resources[1]}, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -263,8 +256,8 @@ func (s *ServerSuite) TestAck(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 
 	ctx, cancel := context.WithTimeout(context.Background(), TestTimeout)
 	defer cancel()
@@ -290,7 +283,7 @@ func (s *ServerSuite) TestAck(c *C) {
 	}()
 
 	// Request all resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -307,7 +300,7 @@ func (s *ServerSuite) TestAck(c *C) {
 	c.Assert(resp, ResponseMatches, "1", nil, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -336,7 +329,7 @@ func (s *ServerSuite) TestAck(c *C) {
 	c.Assert(comp2, Not(IsCompleted))
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -357,7 +350,7 @@ func (s *ServerSuite) TestAck(c *C) {
 	c.Assert(comp2, Not(IsCompleted))
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -388,8 +381,8 @@ func (s *ServerSuite) TestRequestSomeResources(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 	var v uint64
 	var mod bool
 
@@ -416,7 +409,7 @@ func (s *ServerSuite) TestRequestSomeResources(c *C) {
 	}()
 
 	// Request resources 1 and 2 (not 0).
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -433,7 +426,7 @@ func (s *ServerSuite) TestRequestSomeResources(c *C) {
 	c.Assert(resp, ResponseMatches, "1", nil, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -462,7 +455,7 @@ func (s *ServerSuite) TestRequestSomeResources(c *C) {
 	c.Assert(mod, Equals, true)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -479,7 +472,7 @@ func (s *ServerSuite) TestRequestSomeResources(c *C) {
 	c.Assert(resp, ResponseMatches, "3", []proto.Message{resources[1]}, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -502,7 +495,7 @@ func (s *ServerSuite) TestRequestSomeResources(c *C) {
 	c.Assert(resp, ResponseMatches, "4", []proto.Message{resources[1], resources[2]}, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -562,8 +555,8 @@ func (s *ServerSuite) TestUpdateRequestResources(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 	var v uint64
 	var mod bool
 
@@ -599,7 +592,7 @@ func (s *ServerSuite) TestUpdateRequestResources(c *C) {
 	c.Assert(mod, Equals, true)
 
 	// Request resource 1.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -616,7 +609,7 @@ func (s *ServerSuite) TestUpdateRequestResources(c *C) {
 	c.Assert(resp, ResponseMatches, "2", []proto.Message{resources[1]}, false, typeURL)
 
 	// Request the next version of resource 1.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -635,7 +628,7 @@ func (s *ServerSuite) TestUpdateRequestResources(c *C) {
 	// Not expecting any response since resource 1 didn't change in version 3.
 
 	// Send an updated request for both resource 1 and 2.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -665,8 +658,8 @@ func (s *ServerSuite) TestRequestStaleNonce(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 	var v uint64
 	var mod bool
 
@@ -693,7 +686,7 @@ func (s *ServerSuite) TestRequestStaleNonce(c *C) {
 	}()
 
 	// Request all resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -710,7 +703,7 @@ func (s *ServerSuite) TestRequestStaleNonce(c *C) {
 	c.Assert(resp, ResponseMatches, "1", nil, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -739,7 +732,7 @@ func (s *ServerSuite) TestRequestStaleNonce(c *C) {
 	c.Assert(mod, Equals, true)
 
 	// Request the next version of resources, with a stale nonce.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -753,7 +746,7 @@ func (s *ServerSuite) TestRequestStaleNonce(c *C) {
 	// Expecting no response from the server.
 
 	// Resend the request with the correct nonce.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -770,7 +763,7 @@ func (s *ServerSuite) TestRequestStaleNonce(c *C) {
 	c.Assert(resp, ResponseMatches, "3", []proto.Message{resources[0], resources[1]}, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -806,8 +799,8 @@ func (s *ServerSuite) TestNAck(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 
 	ctx, cancel := context.WithTimeout(context.Background(), TestTimeout)
 	defer cancel()
@@ -833,7 +826,7 @@ func (s *ServerSuite) TestNAck(c *C) {
 	}()
 
 	// Request all resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -850,7 +843,7 @@ func (s *ServerSuite) TestNAck(c *C) {
 	c.Assert(resp, ResponseMatches, "1", nil, false, typeURL)
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -874,7 +867,7 @@ func (s *ServerSuite) TestNAck(c *C) {
 	c.Assert(resp, ResponseMatches, "2", []proto.Message{resources[0]}, false, typeURL)
 
 	// NACK the received version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   ackedVersion, // NACK the received version.
 		Node:          nodes[node0],
@@ -909,7 +902,7 @@ func (s *ServerSuite) TestNAck(c *C) {
 	c.Assert(comp2, Not(IsCompleted))
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -941,8 +934,8 @@ func (s *ServerSuite) TestNAckFromTheStart(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 
 	ctx, cancel := context.WithTimeout(context.Background(), TestTimeout)
 	defer cancel()
@@ -968,7 +961,7 @@ func (s *ServerSuite) TestNAckFromTheStart(c *C) {
 	}()
 
 	// Request all resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "",
 		Node:          nodes[node0],
@@ -991,7 +984,7 @@ func (s *ServerSuite) TestNAckFromTheStart(c *C) {
 	c.Assert(comp1, Not(IsCompleted))
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "", // NACK all received versions.
 		Node:          nodes[node0],
@@ -1008,7 +1001,7 @@ func (s *ServerSuite) TestNAckFromTheStart(c *C) {
 	c.Assert(resp, ResponseMatches, "2", []proto.Message{resources[0]}, false, typeURL)
 
 	// NACK the received version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "", // NACK all received versions.
 		Node:          nodes[node0],
@@ -1044,7 +1037,7 @@ func (s *ServerSuite) TestNAckFromTheStart(c *C) {
 	c.Assert(comp2, Not(IsCompleted))
 
 	// Request the next version of resources.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   resp.VersionInfo, // ACK the received version.
 		Node:          nodes[node0],
@@ -1075,8 +1068,8 @@ func (s *ServerSuite) TestRequestHighVersionFromTheStart(c *C) {
 	typeURL := "type.googleapis.com/envoy.config.v3.DummyConfiguration"
 
 	var err error
-	var req *envoy_service_disacovery.DiscoveryRequest
-	var resp *envoy_service_disacovery.DiscoveryResponse
+	var req *envoy_service_discovery.DiscoveryRequest
+	var resp *envoy_service_discovery.DiscoveryResponse
 
 	ctx, cancel := context.WithTimeout(context.Background(), TestTimeout)
 	defer cancel()
@@ -1110,7 +1103,7 @@ func (s *ServerSuite) TestRequestHighVersionFromTheStart(c *C) {
 	// Request all resources, with a version higher than the version currently
 	// in Cilium's cache. This happens after the server restarts but the
 	// xDS client survives and continues to request the same version.
-	req = &envoy_service_disacovery.DiscoveryRequest{
+	req = &envoy_service_discovery.DiscoveryRequest{
 		TypeUrl:       typeURL,
 		VersionInfo:   "64",
 		Node:          nodes[node0],

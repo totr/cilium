@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-openapi/runtime/middleware"
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/api/v1/models"
 	. "github.com/cilium/cilium/api/v1/server/restapi/endpoint"
 	"github.com/cilium/cilium/pkg/annotation"
@@ -22,8 +25,10 @@ import (
 	endpointid "github.com/cilium/cilium/pkg/endpoint/id"
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
 	"github.com/cilium/cilium/pkg/fqdn/restore"
+	"github.com/cilium/cilium/pkg/ipam"
 	"github.com/cilium/cilium/pkg/k8s"
 	k8sConst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
+	"github.com/cilium/cilium/pkg/k8s/client"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/labelsfilter"
@@ -32,9 +37,6 @@ import (
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/proxy"
-
-	"github.com/go-openapi/runtime/middleware"
-	"github.com/sirupsen/logrus"
 )
 
 var errEndpointNotFound = errors.New("endpoint not found")
@@ -191,7 +193,9 @@ func (d *Daemon) fetchK8sLabelsAndAnnotations(nsName, podName string) (*slim_cor
 
 func invalidDataError(ep *endpoint.Endpoint, err error) (*endpoint.Endpoint, int, error) {
 	ep.Logger(daemonSubsys).WithError(err).Warning("Creation of endpoint failed due to invalid data")
-	ep.SetState(endpoint.StateInvalid, "Invalid endpoint")
+	if ep != nil {
+		ep.SetState(endpoint.StateInvalid, "Invalid endpoint")
+	}
 	return nil, PutEndpointIDInvalidCode, err
 }
 
@@ -218,13 +222,15 @@ type endpointCreationRequest struct {
 }
 
 type endpointCreationManager struct {
-	mutex    lock.Mutex
-	requests map[string]*endpointCreationRequest
+	mutex     lock.Mutex
+	clientset client.Clientset
+	requests  map[string]*endpointCreationRequest
 }
 
-func newEndpointCreationManager() *endpointCreationManager {
+func newEndpointCreationManager(cs client.Clientset) *endpointCreationManager {
 	return &endpointCreationManager{
-		requests: map[string]*endpointCreationRequest{},
+		requests:  map[string]*endpointCreationRequest{},
+		clientset: cs,
 	}
 }
 
@@ -233,7 +239,7 @@ func (m *endpointCreationManager) NewCreateRequest(ep *endpoint.Endpoint, cancel
 	// The endpoint create logic already ensures that IPs and containerID
 	// are unique and thus tracking is not required outside of the
 	// Kubernetes context
-	if !ep.K8sNamespaceAndPodNameIsSet() || !k8s.IsEnabled() {
+	if !ep.K8sNamespaceAndPodNameIsSet() || !m.clientset.IsEnabled() {
 		return
 	}
 
@@ -256,7 +262,7 @@ func (m *endpointCreationManager) NewCreateRequest(ep *endpoint.Endpoint, cancel
 }
 
 func (m *endpointCreationManager) EndCreateRequest(ep *endpoint.Endpoint) bool {
-	if !ep.K8sNamespaceAndPodNameIsSet() || !k8s.IsEnabled() {
+	if !ep.K8sNamespaceAndPodNameIsSet() || !m.clientset.IsEnabled() {
 		return false
 	}
 
@@ -325,7 +331,7 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 		"sync-build":            epTemplate.SyncBuildEndpoint,
 	}).Info("Create endpoint request")
 
-	ep, err := endpoint.NewEndpointFromChangeModel(d.ctx, owner, d, d.l7Proxy, d.identityAllocator, epTemplate)
+	ep, err := endpoint.NewEndpointFromChangeModel(d.ctx, owner, d, d.ipcache, d.l7Proxy, d.identityAllocator, epTemplate)
 	if err != nil {
 		return invalidDataError(ep, fmt.Errorf("unable to parse endpoint parameters: %s", err))
 	}
@@ -342,11 +348,11 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 
 	var checkIDs []string
 
-	if ep.IPv4.IsSet() {
+	if ep.IPv4.IsValid() {
 		checkIDs = append(checkIDs, endpointid.NewID(endpointid.IPv4Prefix, ep.IPv4.String()))
 	}
 
-	if ep.IPv6.IsSet() {
+	if ep.IPv6.IsValid() {
 		checkIDs = append(checkIDs, endpointid.NewID(endpointid.IPv6Prefix, ep.IPv6.String()))
 	}
 
@@ -382,7 +388,7 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 	d.endpointCreations.NewCreateRequest(ep, cancel)
 	defer d.endpointCreations.EndCreateRequest(ep)
 
-	if ep.K8sNamespaceAndPodNameIsSet() && k8s.IsEnabled() {
+	if ep.K8sNamespaceAndPodNameIsSet() && d.clientset.IsEnabled() {
 		pod, cp, identityLabels, info, annotations, err := d.fetchK8sLabelsAndAnnotations(ep.K8sNamespace, ep.K8sPodName)
 		if err != nil {
 			ep.Logger("api").WithError(err).Warning("Unable to fetch kubernetes labels")
@@ -426,7 +432,7 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 	// static pod's labels. In this case, start a controller to attempt to
 	// resolve the labels.
 	k8sLabelsConfigured := true
-	if ep.K8sNamespaceAndPodNameIsSet() && k8s.IsEnabled() {
+	if ep.K8sNamespaceAndPodNameIsSet() && d.clientset.IsEnabled() {
 		// If there are labels, but no pod namespace, then it's
 		// likely that there are no k8s labels at all. Resolve.
 		if _, k8sLabelsConfigured = addLabels[k8sConst.PodNamespaceLabel]; !k8sLabelsConfigured {
@@ -440,23 +446,18 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 		return d.errorDuringCreation(ep, fmt.Errorf("unable to insert endpoint into manager: %s", err))
 	}
 
-	// Now that we have ep.ID we can pin the map from this point. This
-	// also has to happen before the first build takes place.
-	if err = ep.PinDatapathMap(); err != nil {
-		return d.errorDuringCreation(ep, fmt.Errorf("unable to pin datapath maps: %s", err))
-	}
-
 	// We need to update the the visibility policy after adding the endpoint in
 	// the endpoint manager because the endpoint manager create the endpoint
 	// queue of the endpoint. If we execute this function before the endpoint
 	// manager creates the endpoint queue the operation will fail.
-	if ep.K8sNamespaceAndPodNameIsSet() && k8s.IsEnabled() && k8sLabelsConfigured {
+	if ep.K8sNamespaceAndPodNameIsSet() && d.clientset.IsEnabled() && k8sLabelsConfigured {
 		ep.UpdateVisibilityPolicy(func(ns, podName string) (proxyVisibility string, err error) {
 			p, err := d.k8sWatcher.GetCachedPod(ns, podName)
 			if err != nil {
 				return "", err
 			}
-			return p.Annotations[annotation.ProxyVisibility], nil
+			value, _ := annotation.Get(p, annotation.ProxyVisibility, annotation.ProxyVisibilityAlias)
+			return value, nil
 		})
 		ep.UpdateBandwidthPolicy(func(ns, podName string) (bandwidthEgress string, err error) {
 			p, err := d.k8sWatcher.GetCachedPod(ns, podName)
@@ -470,7 +471,8 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 			if err != nil {
 				return "", err
 			}
-			return p.Annotations[annotation.NoTrack], nil
+			value, _ := annotation.Get(p, annotation.NoTrack, annotation.NoTrackAlias)
+			return value, nil
 		})
 	}
 
@@ -508,14 +510,14 @@ func (d *Daemon) createEndpoint(ctx context.Context, owner regeneration.Owner, e
 	if addressing := epTemplate.Addressing; addressing != nil {
 		if uuid := addressing.IPV4ExpirationUUID; uuid != "" {
 			if ip := net.ParseIP(addressing.IPV4); ip != nil {
-				if err := d.ipam.StopExpirationTimer(ip, uuid); err != nil {
+				if err := d.ipam.StopExpirationTimer(ip, ipam.PoolDefault, uuid); err != nil {
 					return d.errorDuringCreation(ep, err)
 				}
 			}
 		}
 		if uuid := addressing.IPV6ExpirationUUID; uuid != "" {
 			if ip := net.ParseIP(addressing.IPV6); ip != nil {
-				if err := d.ipam.StopExpirationTimer(ip, uuid); err != nil {
+				if err := d.ipam.StopExpirationTimer(ip, ipam.PoolDefault, uuid); err != nil {
 					return d.errorDuringCreation(ep, err)
 				}
 			}
@@ -561,10 +563,12 @@ func NewPatchEndpointIDHandler(d *Daemon) PatchEndpointIDHandler {
 // validPatchTransitionState checks whether the state to which the provided
 // model specifies is one to which an Endpoint can transition as part of a
 // call to PATCH on an Endpoint.
-func validPatchTransitionState(state models.EndpointState) bool {
-	switch endpoint.State(state) {
-	case "", endpoint.StateWaitingForIdentity, endpoint.StateReady:
-		return true
+func validPatchTransitionState(state *models.EndpointState) bool {
+	if state != nil {
+		switch endpoint.State(*state) {
+		case "", endpoint.StateWaitingForIdentity, endpoint.StateReady:
+			return true
+		}
 	}
 	return false
 }
@@ -596,7 +600,7 @@ func (h *patchEndpointID) Handle(params PatchEndpointIDParams) middleware.Respon
 
 	// Validate the template. Assignment afterwards is atomic.
 	// Note: newEp's labels are ignored.
-	newEp, err2 := endpoint.NewEndpointFromChangeModel(h.d.ctx, h.d, h.d, h.d.l7Proxy, h.d.identityAllocator, epTemplate)
+	newEp, err2 := endpoint.NewEndpointFromChangeModel(h.d.ctx, h.d, h.d, h.d.ipcache, h.d.l7Proxy, h.d.identityAllocator, epTemplate)
 	if err2 != nil {
 		r.Error(err2)
 		return api.Error(PutEndpointIDInvalidCode, err2)
@@ -607,7 +611,7 @@ func (h *patchEndpointID) Handle(params PatchEndpointIDParams) middleware.Respon
 	// Log invalid state transitions, but do not error out for backwards
 	// compatibility.
 	if !validPatchTransitionState(epTemplate.State) {
-		scopedLog.Debugf("PATCH /endpoint/{id} to invalid state '%s'", epTemplate.State)
+		scopedLog.Debugf("PATCH /endpoint/{id} to invalid state '%s'", *epTemplate.State)
 	} else {
 		validStateTransition = true
 	}
@@ -694,12 +698,18 @@ func (d *Daemon) DeleteEndpoint(id string) (int, error) {
 		switch containerID := ep.GetShortContainerID(); containerID {
 		case "":
 			log.WithFields(logrus.Fields{
-				logfields.IPv4: ep.GetIPv4Address(),
-				logfields.IPv6: ep.GetIPv6Address(),
+				logfields.IPv4:         ep.GetIPv4Address(),
+				logfields.IPv6:         ep.GetIPv6Address(),
+				logfields.EndpointID:   ep.ID,
+				logfields.K8sPodName:   ep.GetK8sPodName(),
+				logfields.K8sNamespace: ep.GetK8sNamespace(),
 			}).Info(msg)
 		default:
 			log.WithFields(logrus.Fields{
-				logfields.ContainerID: containerID,
+				logfields.ContainerID:  containerID,
+				logfields.EndpointID:   ep.ID,
+				logfields.K8sPodName:   ep.GetK8sPodName(),
+				logfields.K8sNamespace: ep.GetK8sNamespace(),
 			}).Info(msg)
 		}
 		return d.deleteEndpoint(ep), nil
@@ -717,13 +727,13 @@ func (d *Daemon) EndpointDeleted(ep *endpoint.Endpoint, conf endpoint.DeleteConf
 
 	if !conf.NoIPRelease {
 		if option.Config.EnableIPv4 {
-			if err := d.ipam.ReleaseIP(ep.IPv4.IP()); err != nil {
+			if err := d.ipam.ReleaseIP(ep.IPv4.AsSlice(), ipam.PoolDefault); err != nil {
 				scopedLog := ep.Logger(daemonSubsys).WithError(err)
 				scopedLog.Warning("Unable to release IPv4 address during endpoint deletion")
 			}
 		}
 		if option.Config.EnableIPv6 {
-			if err := d.ipam.ReleaseIP(ep.IPv6.IP()); err != nil {
+			if err := d.ipam.ReleaseIP(ep.IPv6.AsSlice(), ipam.PoolDefault); err != nil {
 				scopedLog := ep.Logger(daemonSubsys).WithError(err)
 				scopedLog.Warning("Unable to release IPv6 address during endpoint deletion")
 			}
@@ -731,7 +741,7 @@ func (d *Daemon) EndpointDeleted(ep *endpoint.Endpoint, conf endpoint.DeleteConf
 	}
 }
 
-// EndpointDeleted is a callback to satisfy EndpointManager.Subscriber,
+// EndpointCreated is a callback to satisfy EndpointManager.Subscriber,
 // allowing the EndpointManager to be the primary implementer of the core
 // endpoint management functionality while deferring other responsibilities
 // to the daemon.

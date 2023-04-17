@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,10 +9,10 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 // recorderListCmd represents the recorder_list command
@@ -28,7 +28,7 @@ var recorderListCmd = &cobra.Command{
 
 func init() {
 	recorderCmd.AddCommand(recorderListCmd)
-	command.AddJSONOutput(recorderListCmd)
+	command.AddOutputOption(recorderListCmd)
 }
 
 func listMasks(cmd *cobra.Command, args []string) {
@@ -37,7 +37,7 @@ func listMasks(cmd *cobra.Command, args []string) {
 		Fatalf("Cannot get recorder mask list: %s", err)
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(list); err != nil {
 			os.Exit(1)
 		}
@@ -96,7 +96,7 @@ func listRecorders(cmd *cobra.Command, args []string) {
 		Fatalf("Cannot get recorder list: %s", err)
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(list); err != nil {
 			os.Exit(1)
 		}

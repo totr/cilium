@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package monitor
 
@@ -8,8 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cilium/cilium/pkg/proxy/accesslog"
 	"github.com/miekg/dns"
+
+	"github.com/cilium/cilium/pkg/proxy/accesslog"
 )
 
 // LogRecordNotify is a proxy access log notification
@@ -60,8 +61,8 @@ func (l *LogRecordNotify) DumpInfo() {
 
 	case accesslog.TypeResponse:
 		fmt.Printf("%s %s %s to %d (%s) from %d (%s), identity %d->%d, verdict %s",
-			l.direction(), l.Type, l.l7Proto(), l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
-			l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
+			l.direction(), l.Type, l.l7Proto(), l.DestinationEndpoint.ID, l.DestinationEndpoint.Labels,
+			l.SourceEndpoint.ID, l.SourceEndpoint.Labels,
 			l.SourceEndpoint.Identity, l.DestinationEndpoint.Identity,
 			l.Verdict)
 	}
@@ -88,16 +89,10 @@ func (l *LogRecordNotify) DumpInfo() {
 
 		switch {
 		case l.Type == accesslog.TypeRequest:
-			fmt.Printf(" DNS Query: %s %s", l.DNS.Query, qTypeStr)
+			fmt.Printf(" DNS %s: %s %s", l.DNS.ObservationSource, l.DNS.Query, qTypeStr)
 
 		case l.Type == accesslog.TypeResponse:
-			sourceType := "Query"
-			switch l.DNS.ObservationSource {
-			case accesslog.DNSSourceProxy:
-				sourceType = "Proxy"
-			}
-
-			fmt.Printf(" DNS %s: %s %s", sourceType, l.DNS.Query, qTypeStr)
+			fmt.Printf(" DNS %s: %s %s", l.DNS.ObservationSource, l.DNS.Query, qTypeStr)
 
 			ips := make([]string, 0, len(l.DNS.IPs))
 			for _, ip := range l.DNS.IPs {

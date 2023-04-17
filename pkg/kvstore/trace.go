@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package kvstore
 
 import (
 	"strings"
 
-	"github.com/cilium/cilium/pkg/logging"
-
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/logging"
 )
 
 var (

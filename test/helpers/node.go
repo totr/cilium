@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	ginkgoext "github.com/cilium/cilium/test/ginkgo-ext"
-
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
+
+	ginkgoext "github.com/cilium/cilium/test/ginkgo-ext"
 )
 
 var (
@@ -196,7 +196,7 @@ func (s *SSHMeta) ExecContext(ctx context.Context, cmd string, options ...ExecOp
 		ops = options[0]
 	}
 
-	log.Debugf("running command: %s", cmd)
+	log.Debugf("running command via SSH: %s", cmd)
 	stdout := new(Buffer)
 	stderr := new(Buffer)
 	start := time.Now()
@@ -222,7 +222,7 @@ func (s *SSHMeta) ExecContext(ctx context.Context, cmd string, options ...ExecOp
 			res.exitcode = exiterr.Waitmsg.ExitStatus()
 		} else {
 			// Log other error types. They are likely from SSH or the network
-			log.WithError(err).Errorf("Error executing command '%s'", cmd)
+			log.WithError(err).Errorf("Error executing command from SSH '%s'", cmd)
 		}
 		res.err = err
 	}

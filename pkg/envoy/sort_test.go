@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package envoy
 
 import (
-	"github.com/cilium/cilium/pkg/checker"
-
-	"github.com/cilium/proxy/go/cilium/api"
+	cilium "github.com/cilium/proxy/go/cilium/api"
 	envoy_config_core "github.com/cilium/proxy/go/envoy/config/core/v3"
 	envoy_config_route "github.com/cilium/proxy/go/envoy/config/route/v3"
 	envoy_type_matcher "github.com/cilium/proxy/go/envoy/type/matcher/v3"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 type SortSuite struct{}
@@ -23,29 +19,53 @@ var _ = Suite(&SortSuite{})
 
 var HeaderMatcher1 = &envoy_config_route.HeaderMatcher{
 	Name: "aaa",
-	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-		EngineType: googleRe2, Regex: "aaa"},
+	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+		StringMatch: &envoy_type_matcher.StringMatcher{
+			MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+				SafeRegex: &envoy_type_matcher.RegexMatcher{
+					Regex: "aaa",
+				},
+			},
+		},
 	},
 }
 
 var HeaderMatcher2 = &envoy_config_route.HeaderMatcher{
 	Name: "bbb",
-	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-		EngineType: googleRe2, Regex: "aaa"},
+	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+		StringMatch: &envoy_type_matcher.StringMatcher{
+			MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+				SafeRegex: &envoy_type_matcher.RegexMatcher{
+					Regex: "bbb",
+				},
+			},
+		},
 	},
 }
 
 var HeaderMatcher3 = &envoy_config_route.HeaderMatcher{
 	Name: "bbb",
-	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-		EngineType: googleRe2, Regex: "bbb"},
+	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+		StringMatch: &envoy_type_matcher.StringMatcher{
+			MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+				SafeRegex: &envoy_type_matcher.RegexMatcher{
+					Regex: "bbb",
+				},
+			},
+		},
 	},
 }
 
 var HeaderMatcher4 = &envoy_config_route.HeaderMatcher{
 	Name: "bbb",
-	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-		EngineType: googleRe2, Regex: "bbb"},
+	HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+		StringMatch: &envoy_type_matcher.StringMatcher{
+			MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+				SafeRegex: &envoy_type_matcher.RegexMatcher{
+					Regex: "bbb",
+				},
+			},
+		},
 	},
 }
 

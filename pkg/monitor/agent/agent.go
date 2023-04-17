@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package agent
 
@@ -12,6 +12,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/perf"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
+
 	"github.com/cilium/cilium/api/v1/models"
 	oldBPF "github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/lock"
@@ -20,11 +25,6 @@ import (
 	"github.com/cilium/cilium/pkg/monitor/agent/listener"
 	"github.com/cilium/cilium/pkg/monitor/api"
 	"github.com/cilium/cilium/pkg/monitor/payload"
-	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/perf"
-
-	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 const eventsMapName = "cilium_events"
@@ -75,7 +75,7 @@ type Agent struct {
 // Internally, the agent spawns a singleton goroutine reading events from
 // the BPF perf ring buffer and provides an interface to pass in non-BPF events.
 // The instance can be stopped by cancelling ctx, which will stop the perf reader
-// go routine and close all registered listeners.
+// goroutine and close all registered listeners.
 // Note that the perf buffer reader is started only when listeners are
 // connected.
 func NewAgent(ctx context.Context) *Agent {
@@ -126,7 +126,20 @@ func (a *Agent) SendEvent(typ int, event interface{}) error {
 		return fmt.Errorf("monitor agent is not set up")
 	}
 
+	// Two types of clients are currently supported: consumers and listeners.
+	// The former ones expect decoded messages, so the notification does not
+	// require any additional marshalling operation before sending an event.
+	// Instead, the latter expect gob-encoded payloads, and the whole marshalling
+	// process may be quite expensive.
+	// While we want to avoid marshalling events if there are no active
+	// listeners, there's no need to check for active consumers ahead of time.
+
 	a.notifyAgentEvent(typ, event)
+
+	// do not marshal notifications if there are no active listeners
+	if !a.hasListeners() {
+		return nil
+	}
 
 	// marshal notifications into JSON format for legacy listeners
 	if typ == api.MessageTypeAgent {
@@ -162,10 +175,19 @@ func (a *Agent) Context() context.Context {
 	return a.ctx
 }
 
-// hasSubscribersLocked returns true if there are listeners subscribed to the
-// agent right now.
+// hasSubscribersLocked returns true if there are listeners or consumers
+// subscribed to the agent right now.
+// Note: it is critical to hold the lock for this operation.
 func (a *Agent) hasSubscribersLocked() bool {
 	return len(a.listeners)+len(a.consumers) != 0
+}
+
+// hasListeners returns true if there are listeners subscribed to the
+// agent right now.
+func (a *Agent) hasListeners() bool {
+	a.Lock()
+	defer a.Unlock()
+	return len(a.listeners) != 0
 }
 
 // startPerfReaderLocked starts the perf reader. This should only be
@@ -378,7 +400,7 @@ func (a *Agent) State() *models.MonitorStatus {
 	return &status
 }
 
-// notifyPerfEventLocked notifies all consumers about an agent event.
+// notifyAgentEvent notifies all consumers about an agent event.
 func (a *Agent) notifyAgentEvent(typ int, message interface{}) {
 	a.Lock()
 	defer a.Unlock()

@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package metrics
 
 import (
+	"github.com/cilium/cilium/api/v1/client/daemon"
+	"github.com/cilium/cilium/api/v1/health/client/connectivity"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
+
+type daemonHealthGetter interface {
+	GetHealthz(params *daemon.GetHealthzParams, opts ...daemon.ClientOption) (*daemon.GetHealthzOK, error)
+}
+
+type connectivityStatusGetter interface {
+	GetStatus(params *connectivity.GetStatusParams, opts ...connectivity.ClientOption) (*connectivity.GetStatusOK, error)
+}
 
 type CounterVec interface {
 	WithLabelValues(lvls ...string) prometheus.Counter
@@ -27,6 +38,7 @@ var (
 	NoOpCounter     prometheus.Counter     = &counter{NoOpMetric, NoOpCollector}
 	NoOpCounterVec  CounterVec             = &counterVec{NoOpCollector}
 	NoOpObserver    prometheus.Observer    = &observer{}
+	NoOpHistogram   prometheus.Histogram   = &histogram{NoOpCollector}
 	NoOpObserverVec prometheus.ObserverVec = &observerVec{NoOpCollector}
 	NoOpGauge       prometheus.Gauge       = &gauge{NoOpMetric, NoOpCollector}
 	NoOpGaugeVec    GaugeVec               = &gaugeVec{NoOpCollector}
@@ -75,6 +87,17 @@ func (cv *counterVec) With(labels prometheus.Labels) prometheus.Counter { return
 type observer struct{}
 
 func (o *observer) Observe(float64) {}
+
+// Histogram
+
+type histogram struct {
+	prometheus.Collector
+}
+
+func (h *histogram) Observe(float64) {}
+
+func (h *histogram) Desc() *prometheus.Desc  { return nil }
+func (h *histogram) Write(*dto.Metric) error { return nil }
 
 // ObserverVec
 

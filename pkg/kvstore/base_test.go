@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package kvstore
 
@@ -11,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 // BaseTests is the struct that needs to be embedded into all test suite

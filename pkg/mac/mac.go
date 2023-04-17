@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package mac
 
@@ -9,12 +9,25 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-
-	"github.com/vishvananda/netlink"
 )
 
 // Untagged ethernet (IEEE 802.3) frame header len
 const EthHdrLen = 14
+
+// Uint64MAC is the __u64 representation of a MAC address.
+// It corresponds to the C mac_t type used in bpf/.
+type Uint64MAC uint64
+
+func (m Uint64MAC) String() string {
+	return fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X",
+		uint64((m & 0x0000000000FF)),
+		uint64((m&0x00000000FF00)>>8),
+		uint64((m&0x000000FF0000)>>16),
+		uint64((m&0x0000FF000000)>>24),
+		uint64((m&0x00FF00000000)>>32),
+		uint64((m&0xFF0000000000)>>40),
+	)
+}
 
 // MAC address is an net.HardwareAddr encapsulation to force cilium to only use MAC-48.
 type MAC net.HardwareAddr
@@ -40,16 +53,18 @@ func ParseMAC(s string) (MAC, error) {
 // Uint64 returns the MAC in uint64 format. The MAC is represented as little-endian in
 // the returned value.
 // Example:
-//  m := MAC([]{0x11, 0x12, 0x23, 0x34, 0x45, 0x56})
-//  v, err := m.Uint64()
-//  fmt.Printf("0x%X", v) // 0x564534231211
-func (m MAC) Uint64() (uint64, error) {
+//
+//	m := MAC([]{0x11, 0x12, 0x23, 0x34, 0x45, 0x56})
+//	v, err := m.Uint64()
+//	fmt.Printf("0x%X", v) // 0x564534231211
+func (m MAC) Uint64() (Uint64MAC, error) {
 	if len(m) != 6 {
 		return 0, fmt.Errorf("invalid MAC address %s", m.String())
 	}
 
-	return uint64(m[5])<<40 | uint64(m[4])<<32 | uint64(m[3])<<24 |
-		uint64(m[2])<<16 | uint64(m[1])<<8 | uint64(m[0]), nil
+	res := uint64(m[5])<<40 | uint64(m[4])<<32 | uint64(m[3])<<24 |
+		uint64(m[2])<<16 | uint64(m[1])<<8 | uint64(m[0])
+	return Uint64MAC(res), nil
 }
 
 func (m MAC) MarshalJSON() ([]byte, error) {
@@ -98,21 +113,7 @@ func GenerateRandMAC() (MAC, error) {
 	// Set locally administered addresses bit and reset multicast bit
 	buf[0] = (buf[0] | 0x02) & 0xfe
 
-	return MAC(buf), nil
-}
-
-// HasMacAddr returns true if the given network interface has L2 addr.
-func HasMacAddr(iface string) bool {
-	link, err := netlink.LinkByName(iface)
-	if err != nil {
-		return false
-	}
-	return LinkHasMacAddr(link)
-}
-
-// LinkHasMacAddr returns true if the given network interface has L2 addr.
-func LinkHasMacAddr(link netlink.Link) bool {
-	return len(link.Attrs().HardwareAddr) != 0
+	return buf, nil
 }
 
 // HaveMACAddrs returns true if all given network interfaces have L2 addr.
@@ -128,7 +129,7 @@ func HaveMACAddrs(ifaces []string) bool {
 // CArrayString returns a string which can be used for assigning the given
 // MAC addr to "union macaddr" in C.
 func CArrayString(m net.HardwareAddr) string {
-	if m == nil || len(m) == 0 {
+	if m == nil || len(m) != 6 {
 		return "{0x0,0x0,0x0,0x0,0x0,0x0}"
 	}
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package proxylib
 
@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/cilium/cilium/pkg/lock"
-
 	cilium "github.com/cilium/proxy/go/cilium/api"
-	envoy_service_disacovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
+	envoy_service_discovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
 	"github.com/golang/protobuf/proto"
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/lock"
 )
 
 type PolicyClient interface {
@@ -27,7 +27,7 @@ type AccessLogger interface {
 }
 
 type PolicyUpdater interface {
-	PolicyUpdate(resp *envoy_service_disacovery.DiscoveryResponse) error
+	PolicyUpdate(resp *envoy_service_discovery.DiscoveryResponse) error
 }
 
 type Instance struct {
@@ -88,7 +88,7 @@ func OpenInstance(nodeID string, xdsPath string, newPolicyClient func(path, node
 		}
 		if (nodeID == "" || old.nodeID == nodeID) && xdsPath == oldXdsPath && accessLogPath == oldAccessLogPath {
 			old.openCount++
-			log.Debugf("Opened existing library instance %d, open count: %d", id, old.openCount)
+			logrus.Debugf("Opened existing library instance %d, open count: %d", id, old.openCount)
 			return id
 		}
 	}
@@ -99,7 +99,7 @@ func OpenInstance(nodeID string, xdsPath string, newPolicyClient func(path, node
 
 	instances[instanceId] = ins
 
-	log.Debugf("Opened new library instance %d", instanceId)
+	logrus.Debugf("Opened new library instance %d", instanceId)
 
 	return instanceId
 }
@@ -128,9 +128,9 @@ func CloseInstance(id uint64) uint64 {
 			}
 			delete(instances, id)
 		}
-		log.Debugf("CloseInstance(%d): Remaining open count: %d", id, count)
+		logrus.Debugf("CloseInstance(%d): Remaining open count: %d", id, count)
 	} else {
-		log.Debugf("CloseInstance(%d): Not found (closed already?)", id)
+		logrus.Debugf("CloseInstance(%d): Not found (closed already?)", id)
 	}
 	return count
 }
@@ -147,14 +147,14 @@ func (ins *Instance) PolicyMatches(endpointPolicyName string, ingress bool, port
 	// Policy maps are never modified once published
 	policy, found := ins.getPolicyMap()[endpointPolicyName]
 	if !found {
-		log.Debugf("NPDS: Policy for %s not found", endpointPolicyName)
+		logrus.Debugf("NPDS: Policy for %s not found", endpointPolicyName)
 	}
 
 	return found && policy.Matches(ingress, port, remoteId, l7)
 }
 
 // Update the PolicyMap from a protobuf. PolicyMap is only ever changed if the whole update is successful.
-func (ins *Instance) PolicyUpdate(resp *envoy_service_disacovery.DiscoveryResponse) (err error) {
+func (ins *Instance) PolicyUpdate(resp *envoy_service_discovery.DiscoveryResponse) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			var ok bool
@@ -164,7 +164,7 @@ func (ins *Instance) PolicyUpdate(resp *envoy_service_disacovery.DiscoveryRespon
 		}
 	}()
 
-	log.Debugf("NPDS: Updating policy from %v", resp)
+	logrus.Debugf("NPDS: Updating policy for version %s", resp.VersionInfo)
 
 	oldMap := ins.getPolicyMap()
 	newMap := newPolicyMap()
@@ -178,32 +178,42 @@ func (ins *Instance) PolicyUpdate(resp *envoy_service_disacovery.DiscoveryRespon
 			return fmt.Errorf("NPDS: Policy unmarshal error: %v", err)
 		}
 
-		policyName := config.GetName()
-
+		ips := config.GetEndpointIps()
+		if len(ips) == 0 {
+			return fmt.Errorf("NPDS: Policy has no endpoint_ips")
+		}
+		for _, ip := range ips {
+			logrus.Debugf("NPDS: Endpoint IP: %s", ip)
+		}
 		// Locate the old version, if any
-		oldPolicy, found := oldMap[policyName]
+		oldPolicy, found := oldMap[ips[0]]
 		if found {
 			// Check if the new policy is the same as the old one
 			if proto.Equal(&config, oldPolicy.protobuf) {
-				log.Debugf("NPDS: New policy for %s is equal to the old one, no need to change", policyName)
-				newMap[policyName] = oldPolicy
+				logrus.Debugf("NPDS: New policy for Endpoint %d is equal to the old one, no need to change", config.GetEndpointId())
+				for _, ip := range ips {
+					newMap[ip] = oldPolicy
+				}
 				continue
 			}
 		}
 
 		// Validate new config
 		if err = config.Validate(); err != nil {
-			return fmt.Errorf("NPDS: Policy validation error for %s: %v", policyName, err)
+			return fmt.Errorf("NPDS: Policy validation error for Endpoint %d: %v", config.GetEndpointId(), err)
 		}
 
 		// Create new PolicyInstance, may panic. Takes ownership of 'config'.
-		newMap[policyName] = newPolicyInstance(&config)
+		newPolicy := newPolicyInstance(&config)
+		for _, ip := range ips {
+			newMap[ip] = newPolicy
+		}
 	}
 
 	// Store the new policy map
 	ins.setPolicyMap(newMap)
 
-	log.Debugf("NPDS: Policy Update completed for instance %d: %v", ins.id, newMap)
+	logrus.Debugf("NPDS: Policy Update completed for instance %d: %v", ins.id, newMap)
 	return
 }
 

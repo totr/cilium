@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package lbmap
 
@@ -7,7 +7,7 @@ import (
 	"net"
 
 	"github.com/cilium/cilium/pkg/bpf"
-	"github.com/cilium/cilium/pkg/cidr"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/loadbalancer"
 )
 
@@ -80,6 +80,9 @@ type ServiceValue interface {
 	// Set timeout for sessionAffinity=clientIP
 	SetSessionAffinityTimeoutSec(t uint32)
 
+	// Set proxy port for l7 loadbalancer services
+	SetL7LBProxyPort(port uint16)
+
 	// Set backend identifier
 	SetBackendID(id loadbalancer.BackendID)
 
@@ -117,8 +120,14 @@ type BackendValue interface {
 	// Get backend address
 	GetAddress() net.IP
 
+	// Get backend IP + clusterID
+	GetIPCluster() cmtypes.AddrCluster
+
 	// Get backend port
 	GetPort() uint16
+
+	// Get backend flags
+	GetFlags() uint8
 
 	// Convert fields to network byte order.
 	ToNetwork() BackendValue
@@ -165,14 +174,10 @@ type RevNatValue interface {
 	ToHost() RevNatValue
 }
 
-// BackendIDByServiceIDSet is the type of a set for checking whether a backend
-// belongs to a given service
-type BackendIDByServiceIDSet map[uint16]map[loadbalancer.BackendID]struct{} // svc ID => backend ID
-
-type SourceRangeSetByServiceID map[uint16][]*cidr.CIDR // svc ID => src range CIDRs
-
 func svcFrontend(svcKey ServiceKey, svcValue ServiceValue) *loadbalancer.L3n4AddrID {
-	feL3n4Addr := loadbalancer.NewL3n4Addr(loadbalancer.NONE, svcKey.GetAddress(), svcKey.GetPort(), svcKey.GetScope())
+	feIP := svcKey.GetAddress()
+	feAddrCluster := cmtypes.MustAddrClusterFromIP(feIP)
+	feL3n4Addr := loadbalancer.NewL3n4Addr(loadbalancer.NONE, feAddrCluster, svcKey.GetPort(), svcKey.GetScope())
 	feL3n4AddrID := &loadbalancer.L3n4AddrID{
 		L3n4Addr: *feL3n4Addr,
 		ID:       loadbalancer.ID(svcValue.GetRevNat()),
@@ -182,8 +187,10 @@ func svcFrontend(svcKey ServiceKey, svcValue ServiceValue) *loadbalancer.L3n4Add
 
 func svcBackend(backendID loadbalancer.BackendID, backend BackendValue) *loadbalancer.Backend {
 	beIP := backend.GetAddress()
+	beAddrCluster := cmtypes.MustAddrClusterFromIP(beIP)
 	bePort := backend.GetPort()
 	beProto := loadbalancer.NONE
-	beBackend := loadbalancer.NewBackend(backendID, beProto, beIP, bePort)
+	beState := loadbalancer.GetBackendStateFromFlags(backend.GetFlags())
+	beBackend := loadbalancer.NewBackendWithState(backendID, beProto, beAddrCluster, bePort, beState)
 	return beBackend
 }

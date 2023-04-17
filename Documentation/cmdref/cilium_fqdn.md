@@ -17,14 +17,14 @@ cilium fqdn [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium](../cilium)	 - CLI
-* [cilium fqdn cache](../cilium_fqdn_cache)	 - Manage fqdn proxy cache
-* [cilium fqdn names](../cilium_fqdn_names)	 - show internal state Cilium has for DNS names / regexes
+* [cilium](cilium.md)	 - CLI
+* [cilium fqdn cache](cilium_fqdn_cache.md)	 - Manage fqdn proxy cache
+* [cilium fqdn names](cilium_fqdn_names.md)	 - Show internal state Cilium has for DNS names / regexes
 

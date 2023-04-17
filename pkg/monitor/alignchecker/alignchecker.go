@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package alignchecker
 
@@ -20,6 +20,7 @@ func CheckStructAlignments(path string) error {
 		"debug_msg":             {reflect.TypeOf(monitor.DebugMsg{})},
 		"debug_capture_msg":     {reflect.TypeOf(monitor.DebugCapture{})},
 		"policy_verdict_notify": {reflect.TypeOf(monitor.PolicyVerdictNotify{})},
+		"trace_sock_notify":     {reflect.TypeOf(monitor.TraceSockNotify{})},
 	}
 	return check.CheckStructAlignments(path, toCheck, true)
 }

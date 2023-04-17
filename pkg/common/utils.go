@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package common
 
@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/safeio"
 )
 
 // C2GoArray transforms an hexadecimal string representation into a byte slice.
@@ -90,7 +92,7 @@ func MapStringStructToSlice(m map[string]struct{}) []string {
 
 // GetNumPossibleCPUs returns a total number of possible CPUS, i.e. CPUs that
 // have been allocated resources and can be brought online if they are present.
-// The number is retrieved by parsing /sys/device/system/cpu/possible.
+// The number is retrieved by parsing /sys/devices/system/cpu/possible.
 //
 // See https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpumask.h?h=v4.19#n50
 // for more details.
@@ -106,7 +108,7 @@ func GetNumPossibleCPUs(log *logrus.Entry) int {
 }
 
 func getNumPossibleCPUsFromReader(log *logrus.Entry, r io.Reader) int {
-	out, err := io.ReadAll(r)
+	out, err := safeio.ReadAllLimit(r, safeio.KB)
 	if err != nil {
 		log.WithError(err).Errorf("unable to read %q to get CPU count", PossibleCPUSysfsPath)
 		return 0

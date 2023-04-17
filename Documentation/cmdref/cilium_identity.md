@@ -13,14 +13,14 @@ Manage security identities
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium](../cilium)	 - CLI
-* [cilium identity get](../cilium_identity_get)	 - Retrieve information about an identity
-* [cilium identity list](../cilium_identity_list)	 - List identities
+* [cilium](cilium.md)	 - CLI
+* [cilium identity get](cilium_identity_get.md)	 - Retrieve information about an identity
+* [cilium identity list](cilium_identity_list.md)	 - List identities
 

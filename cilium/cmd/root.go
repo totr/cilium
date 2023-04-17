@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,15 +8,17 @@ import (
 	"io"
 	"os"
 
-	clientPkg "github.com/cilium/cilium/pkg/client"
-	"github.com/cilium/cilium/pkg/components"
-
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	clientPkg "github.com/cilium/cilium/pkg/client"
+	"github.com/cilium/cilium/pkg/components"
 )
 
 var (
+	vp = viper.New()
+
 	cfgFile string
 	client  *clientPkg.Client
 	log     = logrus.New()
@@ -46,10 +48,10 @@ func init() {
 
 	cobra.OnInitialize(initConfig)
 	flags := rootCmd.PersistentFlags()
-	flags.StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cilium.yaml)")
+	flags.StringVar(&cfgFile, "config", "", "Config file (default is $HOME/.cilium.yaml)")
 	flags.BoolP("debug", "D", false, "Enable debug messages")
 	flags.StringP("host", "H", "", "URI to server-side API")
-	viper.BindPFlags(flags)
+	vp.BindPFlags(flags)
 	rootCmd.AddCommand(newCmdCompletion(os.Stdout))
 	rootCmd.SetOut(os.Stdout)
 	rootCmd.SetErr(os.Stderr)
@@ -58,26 +60,26 @@ func init() {
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	if cfgFile != "" { // enable ability to specify config file via flag
-		viper.SetConfigFile(cfgFile)
+		vp.SetConfigFile(cfgFile)
 	}
 
-	viper.SetEnvPrefix("cilium")
-	viper.SetConfigName(".cilium") // name of config file (without extension)
-	viper.AddConfigPath("$HOME")   // adding home directory as first search path
-	viper.AutomaticEnv()           // read in environment variables that match
+	vp.SetEnvPrefix("cilium")
+	vp.SetConfigName(".cilium") // name of config file (without extension)
+	vp.AddConfigPath("$HOME")   // adding home directory as first search path
+	vp.AutomaticEnv()           // read in environment variables that match
 
 	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	if err := vp.ReadInConfig(); err == nil {
+		fmt.Println("Using config file:", vp.ConfigFileUsed())
 	}
 
-	if viper.GetBool("debug") {
+	if vp.GetBool("debug") {
 		log.Level = logrus.DebugLevel
 	} else {
 		log.Level = logrus.InfoLevel
 	}
 
-	if cl, err := clientPkg.NewClient(viper.GetString("host")); err != nil {
+	if cl, err := clientPkg.NewClient(vp.GetString("host")); err != nil {
 		Fatalf("Error while creating client: %s\n", err)
 	} else {
 		client = cl

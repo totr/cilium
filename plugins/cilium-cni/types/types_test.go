@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package types
 
@@ -11,13 +8,13 @@ import (
 	"path"
 	"testing"
 
+	cnitypes "github.com/containernetworking/cni/pkg/types"
+	"gopkg.in/check.v1"
+
 	eniTypes "github.com/cilium/cilium/pkg/aws/eni/types"
 	azureTypes "github.com/cilium/cilium/pkg/azure/types"
 	"github.com/cilium/cilium/pkg/checker"
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
-
-	cnitypes "github.com/containernetworking/cni/pkg/types"
-	"gopkg.in/check.v1"
 )
 
 func Test(t *testing.T) {
@@ -87,7 +84,6 @@ func (t *CNITypesSuite) TestReadCNIConfENIWithPlugins(c *check.C) {
       "cniVersion":"0.3.1",
       "type":"cilium-cni",
       "eni": {
-        "pre-allocate": 5,
         "first-interface-index":1,
         "security-groups":[
           "sg-xxx"
@@ -97,6 +93,9 @@ func (t *CNITypesSuite) TestReadCNIConfENIWithPlugins(c *check.C) {
         ],
         "subnet-tags":{
           "foo":"true"
+        },
+        "exclude-interface-tags":{
+          "baz":"false"
         }
       }
     }
@@ -110,12 +109,14 @@ func (t *CNITypesSuite) TestReadCNIConfENIWithPlugins(c *check.C) {
 			Type:       "cilium-cni",
 		},
 		ENI: eniTypes.ENISpec{
-			PreAllocate:         5,
 			FirstInterfaceIndex: &firstInterfaceIndex,
 			SecurityGroups:      []string{"sg-xxx"},
 			SubnetIDs:           []string{"subnet-xxx"},
 			SubnetTags: map[string]string{
 				"foo": "true",
+			},
+			ExcludeInterfaceTags: map[string]string{
+				"baz": "false",
 			},
 		},
 	}
@@ -129,7 +130,6 @@ func (t *CNITypesSuite) TestReadCNIConfENI(c *check.C) {
   "type": "cilium-cni",
   "eni": {
     "instance-type": "m4.xlarge",
-    "pre-allocate": 16,
     "first-interface-index": 2,
     "security-groups": [ "sg1", "sg2" ],
     "subnet-ids":[
@@ -139,6 +139,10 @@ func (t *CNITypesSuite) TestReadCNIConfENI(c *check.C) {
     "subnet-tags": {
       "key1": "val1",
       "key2": "val2"
+    },
+    "exclude-interface-tags": {
+      "key3": "val3",
+      "key4": "val4"
     },
     "vpc-id": "vpc-1",
     "availability-zone": "us-west1"
@@ -153,13 +157,16 @@ func (t *CNITypesSuite) TestReadCNIConfENI(c *check.C) {
 		},
 		ENI: eniTypes.ENISpec{
 			InstanceType:        "m4.xlarge",
-			PreAllocate:         16,
 			FirstInterfaceIndex: &firstInterfaceIndex,
 			SecurityGroups:      []string{"sg1", "sg2"},
 			SubnetIDs:           []string{"subnet-1", "subnet-2"},
 			SubnetTags: map[string]string{
 				"key1": "val1",
 				"key2": "val2",
+			},
+			ExcludeInterfaceTags: map[string]string{
+				"key3": "val3",
+				"key4": "val4",
 			},
 			VpcID:            "vpc-1",
 			AvailabilityZone: "us-west1",
@@ -187,6 +194,9 @@ func (t *CNITypesSuite) TestReadCNIConfENIv2WithPlugins(c *check.C) {
         ],
         "subnet-tags":{
           "foo":"true"
+        },
+        "exclude-interface-tags":{
+          "bar":"false"
         }
       },
       "ipam": {
@@ -209,9 +219,14 @@ func (t *CNITypesSuite) TestReadCNIConfENIv2WithPlugins(c *check.C) {
 			SubnetTags: map[string]string{
 				"foo": "true",
 			},
+			ExcludeInterfaceTags: map[string]string{
+				"bar": "false",
+			},
 		},
-		IPAM: ipamTypes.IPAMSpec{
-			PreAllocate: 5,
+		IPAM: IPAM{
+			IPAMSpec: ipamTypes.IPAMSpec{
+				PreAllocate: 5,
+			},
 		},
 	}
 	testConfRead(c, confFile1, &netConf1)
@@ -244,11 +259,75 @@ func (t *CNITypesSuite) TestReadCNIConfAzurev2WithPlugins(c *check.C) {
 		Azure: azureTypes.AzureSpec{
 			InterfaceName: "eth1",
 		},
-		IPAM: ipamTypes.IPAMSpec{
-			PreAllocate: 5,
+		IPAM: IPAM{
+			IPAMSpec: ipamTypes.IPAMSpec{
+				PreAllocate: 5,
+			},
 		},
 	}
 	testConfRead(c, confFile1, &netConf1)
+}
+
+func (t *CNITypesSuite) TestReadCNIConfClusterPoolV2(c *check.C) {
+	confFile1 := `
+{
+  "cniVersion":"0.3.1",
+  "name":"cilium",
+  "plugins": [
+    {
+      "cniVersion":"0.3.1",
+      "type":"cilium-cni",
+      "ipam": {
+        "pod-cidr-allocation-threshold": 10,
+        "pod-cidr-release-threshold": 20
+      }
+    }
+  ]
+}
+`
+	netConf1 := NetConf{
+		NetConf: cnitypes.NetConf{
+			CNIVersion: "0.3.1",
+			Type:       "cilium-cni",
+		},
+		IPAM: IPAM{
+			IPAMSpec: ipamTypes.IPAMSpec{
+				PodCIDRAllocationThreshold: 10,
+				PodCIDRReleaseThreshold:    20,
+			},
+		},
+	}
+	testConfRead(c, confFile1, &netConf1)
+}
+
+func (t *CNITypesSuite) TestReadCNIConfIPAMType(c *check.C) {
+	confFile := `
+{
+  "cniVersion":"0.3.1",
+  "name":"cilium",
+  "plugins": [
+    {
+      "cniVersion":"0.3.1",
+      "type":"cilium-cni",
+      "ipam": {
+        "type": "delegated-ipam"
+      }
+    }
+  ]
+}
+`
+	netConf := NetConf{
+		NetConf: cnitypes.NetConf{
+			CNIVersion: "0.3.1",
+			Type:       "cilium-cni",
+		},
+		IPAM: IPAM{
+			IPAM: cnitypes.IPAM{
+				Type: "delegated-ipam",
+			},
+		},
+	}
+	testConfRead(c, confFile, &netConf)
 }
 
 func (t *CNITypesSuite) TestReadCNIConfError(c *check.C) {

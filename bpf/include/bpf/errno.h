@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __BPF_ERRNO__
 #define __BPF_ERRNO__
@@ -29,6 +29,21 @@
 #endif
 #ifndef EADDRINUSE
 # define EADDRINUSE	98
+#endif
+#ifndef ECONNRESET
+# define ECONNRESET	104
+#endif
+#ifndef ENOBUFS
+# define ENOBUFS	105
+#endif
+#ifndef ENOTCONN
+# define ENOTCONN	107
+#endif
+#ifndef ECONNREFUSED
+# define ECONNREFUSED	111
+#endif
+#ifndef EHOSTUNREACH
+# define EHOSTUNREACH	113
 #endif
 #ifndef ENOTSUPP
 # define ENOTSUPP	524

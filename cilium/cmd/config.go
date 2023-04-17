@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -46,7 +46,7 @@ func init() {
 	configCmd.Flags().BoolVarP(&listReadOnlyConfigurations, "read-only", "r", false, "Display read only configurations")
 	configCmd.Flags().BoolVarP(&listAllConfigurations, "all", "a", false, "Display all cilium configurations")
 	configCmd.Flags().IntVarP(&numPages, "num-pages", "n", 0, "Number of pages for perf ring buffer. New values have to be > 0")
-	command.AddJSONOutput(configCmd)
+	command.AddOutputOption(configCmd)
 }
 
 func configDaemon(cmd *cobra.Command, opts []string) {
@@ -108,18 +108,18 @@ func configDaemon(cmd *cobra.Command, opts []string) {
 }
 
 func printConfigurations(cfgStatus *models.DaemonConfigurationStatus) {
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if listReadOnlyConfigurations {
 			if err := command.PrintOutput(cfgStatus.DaemonConfigurationMap); err != nil {
-				Fatalf("Cannot show configuratons: %v", err)
+				Fatalf("Cannot show configurations: %v", err)
 			}
 		} else if listAllConfigurations {
 			if err := command.PrintOutputWithPatch(cfgStatus.DaemonConfigurationMap, cfgStatus.Realized); err != nil {
-				Fatalf("Cannot show configuratons: %v", err)
+				Fatalf("Cannot show configurations: %v", err)
 			}
 		} else {
 			if err := command.PrintOutput(cfgStatus.Realized.Options); err != nil {
-				Fatalf("Cannot show configuratons: %v", err)
+				Fatalf("Cannot show configurations: %v", err)
 			}
 		}
 		return

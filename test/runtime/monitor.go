@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package RuntimeTest
 
@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	. "github.com/onsi/gomega"
+
 	. "github.com/cilium/cilium/test/ginkgo-ext"
 	"github.com/cilium/cilium/test/helpers"
-
-	. "github.com/onsi/gomega"
 )
 
 const (
@@ -25,7 +25,7 @@ const (
 	MonitorTraceNotification = "TraceNotification"
 )
 
-var _ = Describe("RuntimeMonitorTest", func() {
+var _ = Describe("RuntimeDatapathMonitorTest", func() {
 
 	var (
 		vm            *helpers.SSHMeta

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
 	"context"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -55,6 +55,6 @@ func setupKvstore(ctx context.Context) {
 func init() {
 	rootCmd.AddCommand(kvstoreCmd)
 	flags := kvstoreCmd.PersistentFlags()
-	flags.StringVar(&kvStore, "kvstore", "", "kvstore type")
-	flags.Var(option.NewNamedMapOptions("kvstore-opts", &kvStoreOpts, nil), "kvstore-opt", "kvstore options")
+	flags.StringVar(&kvStore, "kvstore", "", "Key-Value Store type")
+	flags.Var(option.NewNamedMapOptions("kvstore-opts", &kvStoreOpts, nil), "kvstore-opt", "Key-Value Store options")
 }

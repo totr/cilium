@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cilium/cilium/pkg/logging/logfields"
-	"github.com/cilium/cilium/pkg/policy/api"
-
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/pkg/fqdn/re"
+	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/policy/api"
+	"github.com/cilium/cilium/pkg/safeio"
 )
 
 // policyCmd represents the policy command
@@ -34,6 +36,14 @@ var (
 
 func init() {
 	rootCmd.AddCommand(policyCmd)
+
+	// Initialize LRU here because the policy subcommands (validate, import)
+	// will call down to sanitizing the FQDN rules which contains regexes.
+	// Regexes need to be compiled as part of the FQDN rule validation.
+	//
+	// It's not necessary to pass a useful size here because it's not
+	// necessary to cache regexes in a short-lived binary (CLI).
+	re.InitRegexCompileLRU(1)
 }
 
 func getContext(content []byte, offset int64) (int, string, int) {
@@ -105,14 +115,20 @@ func ignoredFile(name string) bool {
 func loadPolicyFile(path string) (api.Rules, error) {
 	var content []byte
 	var err error
+	var r io.Reader
 	logrus.WithField(logfields.Path, path).Debug("Loading file")
 
 	if path == "-" {
-		content, err = io.ReadAll(bufio.NewReader(os.Stdin))
+		r = bufio.NewReader(os.Stdin)
 	} else {
-		content, err = os.ReadFile(path)
+		fr, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer fr.Close()
+		r = fr
 	}
-
+	content, err = safeio.ReadAllLimit(r, safeio.MB)
 	if err != nil {
 		return nil, err
 	}

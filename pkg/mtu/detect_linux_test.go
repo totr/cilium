@@ -1,24 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build privileged_tests
-// +build privileged_tests
+// Copyright Authors of Cilium
 
 package mtu
 
 import (
-	"testing"
+	"github.com/cilium/cilium/pkg/testutils"
 
 	. "gopkg.in/check.v1"
 )
 
-func Test(t *testing.T) { TestingT(t) }
-
-type MTUSuite struct{}
-
-var _ = Suite(&MTUSuite{})
-
 func (m *MTUSuite) TestAutoDetect(c *C) {
+	testutils.PrivilegedCheck(c)
+
 	mtu, err := autoDetect()
 	c.Assert(err, IsNil)
 	c.Assert(mtu, Not(Equals), 0)

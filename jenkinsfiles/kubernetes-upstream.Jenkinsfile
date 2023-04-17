@@ -9,7 +9,7 @@ pipeline {
         PROJ_PATH = "src/github.com/cilium/cilium"
         TESTDIR="${WORKSPACE}/${PROJ_PATH}/test"
         VM_MEMORY = "5120"
-        K8S_VERSION="1.23"
+        K8S_VERSION="1.26"
         KERNEL="419"
         SERVER_BOX = "cilium/ubuntu-4-19"
     }
@@ -49,6 +49,8 @@ pipeline {
         stage('Set programmatic env vars') {
             steps {
                 script {
+                    env.IMAGE_REGISTRY = sh script: 'echo -n ${JobImageRegistry:-quay.io/cilium}', returnStdout: true
+
                     if (env.ghprbActualCommit?.trim()) {
                         env.DOCKER_TAG = env.ghprbActualCommit
                     } else {
@@ -58,16 +60,12 @@ pipeline {
                         env.DOCKER_TAG = env.DOCKER_TAG + "-race"
                         env.RACE = 1
                         env.LOCKDEBUG = 1
-                        env.BASE_IMAGE = "quay.io/cilium/cilium-runtime:e6c79547ddb491d2d92d3a82b2d84d5ca6ca0db5@sha256:415af38f8caeac5cd5fafe5d5b645b42744ee032c7b85c768cd57f28ffe86df9"
+                        env.BASE_IMAGE = "quay.io/cilium/cilium-runtime:fe3fe058796057d2a089fac72a6a7afdf6b31435@sha256:d3f15d63ba73529963a3e9b5b2ff737f5638fc7a33819ac5380e72f2af7b4642"
                     }
                 }
             }
         }
         stage('Preload vagrant boxes'){
-            options {
-                timeout(time: 20, unit: 'MINUTES')
-            }
-
             steps {
                 sh '/usr/local/bin/add_vagrant_box ${WORKSPACE}/${PROJ_PATH}/vagrant_box_defaults.rb'
             }
@@ -96,7 +94,7 @@ pipeline {
             }
 
             steps {
-                sh 'cd ${TESTDIR}; vagrant ssh k8s1-${K8S_VERSION} -c "cd /home/vagrant/go/${PROJ_PATH}; sudo ./test/kubernetes-test.sh ${DOCKER_TAG}"'
+                sh 'cd ${TESTDIR}; vagrant ssh k8s1-${K8S_VERSION} -c "cd /home/vagrant/go/${PROJ_PATH}; sudo ./test/kubernetes-test.sh ${IMAGE_REGISTRY} ${DOCKER_TAG}"'
             }
         }
 

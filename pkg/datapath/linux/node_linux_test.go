@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
-
-//go:build privileged_tests
-// +build privileged_tests
+// Copyright Authors of Cilium
 
 package linux
 
@@ -13,14 +10,20 @@ import (
 	"net"
 	"runtime"
 	"sync"
-	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/containernetworking/plugins/pkg/ns"
+	"github.com/vishvananda/netlink"
+	"gopkg.in/check.v1"
+
+	"github.com/cilium/ebpf/rlimit"
+
 	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/datapath"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/datapath/fake"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
+	"github.com/cilium/cilium/pkg/maps/nodemap"
 	"github.com/cilium/cilium/pkg/maps/tunnel"
 	"github.com/cilium/cilium/pkg/mtu"
 	"github.com/cilium/cilium/pkg/netns"
@@ -29,15 +32,7 @@ import (
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/sysctl"
 	"github.com/cilium/cilium/pkg/testutils"
-
-	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/vishvananda/netlink"
-	"gopkg.in/check.v1"
 )
-
-func Test(t *testing.T) {
-	check.TestingT(t)
-}
 
 type linuxPrivilegedBaseTestSuite struct {
 	nodeAddressing datapath.NodeAddressing
@@ -52,17 +47,29 @@ type linuxPrivilegedIPv6OnlyTestSuite struct {
 
 var _ = check.Suite(&linuxPrivilegedIPv6OnlyTestSuite{})
 
+func (s *linuxPrivilegedIPv6OnlyTestSuite) SetUpSuite(c *check.C) {
+	testutils.PrivilegedCheck(c)
+}
+
 type linuxPrivilegedIPv4OnlyTestSuite struct {
 	linuxPrivilegedBaseTestSuite
 }
 
 var _ = check.Suite(&linuxPrivilegedIPv4OnlyTestSuite{})
 
+func (s *linuxPrivilegedIPv4OnlyTestSuite) SetUpSuite(c *check.C) {
+	testutils.PrivilegedCheck(c)
+}
+
 type linuxPrivilegedIPv4AndIPv6TestSuite struct {
 	linuxPrivilegedBaseTestSuite
 }
 
 var _ = check.Suite(&linuxPrivilegedIPv4AndIPv6TestSuite{})
+
+func (s *linuxPrivilegedIPv4AndIPv6TestSuite) SetUpSuite(c *check.C) {
+	testutils.PrivilegedCheck(c)
+}
 
 const (
 	dummyHostDeviceName     = "dummy_host"
@@ -73,7 +80,7 @@ const (
 )
 
 func (s *linuxPrivilegedBaseTestSuite) SetUpTest(c *check.C, addressing datapath.NodeAddressing, enableIPv6, enableIPv4 bool) {
-	bpf.ConfigureResourceLimits()
+	rlimit.RemoveMemlock()
 	s.nodeAddressing = addressing
 	s.mtuConfig = mtu.NewConfiguration(0, false, false, false, 1500, nil)
 	s.enableIPv6 = enableIPv6
@@ -92,15 +99,22 @@ func (s *linuxPrivilegedBaseTestSuite) SetUpTest(c *check.C, addressing datapath
 	err := setupDummyDevice(dummyExternalDeviceName, ips...)
 	c.Assert(err, check.IsNil)
 
+	ips = []net.IP{}
 	if enableIPv4 {
-		err = setupDummyDevice(dummyHostDeviceName, s.nodeAddressing.IPv4().Router())
-	} else {
-		err = setupDummyDevice(dummyHostDeviceName)
+		ips = append(ips, s.nodeAddressing.IPv4().Router())
 	}
+	if enableIPv6 {
+		ips = append(ips, s.nodeAddressing.IPv6().Router())
+	}
+	err = setupDummyDevice(dummyHostDeviceName, ips...)
 	c.Assert(err, check.IsNil)
 
-	tunnel.TunnelMap = tunnel.NewTunnelMap("test_cilium_tunnel_map")
-	_, err = tunnel.TunnelMap.OpenOrCreate()
+	tunnel.SetTunnelMap(tunnel.NewTunnelMap("test_cilium_tunnel_map"))
+	_, err = tunnel.TunnelMap().OpenOrCreate()
+	c.Assert(err, check.IsNil)
+
+	nodemap.SetNodeMap(nodemap.NewNodeMap("test_cilium_node_map"))
+	err = nodemap.NodeMap().OpenOrCreate()
 	c.Assert(err, check.IsNil)
 }
 
@@ -122,7 +136,7 @@ func (s *linuxPrivilegedIPv4AndIPv6TestSuite) SetUpTest(c *check.C) {
 func tearDownTest(c *check.C) {
 	removeDevice(dummyHostDeviceName)
 	removeDevice(dummyExternalDeviceName)
-	err := tunnel.TunnelMap.Unpin()
+	err := tunnel.TunnelMap().Unpin()
 	c.Assert(err, check.IsNil)
 }
 
@@ -405,7 +419,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	if s.enableIPv4 {
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP1), check.Equals, true)
 
@@ -415,7 +429,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 	}
 
 	if s.enableIPv6 {
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP1), check.Equals, true)
 
@@ -444,7 +458,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 
 	// alloc range v1 should map to underlay2
 	if s.enableIPv4 {
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP2), check.Equals, true)
 
@@ -454,7 +468,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 	}
 
 	if s.enableIPv6 {
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP2), check.Equals, true)
 
@@ -482,15 +496,15 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	// alloc range v1 should fail
-	underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
 	if s.enableIPv4 {
 		// alloc range v2 should map to underlay1
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc2.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc2.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP1), check.Equals, true)
 
@@ -507,7 +521,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 
 	if s.enableIPv6 {
 		// alloc range v2 should map to underlay1
-		underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc2.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc2.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP1), check.Equals, true)
 
@@ -533,10 +547,10 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	// alloc range v2 should fail
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc2.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc2.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc2.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc2.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
 	if s.enableIPv4 {
@@ -573,7 +587,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 
 	if s.enableIPv4 {
 		// alloc range v2 should map to underlay1
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc2.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc2.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP1), check.Equals, true)
 
@@ -585,7 +599,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 
 	if s.enableIPv6 {
 		// alloc range v2 should map to underlay1
-		underlayIP, err := tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc2.IP)
+		underlayIP, err := tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc2.IP))
 		c.Assert(err, check.IsNil)
 		c.Assert(underlayIP.Equal(externalNodeIP1), check.Equals, true)
 
@@ -600,17 +614,17 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateEncapsulation(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	// alloc range v1 should fail
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
 	// alloc range v2 should fail
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc2.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc2.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
-	underlayIP, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc2.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc2.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
 	if s.enableIPv4 {
@@ -645,6 +659,10 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 	ip4Alloc1 := cidr.MustParseCIDR("5.5.5.0/24")
 	ip4Alloc2 := cidr.MustParseCIDR("5.5.5.0/26")
 
+	ipv4SecondaryAlloc1 := cidr.MustParseCIDR("5.5.6.0/24")
+	ipv4SecondaryAlloc2 := cidr.MustParseCIDR("5.5.7.0/24")
+	ipv4SecondaryAlloc3 := cidr.MustParseCIDR("5.5.8.0/24")
+
 	externalNode1IP4v1 := net.ParseIP("4.4.4.4")
 	externalNode1IP4v2 := net.ParseIP("4.4.4.5")
 
@@ -669,6 +687,11 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 		EnableAutoDirectRouting: true,
 	}
 
+	expectedIPv4Routes := 0
+	if s.enableIPv4 {
+		expectedIPv4Routes = 1
+	}
+
 	err = linuxNodeHandler.NodeConfigurationChanged(nodeConfig)
 	c.Assert(err, check.IsNil)
 
@@ -685,11 +708,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 
 	foundRoutes, err := lookupDirectRoute(ip4Alloc1, externalNode1IP4v1)
 	c.Assert(err, check.IsNil)
-	if s.enableIPv4 {
-		c.Assert(len(foundRoutes), check.Equals, 1)
-	} else {
-		c.Assert(len(foundRoutes), check.Equals, 0)
-	}
+	c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
 
 	// nodev2: ip4Alloc1 => externalNodeIP2
 	nodev2 := nodeTypes.Node{
@@ -705,11 +724,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 
 	foundRoutes, err = lookupDirectRoute(ip4Alloc1, externalNode1IP4v2)
 	c.Assert(err, check.IsNil)
-	if s.enableIPv4 {
-		c.Assert(len(foundRoutes), check.Equals, 1)
-	} else {
-		c.Assert(len(foundRoutes), check.Equals, 0)
-	}
+	c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
 
 	// nodev3: ip4Alloc2 => externalNodeIP2
 	nodev3 := nodeTypes.Node{
@@ -730,11 +745,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 	// node routes for alloc2 ranges should have been installed
 	foundRoutes, err = lookupDirectRoute(ip4Alloc2, externalNode1IP4v2)
 	c.Assert(err, check.IsNil)
-	if s.enableIPv4 {
-		c.Assert(len(foundRoutes), check.Equals, 1)
-	} else {
-		c.Assert(len(foundRoutes), check.Equals, 0)
-	}
+	c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
 
 	// nodev4: no longer announce CIDR
 	nodev4 := nodeTypes.Node{
@@ -765,11 +776,7 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 	// node routes for alloc2 ranges should have been removed
 	foundRoutes, err = lookupDirectRoute(ip4Alloc2, externalNode1IP4v2)
 	c.Assert(err, check.IsNil)
-	if s.enableIPv4 {
-		c.Assert(len(foundRoutes), check.Equals, 1)
-	} else {
-		c.Assert(len(foundRoutes), check.Equals, 0)
-	}
+	c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
 
 	// delete nodev5
 	err = linuxNodeHandler.NodeDelete(nodev5)
@@ -779,6 +786,106 @@ func (s *linuxPrivilegedBaseTestSuite) TestNodeUpdateDirectRouting(c *check.C) {
 	foundRoutes, err = lookupDirectRoute(ip4Alloc2, externalNode1IP4v2)
 	c.Assert(err, check.IsNil)
 	c.Assert(len(foundRoutes), check.Equals, 0) // route should not exist regardless whether ipv4 is enabled or not
+
+	// nodev6: Re-introduce node with secondary CIDRs
+	nodev6 := nodeTypes.Node{
+		Name: "node2",
+		IPAddresses: []nodeTypes.Address{
+			{IP: externalNode1IP4v1, Type: nodeaddressing.NodeInternalIP},
+		},
+		IPv4AllocCIDR:           ip4Alloc1,
+		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{ipv4SecondaryAlloc1, ipv4SecondaryAlloc2},
+	}
+	err = linuxNodeHandler.NodeAdd(nodev6)
+	c.Assert(err, check.IsNil)
+
+	// expecting both primary and secondary routes to exist
+	for _, ip4Alloc := range []*cidr.CIDR{ip4Alloc1, ipv4SecondaryAlloc1, ipv4SecondaryAlloc2} {
+		foundRoutes, err = lookupDirectRoute(ip4Alloc, externalNode1IP4v1)
+		c.Assert(err, check.IsNil)
+		c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
+	}
+
+	// nodev7: Replace a secondary route
+	nodev7 := nodeTypes.Node{
+		Name: "node2",
+		IPAddresses: []nodeTypes.Address{
+			{IP: externalNode1IP4v1, Type: nodeaddressing.NodeInternalIP},
+		},
+		IPv4AllocCIDR:           ip4Alloc1,
+		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{ipv4SecondaryAlloc1, ipv4SecondaryAlloc3},
+	}
+	err = linuxNodeHandler.NodeUpdate(nodev6, nodev7)
+	c.Assert(err, check.IsNil)
+
+	// Checks all three required routes exist
+	for _, ip4Alloc := range []*cidr.CIDR{ip4Alloc1, ipv4SecondaryAlloc1, ipv4SecondaryAlloc3} {
+		foundRoutes, err = lookupDirectRoute(ip4Alloc, externalNode1IP4v1)
+		c.Assert(err, check.IsNil)
+		c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
+	}
+	// Checks route for removed CIDR has been deleted
+	foundRoutes, err = lookupDirectRoute(ipv4SecondaryAlloc2, externalNode1IP4v1)
+	c.Assert(err, check.IsNil)
+	c.Assert(len(foundRoutes), check.Equals, 0)
+
+	// nodev8: Change node IP to externalNode1IP4v2
+	nodev8 := nodeTypes.Node{
+		Name: "node2",
+		IPAddresses: []nodeTypes.Address{
+			{IP: externalNode1IP4v2, Type: nodeaddressing.NodeInternalIP},
+		},
+		IPv4AllocCIDR:           ip4Alloc1,
+		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{ipv4SecondaryAlloc1, ipv4SecondaryAlloc3},
+	}
+	err = linuxNodeHandler.NodeUpdate(nodev7, nodev8)
+	c.Assert(err, check.IsNil)
+
+	// Checks all routes with the new node IP exist
+	for _, ip4Alloc := range []*cidr.CIDR{ip4Alloc1, ipv4SecondaryAlloc1, ipv4SecondaryAlloc3} {
+		foundRoutes, err = lookupDirectRoute(ip4Alloc, externalNode1IP4v2)
+		c.Assert(err, check.IsNil)
+		c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
+	}
+	// Checks all routes with the old node IP have been deleted
+	for _, ip4Alloc := range []*cidr.CIDR{ip4Alloc1, ipv4SecondaryAlloc1, ipv4SecondaryAlloc3} {
+		foundRoutes, err = lookupDirectRoute(ip4Alloc, externalNode1IP4v1)
+		c.Assert(err, check.IsNil)
+		c.Assert(len(foundRoutes), check.Equals, 0)
+	}
+
+	// nodev9: replacement of primary route, removal of secondary CIDRs
+	nodev9 := nodeTypes.Node{
+		Name: "node2",
+		IPAddresses: []nodeTypes.Address{
+			{IP: externalNode1IP4v2, Type: nodeaddressing.NodeInternalIP},
+		},
+		IPv4AllocCIDR:           ip4Alloc2,
+		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{},
+	}
+	err = linuxNodeHandler.NodeUpdate(nodev8, nodev9)
+	c.Assert(err, check.IsNil)
+
+	// Checks primary route has been created
+	foundRoutes, err = lookupDirectRoute(ip4Alloc2, externalNode1IP4v2)
+	c.Assert(err, check.IsNil)
+	c.Assert(len(foundRoutes), check.Equals, expectedIPv4Routes)
+
+	// Checks all old routes have been deleted
+	for _, ip4Alloc := range []*cidr.CIDR{ip4Alloc1, ipv4SecondaryAlloc1, ipv4SecondaryAlloc3} {
+		foundRoutes, err = lookupDirectRoute(ip4Alloc, externalNode1IP4v2)
+		c.Assert(err, check.IsNil)
+		c.Assert(len(foundRoutes), check.Equals, 0)
+	}
+
+	// delete nodev9
+	err = linuxNodeHandler.NodeDelete(nodev9)
+	c.Assert(err, check.IsNil)
+
+	// remaining primary node route must have been deleted
+	foundRoutes, err = lookupDirectRoute(ip4Alloc2, externalNode1IP4v2)
+	c.Assert(err, check.IsNil)
+	c.Assert(len(foundRoutes), check.Equals, 0)
 }
 
 func (s *linuxPrivilegedBaseTestSuite) TestAgentRestartOptionChanges(c *check.C) {
@@ -818,11 +925,11 @@ func (s *linuxPrivilegedBaseTestSuite) TestAgentRestartOptionChanges(c *check.C)
 
 	// tunnel map entries must exist
 	if s.enableIPv4 {
-		_, err = tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+		_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 		c.Assert(err, check.IsNil)
 	}
 	if s.enableIPv6 {
-		_, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+		_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 		c.Assert(err, check.IsNil)
 	}
 
@@ -839,9 +946,9 @@ func (s *linuxPrivilegedBaseTestSuite) TestAgentRestartOptionChanges(c *check.C)
 	c.Assert(err, check.IsNil)
 
 	// tunnel map entries should have been removed
-	_, err = tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 	c.Assert(err, check.Not(check.IsNil))
-	_, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+	_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 	c.Assert(err, check.Not(check.IsNil))
 
 	// Simulate agent restart with address families enabled again
@@ -858,11 +965,11 @@ func (s *linuxPrivilegedBaseTestSuite) TestAgentRestartOptionChanges(c *check.C)
 
 	// tunnel map entries must exist
 	if s.enableIPv4 {
-		_, err = tunnel.TunnelMap.GetTunnelEndpoint(ip4Alloc1.IP)
+		_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip4Alloc1.IP))
 		c.Assert(err, check.IsNil)
 	}
 	if s.enableIPv6 {
-		_, err = tunnel.TunnelMap.GetTunnelEndpoint(ip6Alloc1.IP)
+		_, err = tunnel.TunnelMap().GetTunnelEndpoint(cmtypes.MustAddrClusterFromIP(ip6Alloc1.IP))
 		c.Assert(err, check.IsNil)
 	}
 
@@ -876,7 +983,7 @@ func insertFakeRoute(c *check.C, n *linuxNodeHandler, prefix *cidr.CIDR) {
 
 	nodeRoute.Device = dummyExternalDeviceName
 
-	_, err = route.Upsert(nodeRoute)
+	err = route.Upsert(nodeRoute)
 	c.Assert(err, check.IsNil)
 }
 
@@ -1013,7 +1120,7 @@ func (s *linuxPrivilegedIPv6OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	c.Assert(err, check.IsNil)
 	veth1, err := netlink.LinkByName("veth1")
 	c.Assert(err, check.IsNil)
-	_, ipnet, err := net.ParseCIDR("f00d::/96")
+	_, ipnet, _ := net.ParseCIDR("f00d::/96")
 	ip0 := net.ParseIP("f00d::249")
 	ip1 := net.ParseIP("f00d::250")
 	ipG := net.ParseIP("f00d::251")
@@ -1045,6 +1152,9 @@ func (s *linuxPrivilegedIPv6OnlyTestSuite) TestArpPingHandling(c *check.C) {
 		return nil
 	})
 
+	prevRoutingMode := option.Config.RoutingMode
+	defer func() { option.Config.RoutingMode = prevRoutingMode }()
+	option.Config.RoutingMode = option.RoutingModeNative
 	prevDRDev := option.Config.DirectRoutingDevice
 	defer func() { option.Config.DirectRoutingDevice = prevDRDev }()
 	option.Config.DirectRoutingDevice = "veth0"
@@ -1067,11 +1177,15 @@ func (s *linuxPrivilegedIPv6OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	// wait waits for neigh entry update or waits for removal if waitForDelete=true
-	wait := func(nodeID nodeTypes.Identity, before *time.Time, waitForDelete bool) {
+	wait := func(nodeID nodeTypes.Identity, link string, before *time.Time, waitForDelete bool) {
 		err := testutils.WaitUntil(func() bool {
 			linuxNodeHandler.neighLock.Lock()
 			defer linuxNodeHandler.neighLock.Unlock()
-			nextHop, found := linuxNodeHandler.neighNextHopByNode6[nodeID]
+			nextHopByLink, found := linuxNodeHandler.neighNextHopByNode6[nodeID]
+			if !found {
+				return waitForDelete
+			}
+			nextHop, found := nextHopByLink[link]
 			if !found {
 				return waitForDelete
 			}
@@ -1088,8 +1202,11 @@ func (s *linuxPrivilegedIPv6OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	}
 
 	nodev1 := nodeTypes.Node{
-		Name:        "node1",
-		IPAddresses: []nodeTypes.Address{{nodeaddressing.NodeInternalIP, ip1}},
+		Name: "node1",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   ip1,
+		}},
 	}
 	now := time.Now()
 	err = linuxNodeHandler.NodeAdd(nodev1)
@@ -1101,7 +1218,7 @@ func (s *linuxPrivilegedIPv6OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	err = linuxNodeHandler.NodeAdd(nodev1)
 	c.Assert(err, check.IsNil)
 	// insertNeighbor is invoked async, so thus this wait based on last ping
-	wait(nodev1.Identity(), &now, false)
+	wait(nodev1.Identity(), "veth0", &now, false)
 refetch1:
 	// Check whether an arp entry for nodev1 IP addr (=veth1) was added
 	neighs, err := netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
@@ -1139,7 +1256,7 @@ refetch1:
 	c.Assert(err, check.IsNil)
 
 	linuxNodeHandler.NodeNeighborRefresh(context.TODO(), nodev1)
-	wait(nodev1.Identity(), &now, false)
+	wait(nodev1.Identity(), "veth0", &now, false)
 refetch2:
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
 	c.Assert(err, check.IsNil)
@@ -1164,7 +1281,7 @@ refetch2:
 	err = linuxNodeHandler.NodeDelete(nodev1)
 	c.Assert(err, check.IsNil)
 	// deleteNeighbor is invoked async too
-	wait(nodev1.Identity(), nil, true)
+	wait(nodev1.Identity(), "veth0", nil, true)
 
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
 	c.Assert(err, check.IsNil)
@@ -1183,7 +1300,7 @@ refetch2:
 	now = time.Now()
 	err = linuxNodeHandler.NodeAdd(nodev1)
 	c.Assert(err, check.IsNil)
-	wait(nodev1.Identity(), &now, false)
+	wait(nodev1.Identity(), "veth0", &now, false)
 
 	rndHWAddr := func() net.HardwareAddr {
 		mac := make([]byte, 6)
@@ -1253,7 +1370,7 @@ refetch2:
 	now = time.Now()
 	err = linuxNodeHandler.NodeDelete(nodev1)
 	c.Assert(err, check.IsNil)
-	wait(nodev1.Identity(), nil, true)
+	wait(nodev1.Identity(), "veth0", nil, true)
 
 	// Setup routine for the 2. test
 	setupRemoteNode := func(vethName, vethPeerName, netnsName, vethCIDR, vethIPAddr,
@@ -1395,20 +1512,25 @@ refetch2:
 
 	node2IP := net.ParseIP("f00a::250")
 	nodev2 := nodeTypes.Node{
-		Name:        "node2",
-		IPAddresses: []nodeTypes.Address{{nodeaddressing.NodeInternalIP, node2IP}},
+		Name: "node2",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   node2IP}},
 	}
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev2), check.IsNil)
-	wait(nodev2.Identity(), &now, false)
+	wait(nodev2.Identity(), "veth0", &now, false)
 
 	node3IP := net.ParseIP("f00b::250")
 	nodev3 := nodeTypes.Node{
-		Name:        "node3",
-		IPAddresses: []nodeTypes.Address{{nodeaddressing.NodeInternalIP, node3IP}},
+		Name: "node3",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   node3IP,
+		}},
 	}
 	c.Assert(linuxNodeHandler.NodeAdd(nodev3), check.IsNil)
-	wait(nodev3.Identity(), &now, false)
+	wait(nodev3.Identity(), "veth0", &now, false)
 
 	nextHop := net.ParseIP("f00d::250")
 refetch3:
@@ -1434,7 +1556,7 @@ refetch3:
 
 	// Check that removing node2 will not remove nextHop, as it is still used by node3
 	c.Assert(linuxNodeHandler.NodeDelete(nodev2), check.IsNil)
-	wait(nodev2.Identity(), nil, true)
+	wait(nodev2.Identity(), "veth0", nil, true)
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
 	found = false
 	for _, n := range neighs {
@@ -1447,7 +1569,7 @@ refetch3:
 
 	// However, removing node3 should remove the neigh entry for nextHop
 	c.Assert(linuxNodeHandler.NodeDelete(nodev3), check.IsNil)
-	wait(nodev3.Identity(), nil, true)
+	wait(nodev3.Identity(), "veth0", nil, true)
 
 	found = false
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
@@ -1462,7 +1584,7 @@ refetch3:
 
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev3), check.IsNil)
-	wait(nodev3.Identity(), &now, false)
+	wait(nodev3.Identity(), "veth0", &now, false)
 
 	nextHop = net.ParseIP("f00d::250")
 refetch4:
@@ -1530,11 +1652,11 @@ refetch5:
 	// deleted from the neighbor table as well as the new one added.
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev2), check.IsNil)
-	wait(nodev2.Identity(), &now, false)
+	wait(nodev2.Identity(), "veth0", &now, false)
 
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev3), check.IsNil)
-	wait(nodev3.Identity(), &now, false)
+	wait(nodev3.Identity(), "veth0", &now, false)
 
 	nextHop = net.ParseIP("f00d::250")
 refetch6:
@@ -1563,11 +1685,15 @@ refetch6:
 	c.Assert(err, check.IsNil)
 
 	// waitGw waits for the nextHop to appear in the agent's nextHop table
-	waitGw := func(nextHopNew string, nodeID nodeTypes.Identity, before *time.Time) {
+	waitGw := func(nextHopNew string, nodeID nodeTypes.Identity, link string, before *time.Time) {
 		err := testutils.WaitUntil(func() bool {
 			linuxNodeHandler.neighLock.Lock()
 			defer linuxNodeHandler.neighLock.Unlock()
-			nextHop, found := linuxNodeHandler.neighNextHopByNode6[nodeID]
+			nextHopByLink, found := linuxNodeHandler.neighNextHopByNode6[nodeID]
+			if !found {
+				return false
+			}
+			nextHop, found := nextHopByLink[link]
 			if !found {
 				return false
 			}
@@ -1587,8 +1713,8 @@ refetch6:
 	now = time.Now()
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev2)
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev3)
-	waitGw("f00d::251", nodev2.Identity(), &now)
-	waitGw("f00d::250", nodev3.Identity(), &now)
+	waitGw("f00d::251", nodev2.Identity(), "veth0", &now)
+	waitGw("f00d::250", nodev3.Identity(), "veth0", &now)
 
 	// Both nextHops now need to be present
 	nextHop = net.ParseIP("f00d::250")
@@ -1641,8 +1767,8 @@ refetch8:
 	now = time.Now()
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev2)
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev3)
-	waitGw("f00d::251", nodev2.Identity(), &now)
-	waitGw("f00d::251", nodev3.Identity(), &now)
+	waitGw("f00d::251", nodev2.Identity(), "veth0", &now)
+	waitGw("f00d::251", nodev3.Identity(), "veth0", &now)
 
 	nextHop = net.ParseIP("f00d::250")
 refetch9:
@@ -1689,7 +1815,7 @@ refetch10:
 	c.Assert(found, check.Equals, true)
 
 	c.Assert(linuxNodeHandler.NodeDelete(nodev3), check.IsNil)
-	wait(nodev3.Identity(), nil, true)
+	wait(nodev3.Identity(), "veth0", nil, true)
 
 	// In the next test, we have node2 left in the neighbor table, and
 	// we add an unrelated externally learned neighbor entry. Check that
@@ -1758,9 +1884,367 @@ refetch11:
 	c.Assert(found, check.Equals, true)
 
 	c.Assert(linuxNodeHandler.NodeDelete(nodev2), check.IsNil)
-	wait(nodev2.Identity(), nil, true)
+	wait(nodev2.Identity(), "veth0", nil, true)
 
 	linuxNodeHandler.NodeCleanNeighborsLink(veth0, false)
+}
+
+func (s *linuxPrivilegedIPv6OnlyTestSuite) TestArpPingHandlingForMultiDevice(c *check.C) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	prevEnableL2NeighDiscovery := option.Config.EnableL2NeighDiscovery
+	defer func() { option.Config.EnableL2NeighDiscovery = prevEnableL2NeighDiscovery }()
+
+	option.Config.EnableL2NeighDiscovery = true
+
+	prevStateDir := option.Config.StateDir
+	defer func() { option.Config.StateDir = prevStateDir }()
+
+	tmpDir := c.MkDir()
+	option.Config.StateDir = tmpDir
+
+	baseTimeOld, err := sysctl.Read(baseIPv6Time)
+	c.Assert(err, check.IsNil)
+	err = sysctl.Write(baseIPv6Time, fmt.Sprintf("%d", 2500))
+	c.Assert(err, check.IsNil)
+	defer func() { sysctl.Write(baseIPv6Time, baseTimeOld) }()
+
+	// 1. Test whether another node in the same L2 subnet can be arpinged.
+	//    Each node has two devices and the other node in the different netns
+	//    is reachable via either pair.
+	//
+	//      +--------------+     +--------------+
+	//      |  host netns  |     |    netns1    |
+	//      |              |     |    nodev1    |
+	//      |              |     |  fe80::1/128 |
+	//      |         veth0+-----+veth1         |
+	//      |          |   |     |   |          |
+	//      | f00d::249/96 |     | f00d::250/96 |
+	//      |              |     |              |
+	//      |         veth2+-----+veth3         |
+	//      |          |   |     | |            |
+	//      | f00a::249/96 |     | f00a::250/96 |
+	//      +--------------+     +--------------+
+
+	// Setup
+	vethPair01 := &netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{Name: "veth0"},
+		PeerName:  "veth1",
+	}
+	err = netlink.LinkAdd(vethPair01)
+	c.Assert(err, check.IsNil)
+	defer netlink.LinkDel(vethPair01)
+	veth0, err := netlink.LinkByName("veth0")
+	c.Assert(err, check.IsNil)
+	veth1, err := netlink.LinkByName("veth1")
+	c.Assert(err, check.IsNil)
+	_, ipnet, _ := net.ParseCIDR("f00d::/96")
+	v1IP0 := net.ParseIP("f00d::249")
+	v1IP1 := net.ParseIP("f00d::250")
+	v1IPG := net.ParseIP("f00d::251")
+	ipnet.IP = v1IP0
+	addr := &netlink.Addr{IPNet: ipnet}
+	err = netlink.AddrAdd(veth0, addr)
+	c.Assert(err, check.IsNil)
+	err = netlink.LinkSetUp(veth0)
+	c.Assert(err, check.IsNil)
+
+	netns0, err := netns.ReplaceNetNSWithName("test-arping-netns0")
+	c.Assert(err, check.IsNil)
+	defer netns0.Close()
+	err = netlink.LinkSetNsFd(veth1, int(netns0.Fd()))
+	c.Assert(err, check.IsNil)
+	netns0.Do(func(ns.NetNS) error {
+		lo, err := netlink.LinkByName("lo")
+		c.Assert(err, check.IsNil)
+		err = netlink.LinkSetUp(lo)
+		c.Assert(err, check.IsNil)
+		addr, err := netlink.ParseAddr("fe80::1/128")
+		c.Assert(err, check.IsNil)
+		err = netlink.AddrAdd(lo, addr)
+		c.Assert(err, check.IsNil)
+
+		veth1, err := netlink.LinkByName("veth1")
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v1IP1
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth1, addr)
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v1IPG
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth1, addr)
+		c.Assert(err, check.IsNil)
+		err = netlink.LinkSetUp(veth1)
+		c.Assert(err, check.IsNil)
+		return nil
+	})
+
+	vethPair23 := &netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{Name: "veth2"},
+		PeerName:  "veth3",
+	}
+	err = netlink.LinkAdd(vethPair23)
+	c.Assert(err, check.IsNil)
+	defer netlink.LinkDel(vethPair23)
+	veth2, err := netlink.LinkByName("veth2")
+	c.Assert(err, check.IsNil)
+	veth3, err := netlink.LinkByName("veth3")
+	c.Assert(err, check.IsNil)
+	_, ipnet, _ = net.ParseCIDR("f00a::/96")
+	v2IP0 := net.ParseIP("f00a::249")
+	v2IP1 := net.ParseIP("f00a::250")
+	v2IPG := net.ParseIP("f00a::251")
+	ipnet.IP = v2IP0
+	addr = &netlink.Addr{IPNet: ipnet}
+	err = netlink.AddrAdd(veth2, addr)
+	c.Assert(err, check.IsNil)
+	err = netlink.LinkSetUp(veth2)
+	c.Assert(err, check.IsNil)
+
+	err = netlink.LinkSetNsFd(veth3, int(netns0.Fd()))
+	c.Assert(err, check.IsNil)
+	err = netns0.Do(func(ns.NetNS) error {
+		veth3, err := netlink.LinkByName("veth3")
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v2IP1
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth3, addr)
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v2IPG
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth3, addr)
+		c.Assert(err, check.IsNil)
+		err = netlink.LinkSetUp(veth3)
+		c.Assert(err, check.IsNil)
+		return nil
+	})
+	c.Assert(err, check.IsNil)
+
+	r := &netlink.Route{
+		Dst: netlink.NewIPNet(net.ParseIP("fe80::1")),
+		MultiPath: []*netlink.NexthopInfo{
+			{
+				LinkIndex: veth0.Attrs().Index,
+				Gw:        v1IP1,
+			},
+			{
+				LinkIndex: veth2.Attrs().Index,
+				Gw:        v2IP1,
+			},
+		}}
+
+	err = netlink.RouteAdd(r)
+	c.Assert(err, check.IsNil)
+	defer netlink.RouteDel(r)
+
+	prevRoutingMode := option.Config.RoutingMode
+	defer func() { option.Config.RoutingMode = prevRoutingMode }()
+	option.Config.RoutingMode = option.RoutingModeNative
+	prevDRDev := option.Config.DirectRoutingDevice
+	defer func() { option.Config.DirectRoutingDevice = prevDRDev }()
+	option.Config.DirectRoutingDevice = "veth0"
+	prevDevices := option.Config.GetDevices()
+	defer func() { option.Config.SetDevices(prevDevices) }()
+	option.Config.SetDevices([]string{"veth0", "veth2"})
+	prevNP := option.Config.EnableNodePort
+	defer func() { option.Config.EnableNodePort = prevNP }()
+	option.Config.EnableNodePort = true
+	dpConfig := DatapathConfiguration{HostDevice: "veth0"}
+	prevARPPeriod := option.Config.ARPPingRefreshPeriod
+	defer func() { option.Config.ARPPingRefreshPeriod = prevARPPeriod }()
+	option.Config.ARPPingRefreshPeriod = 1 * time.Nanosecond
+
+	linuxNodeHandler := NewNodeHandler(dpConfig, s.nodeAddressing, nil).(*linuxNodeHandler)
+	c.Assert(linuxNodeHandler, check.Not(check.IsNil))
+
+	err = linuxNodeHandler.NodeConfigurationChanged(datapath.LocalNodeConfiguration{
+		EnableEncapsulation: false,
+		EnableIPv4:          s.enableIPv4,
+		EnableIPv6:          s.enableIPv6,
+	})
+	c.Assert(err, check.IsNil)
+
+	// wait waits for neigh entry update or waits for removal if waitForDelete=true
+	wait := func(nodeID nodeTypes.Identity, link string, before *time.Time, waitForDelete bool) {
+		err := testutils.WaitUntil(func() bool {
+			linuxNodeHandler.neighLock.Lock()
+			defer linuxNodeHandler.neighLock.Unlock()
+			nextHopByLink, found := linuxNodeHandler.neighNextHopByNode6[nodeID]
+			if !found {
+				return waitForDelete
+			}
+			nextHop, found := nextHopByLink[link]
+			if !found {
+				return waitForDelete
+			}
+			lastPing, found := linuxNodeHandler.neighLastPingByNextHop[nextHop]
+			if !found {
+				return false
+			}
+			if waitForDelete {
+				return false
+			}
+			return before.Before(lastPing)
+		}, 5*time.Second)
+		c.Assert(err, check.IsNil)
+	}
+
+	nodev1 := nodeTypes.Node{
+		Name: "node1",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   net.ParseIP("fe80::1"),
+		}},
+	}
+	now := time.Now()
+	err = linuxNodeHandler.NodeAdd(nodev1)
+	c.Assert(err, check.IsNil)
+	// insertNeighbor is invoked async
+	// Insert the same node second time. This should not increment refcount for
+	// the same nextHop. We test it by checking that NodeDelete has removed the
+	// related neigh entry.
+	err = linuxNodeHandler.NodeAdd(nodev1)
+	c.Assert(err, check.IsNil)
+	// insertNeighbor is invoked async, so thus this wait based on last ping
+	wait(nodev1.Identity(), "veth0", &now, false)
+	wait(nodev1.Identity(), "veth2", &now, false)
+refetch1:
+	// Check whether an arp entry for nodev1 IP addr (=veth1) was added
+	neighs, err := netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
+	c.Assert(err, check.IsNil)
+	found := false
+	for _, n := range neighs {
+		if n.IP.Equal(v1IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				break
+			}
+			if retry {
+				goto refetch1
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+
+refetch2:
+	// Check whether an arp entry for nodev1 IP addr (=veth3) was added
+	neighs, err = netlink.NeighList(veth2.Attrs().Index, netlink.FAMILY_V6)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v2IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				break
+			}
+			if retry {
+				goto refetch2
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+
+	// Swap MAC addresses of veth0 and veth1, veth2 and veth3 to ensure the MAC address of veth1 changed.
+	// Trigger neighbor refresh on veth0 and check whether the arp entry was updated.
+	var veth0HwAddr, veth1HwAddr, veth2HwAddr, veth3HwAddr, updatedHwAddrFromArpEntry net.HardwareAddr
+	veth0HwAddr = veth0.Attrs().HardwareAddr
+	veth2HwAddr = veth2.Attrs().HardwareAddr
+	err = netns0.Do(func(ns.NetNS) error {
+		veth1, err := netlink.LinkByName("veth1")
+		c.Assert(err, check.IsNil)
+		veth1HwAddr = veth1.Attrs().HardwareAddr
+		err = netlink.LinkSetHardwareAddr(veth1, veth0HwAddr)
+		c.Assert(err, check.IsNil)
+
+		veth3, err := netlink.LinkByName("veth3")
+		c.Assert(err, check.IsNil)
+		veth3HwAddr = veth3.Attrs().HardwareAddr
+		err = netlink.LinkSetHardwareAddr(veth3, veth2HwAddr)
+		c.Assert(err, check.IsNil)
+		return nil
+	})
+	c.Assert(err, check.IsNil)
+
+	now = time.Now()
+	err = netlink.LinkSetHardwareAddr(veth0, veth1HwAddr)
+	c.Assert(err, check.IsNil)
+	err = netlink.LinkSetHardwareAddr(veth2, veth3HwAddr)
+	c.Assert(err, check.IsNil)
+
+	linuxNodeHandler.NodeNeighborRefresh(context.TODO(), nodev1)
+	wait(nodev1.Identity(), "veth0", &now, false)
+	wait(nodev1.Identity(), "veth2", &now, false)
+refetch3:
+	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v1IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				updatedHwAddrFromArpEntry = n.HardwareAddr
+				break
+			}
+			if retry {
+				goto refetch3
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+	c.Assert(updatedHwAddrFromArpEntry.String(), check.Equals, veth0HwAddr.String())
+
+refetch4:
+	neighs, err = netlink.NeighList(veth2.Attrs().Index, netlink.FAMILY_V6)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v2IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				updatedHwAddrFromArpEntry = n.HardwareAddr
+				break
+			}
+			if retry {
+				goto refetch4
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+	c.Assert(updatedHwAddrFromArpEntry.String(), check.Equals, veth2HwAddr.String())
+
+	// Remove nodev1, and check whether the arp entry was removed
+	err = linuxNodeHandler.NodeDelete(nodev1)
+	c.Assert(err, check.IsNil)
+	// deleteNeighbor is invoked async too
+	wait(nodev1.Identity(), "veth0", nil, true)
+	wait(nodev1.Identity(), "veth2", nil, true)
+
+	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V6)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v1IP1) {
+			found = true
+			break
+		}
+	}
+	c.Assert(found, check.Equals, false)
+
+	neighs, err = netlink.NeighList(veth2.Attrs().Index, netlink.FAMILY_V6)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v2IP1) {
+			found = true
+			break
+		}
+	}
+	c.Assert(found, check.Equals, false)
 }
 
 func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandling(c *check.C) {
@@ -1806,7 +2290,7 @@ func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	c.Assert(err, check.IsNil)
 	veth1, err := netlink.LinkByName("veth1")
 	c.Assert(err, check.IsNil)
-	_, ipnet, err := net.ParseCIDR("9.9.9.252/29")
+	_, ipnet, _ := net.ParseCIDR("9.9.9.252/29")
 	ip0 := net.ParseIP("9.9.9.249")
 	ip1 := net.ParseIP("9.9.9.250")
 	ipG := net.ParseIP("9.9.9.251")
@@ -1838,6 +2322,9 @@ func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandling(c *check.C) {
 		return nil
 	})
 
+	prevRoutingMode := option.Config.RoutingMode
+	defer func() { option.Config.RoutingMode = prevRoutingMode }()
+	option.Config.RoutingMode = option.RoutingModeNative
 	prevDRDev := option.Config.DirectRoutingDevice
 	defer func() { option.Config.DirectRoutingDevice = prevDRDev }()
 	option.Config.DirectRoutingDevice = "veth0"
@@ -1860,11 +2347,15 @@ func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	c.Assert(err, check.IsNil)
 
 	// wait waits for neigh entry update or waits for removal if waitForDelete=true
-	wait := func(nodeID nodeTypes.Identity, before *time.Time, waitForDelete bool) {
+	wait := func(nodeID nodeTypes.Identity, link string, before *time.Time, waitForDelete bool) {
 		err := testutils.WaitUntil(func() bool {
 			linuxNodeHandler.neighLock.Lock()
 			defer linuxNodeHandler.neighLock.Unlock()
-			nextHop, found := linuxNodeHandler.neighNextHopByNode4[nodeID]
+			nextHopByLink, found := linuxNodeHandler.neighNextHopByNode4[nodeID]
+			if !found {
+				return waitForDelete
+			}
+			nextHop, found := nextHopByLink[link]
 			if !found {
 				return waitForDelete
 			}
@@ -1881,8 +2372,11 @@ func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	}
 
 	nodev1 := nodeTypes.Node{
-		Name:        "node1",
-		IPAddresses: []nodeTypes.Address{{nodeaddressing.NodeInternalIP, ip1}},
+		Name: "node1",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   ip1,
+		}},
 	}
 	now := time.Now()
 	err = linuxNodeHandler.NodeAdd(nodev1)
@@ -1894,7 +2388,7 @@ func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandling(c *check.C) {
 	err = linuxNodeHandler.NodeAdd(nodev1)
 	c.Assert(err, check.IsNil)
 	// insertNeighbor is invoked async, so thus this wait based on last ping
-	wait(nodev1.Identity(), &now, false)
+	wait(nodev1.Identity(), "veth0", &now, false)
 refetch1:
 	// Check whether an arp entry for nodev1 IP addr (=veth1) was added
 	neighs, err := netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
@@ -1932,7 +2426,7 @@ refetch1:
 	c.Assert(err, check.IsNil)
 
 	linuxNodeHandler.NodeNeighborRefresh(context.TODO(), nodev1)
-	wait(nodev1.Identity(), &now, false)
+	wait(nodev1.Identity(), "veth0", &now, false)
 refetch2:
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
 	c.Assert(err, check.IsNil)
@@ -1957,7 +2451,7 @@ refetch2:
 	err = linuxNodeHandler.NodeDelete(nodev1)
 	c.Assert(err, check.IsNil)
 	// deleteNeighbor is invoked async too
-	wait(nodev1.Identity(), nil, true)
+	wait(nodev1.Identity(), "veth0", nil, true)
 
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
 	c.Assert(err, check.IsNil)
@@ -1976,7 +2470,7 @@ refetch2:
 	now = time.Now()
 	err = linuxNodeHandler.NodeAdd(nodev1)
 	c.Assert(err, check.IsNil)
-	wait(nodev1.Identity(), &now, false)
+	wait(nodev1.Identity(), "veth0", &now, false)
 
 	rndHWAddr := func() net.HardwareAddr {
 		mac := make([]byte, 6)
@@ -2046,7 +2540,7 @@ refetch2:
 	now = time.Now()
 	err = linuxNodeHandler.NodeDelete(nodev1)
 	c.Assert(err, check.IsNil)
-	wait(nodev1.Identity(), nil, true)
+	wait(nodev1.Identity(), "veth0", nil, true)
 
 	// Setup routine for the 2. test
 	setupRemoteNode := func(vethName, vethPeerName, netnsName, vethCIDR, vethIPAddr,
@@ -2188,20 +2682,26 @@ refetch2:
 
 	node2IP := net.ParseIP("8.8.8.250")
 	nodev2 := nodeTypes.Node{
-		Name:        "node2",
-		IPAddresses: []nodeTypes.Address{{nodeaddressing.NodeInternalIP, node2IP}},
+		Name: "node2",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   node2IP,
+		}},
 	}
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev2), check.IsNil)
-	wait(nodev2.Identity(), &now, false)
+	wait(nodev2.Identity(), "veth0", &now, false)
 
 	node3IP := net.ParseIP("7.7.7.250")
 	nodev3 := nodeTypes.Node{
-		Name:        "node3",
-		IPAddresses: []nodeTypes.Address{{nodeaddressing.NodeInternalIP, node3IP}},
+		Name: "node3",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   node3IP,
+		}},
 	}
 	c.Assert(linuxNodeHandler.NodeAdd(nodev3), check.IsNil)
-	wait(nodev3.Identity(), &now, false)
+	wait(nodev3.Identity(), "veth0", &now, false)
 
 	nextHop := net.ParseIP("9.9.9.250")
 refetch3:
@@ -2227,7 +2727,7 @@ refetch3:
 
 	// Check that removing node2 will not remove nextHop, as it is still used by node3
 	c.Assert(linuxNodeHandler.NodeDelete(nodev2), check.IsNil)
-	wait(nodev2.Identity(), nil, true)
+	wait(nodev2.Identity(), "veth0", nil, true)
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
 	found = false
 	for _, n := range neighs {
@@ -2240,7 +2740,7 @@ refetch3:
 
 	// However, removing node3 should remove the neigh entry for nextHop
 	c.Assert(linuxNodeHandler.NodeDelete(nodev3), check.IsNil)
-	wait(nodev3.Identity(), nil, true)
+	wait(nodev3.Identity(), "veth0", nil, true)
 
 	found = false
 	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
@@ -2255,7 +2755,7 @@ refetch3:
 
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev3), check.IsNil)
-	wait(nodev3.Identity(), &now, false)
+	wait(nodev3.Identity(), "veth0", &now, false)
 
 	nextHop = net.ParseIP("9.9.9.250")
 refetch4:
@@ -2323,11 +2823,11 @@ refetch5:
 	// deleted from the neighbor table as well as the new one added.
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev2), check.IsNil)
-	wait(nodev2.Identity(), &now, false)
+	wait(nodev2.Identity(), "veth0", &now, false)
 
 	now = time.Now()
 	c.Assert(linuxNodeHandler.NodeAdd(nodev3), check.IsNil)
-	wait(nodev3.Identity(), &now, false)
+	wait(nodev3.Identity(), "veth0", &now, false)
 
 	nextHop = net.ParseIP("9.9.9.250")
 refetch6:
@@ -2356,11 +2856,15 @@ refetch6:
 	c.Assert(err, check.IsNil)
 
 	// waitGw waits for the nextHop to appear in the agent's nextHop table
-	waitGw := func(nextHopNew string, nodeID nodeTypes.Identity, before *time.Time) {
+	waitGw := func(nextHopNew string, nodeID nodeTypes.Identity, link string, before *time.Time) {
 		err := testutils.WaitUntil(func() bool {
 			linuxNodeHandler.neighLock.Lock()
 			defer linuxNodeHandler.neighLock.Unlock()
-			nextHop, found := linuxNodeHandler.neighNextHopByNode4[nodeID]
+			nextHopByLink, found := linuxNodeHandler.neighNextHopByNode4[nodeID]
+			if !found {
+				return false
+			}
+			nextHop, found := nextHopByLink[link]
 			if !found {
 				return false
 			}
@@ -2380,8 +2884,8 @@ refetch6:
 	now = time.Now()
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev2)
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev3)
-	waitGw("9.9.9.251", nodev2.Identity(), &now)
-	waitGw("9.9.9.250", nodev3.Identity(), &now)
+	waitGw("9.9.9.251", nodev2.Identity(), "veth0", &now)
+	waitGw("9.9.9.250", nodev3.Identity(), "veth0", &now)
 
 	// Both nextHops now need to be present
 	nextHop = net.ParseIP("9.9.9.250")
@@ -2434,8 +2938,8 @@ refetch8:
 	now = time.Now()
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev2)
 	linuxNodeHandler.NodeNeighborRefresh(context.Background(), nodev3)
-	waitGw("9.9.9.251", nodev2.Identity(), &now)
-	waitGw("9.9.9.251", nodev3.Identity(), &now)
+	waitGw("9.9.9.251", nodev2.Identity(), "veth0", &now)
+	waitGw("9.9.9.251", nodev3.Identity(), "veth0", &now)
 
 	nextHop = net.ParseIP("9.9.9.250")
 refetch9:
@@ -2482,7 +2986,7 @@ refetch10:
 	c.Assert(found, check.Equals, true)
 
 	c.Assert(linuxNodeHandler.NodeDelete(nodev3), check.IsNil)
-	wait(nodev3.Identity(), nil, true)
+	wait(nodev3.Identity(), "veth0", nil, true)
 
 	// In the next test, we have node2 left in the neighbor table, and
 	// we add an unrelated externally learned neighbor entry. Check that
@@ -2551,9 +3055,367 @@ refetch11:
 	c.Assert(found, check.Equals, true)
 
 	c.Assert(linuxNodeHandler.NodeDelete(nodev2), check.IsNil)
-	wait(nodev2.Identity(), nil, true)
+	wait(nodev2.Identity(), "veth0", nil, true)
 
 	linuxNodeHandler.NodeCleanNeighborsLink(veth0, false)
+}
+
+func (s *linuxPrivilegedIPv4OnlyTestSuite) TestArpPingHandlingForMultiDevice(c *check.C) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	prevEnableL2NeighDiscovery := option.Config.EnableL2NeighDiscovery
+	defer func() { option.Config.EnableL2NeighDiscovery = prevEnableL2NeighDiscovery }()
+
+	option.Config.EnableL2NeighDiscovery = true
+
+	prevStateDir := option.Config.StateDir
+	defer func() { option.Config.StateDir = prevStateDir }()
+
+	tmpDir := c.MkDir()
+	option.Config.StateDir = tmpDir
+
+	baseTimeOld, err := sysctl.Read(baseIPv4Time)
+	c.Assert(err, check.IsNil)
+	err = sysctl.Write(baseIPv4Time, fmt.Sprintf("%d", 2500))
+	c.Assert(err, check.IsNil)
+	defer func() { sysctl.Write(baseIPv4Time, baseTimeOld) }()
+
+	// 1. Test whether another node in the same L2 subnet can be arpinged.
+	//    Each node has two devices and the other node in the different netns
+	//    is reachable via either pair.
+	//
+	//      +--------------+     +--------------+
+	//      |  host netns  |     |    netns1    |
+	//      |              |     |    nodev1    |
+	//      |              |     |  10.0.0.1/32 |
+	//      |         veth0+-----+veth1         |
+	//      |          |   |     |   |          |
+	//      | 9.9.9.249/29 |     |9.9.9.250/29  |
+	//      |              |     |              |
+	//      |         veth2+-----+veth3         |
+	//      |          |   |     | |            |
+	//      | 8.8.8.249/29 |     | 8.8.8.250/29 |
+	//      +--------------+     +--------------+
+
+	// Setup
+	vethPair01 := &netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{Name: "veth0"},
+		PeerName:  "veth1",
+	}
+	err = netlink.LinkAdd(vethPair01)
+	c.Assert(err, check.IsNil)
+	defer netlink.LinkDel(vethPair01)
+	veth0, err := netlink.LinkByName("veth0")
+	c.Assert(err, check.IsNil)
+	veth1, err := netlink.LinkByName("veth1")
+	c.Assert(err, check.IsNil)
+	_, ipnet, _ := net.ParseCIDR("9.9.9.252/29")
+	v1IP0 := net.ParseIP("9.9.9.249")
+	v1IP1 := net.ParseIP("9.9.9.250")
+	v1IPG := net.ParseIP("9.9.9.251")
+	ipnet.IP = v1IP0
+	addr := &netlink.Addr{IPNet: ipnet}
+	err = netlink.AddrAdd(veth0, addr)
+	c.Assert(err, check.IsNil)
+	err = netlink.LinkSetUp(veth0)
+	c.Assert(err, check.IsNil)
+
+	netns0, err := netns.ReplaceNetNSWithName("test-arping-netns0")
+	c.Assert(err, check.IsNil)
+	defer netns0.Close()
+	err = netlink.LinkSetNsFd(veth1, int(netns0.Fd()))
+	c.Assert(err, check.IsNil)
+	err = netns0.Do(func(ns.NetNS) error {
+		lo, err := netlink.LinkByName("lo")
+		c.Assert(err, check.IsNil)
+		err = netlink.LinkSetUp(lo)
+		c.Assert(err, check.IsNil)
+		addr, err := netlink.ParseAddr("10.0.0.1/32")
+		c.Assert(err, check.IsNil)
+		err = netlink.AddrAdd(lo, addr)
+		c.Assert(err, check.IsNil)
+
+		veth1, err := netlink.LinkByName("veth1")
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v1IP1
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth1, addr)
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v1IPG
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth1, addr)
+		c.Assert(err, check.IsNil)
+		err = netlink.LinkSetUp(veth1)
+		c.Assert(err, check.IsNil)
+		return nil
+	})
+	c.Assert(err, check.IsNil)
+
+	vethPair23 := &netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{Name: "veth2"},
+		PeerName:  "veth3",
+	}
+	err = netlink.LinkAdd(vethPair23)
+	c.Assert(err, check.IsNil)
+	defer netlink.LinkDel(vethPair23)
+	veth2, err := netlink.LinkByName("veth2")
+	c.Assert(err, check.IsNil)
+	veth3, err := netlink.LinkByName("veth3")
+	c.Assert(err, check.IsNil)
+	_, ipnet, _ = net.ParseCIDR("8.8.8.252/29")
+	v2IP0 := net.ParseIP("8.8.8.249")
+	v2IP1 := net.ParseIP("8.8.8.250")
+	v2IPG := net.ParseIP("8.8.8.251")
+	ipnet.IP = v2IP0
+	addr = &netlink.Addr{IPNet: ipnet}
+	err = netlink.AddrAdd(veth2, addr)
+	c.Assert(err, check.IsNil)
+	err = netlink.LinkSetUp(veth2)
+	c.Assert(err, check.IsNil)
+
+	err = netlink.LinkSetNsFd(veth3, int(netns0.Fd()))
+	c.Assert(err, check.IsNil)
+	err = netns0.Do(func(ns.NetNS) error {
+		veth3, err := netlink.LinkByName("veth3")
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v2IP1
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth3, addr)
+		c.Assert(err, check.IsNil)
+		ipnet.IP = v2IPG
+		addr = &netlink.Addr{IPNet: ipnet}
+		err = netlink.AddrAdd(veth3, addr)
+		c.Assert(err, check.IsNil)
+		err = netlink.LinkSetUp(veth3)
+		c.Assert(err, check.IsNil)
+		return nil
+	})
+	c.Assert(err, check.IsNil)
+
+	r := &netlink.Route{
+		Dst: netlink.NewIPNet(net.ParseIP("10.0.0.1")),
+		MultiPath: []*netlink.NexthopInfo{
+			{
+				LinkIndex: veth0.Attrs().Index,
+				Gw:        v1IP1,
+			},
+			{
+				LinkIndex: veth2.Attrs().Index,
+				Gw:        v2IP1,
+			},
+		}}
+	err = netlink.RouteAdd(r)
+	c.Assert(err, check.IsNil)
+	defer netlink.RouteDel(r)
+
+	prevRoutingMode := option.Config.RoutingMode
+	defer func() { option.Config.RoutingMode = prevRoutingMode }()
+	option.Config.RoutingMode = option.RoutingModeNative
+	prevDRDev := option.Config.DirectRoutingDevice
+	defer func() { option.Config.DirectRoutingDevice = prevDRDev }()
+	option.Config.DirectRoutingDevice = "veth0"
+	prevDevices := option.Config.GetDevices()
+	defer func() { option.Config.SetDevices(prevDevices) }()
+	option.Config.SetDevices([]string{"veth0", "veth2"})
+	prevNP := option.Config.EnableNodePort
+	defer func() { option.Config.EnableNodePort = prevNP }()
+	option.Config.EnableNodePort = true
+	dpConfig := DatapathConfiguration{HostDevice: "veth0"}
+	prevARPPeriod := option.Config.ARPPingRefreshPeriod
+	defer func() { option.Config.ARPPingRefreshPeriod = prevARPPeriod }()
+	option.Config.ARPPingRefreshPeriod = 1 * time.Nanosecond
+
+	linuxNodeHandler := NewNodeHandler(dpConfig, s.nodeAddressing, nil).(*linuxNodeHandler)
+	c.Assert(linuxNodeHandler, check.Not(check.IsNil))
+
+	err = linuxNodeHandler.NodeConfigurationChanged(datapath.LocalNodeConfiguration{
+		EnableEncapsulation: false,
+		EnableIPv4:          s.enableIPv4,
+		EnableIPv6:          s.enableIPv6,
+	})
+	c.Assert(err, check.IsNil)
+
+	// wait waits for neigh entry update or waits for removal if waitForDelete=true
+	wait := func(nodeID nodeTypes.Identity, link string, before *time.Time, waitForDelete bool) {
+		err := testutils.WaitUntil(func() bool {
+			linuxNodeHandler.neighLock.Lock()
+			defer linuxNodeHandler.neighLock.Unlock()
+			nextHopByLink, found := linuxNodeHandler.neighNextHopByNode4[nodeID]
+			if !found {
+				return waitForDelete
+			}
+			nextHop, found := nextHopByLink[link]
+			if !found {
+				return waitForDelete
+			}
+			lastPing, found := linuxNodeHandler.neighLastPingByNextHop[nextHop]
+			if !found {
+				return false
+			}
+			if waitForDelete {
+				return false
+			}
+			return before.Before(lastPing)
+		}, 5*time.Second)
+		c.Assert(err, check.IsNil)
+	}
+
+	nodev1 := nodeTypes.Node{
+		Name: "node1",
+		IPAddresses: []nodeTypes.Address{{
+			Type: nodeaddressing.NodeInternalIP,
+			IP:   net.ParseIP("10.0.0.1"),
+		}},
+	}
+	now := time.Now()
+	err = linuxNodeHandler.NodeAdd(nodev1)
+	c.Assert(err, check.IsNil)
+	// insertNeighbor is invoked async
+	// Insert the same node second time. This should not increment refcount for
+	// the same nextHop. We test it by checking that NodeDelete has removed the
+	// related neigh entry.
+	err = linuxNodeHandler.NodeAdd(nodev1)
+	c.Assert(err, check.IsNil)
+	// insertNeighbor is invoked async, so thus this wait based on last ping
+	wait(nodev1.Identity(), "veth0", &now, false)
+	wait(nodev1.Identity(), "veth2", &now, false)
+refetch1:
+	// Check whether an arp entry for nodev1 IP addr (=veth1) was added
+	neighs, err := netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
+	c.Assert(err, check.IsNil)
+	found := false
+	for _, n := range neighs {
+		if n.IP.Equal(v1IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				break
+			}
+			if retry {
+				goto refetch1
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+
+refetch2:
+	// Check whether an arp entry for nodev1 IP addr (=veth3) was added
+	neighs, err = netlink.NeighList(veth2.Attrs().Index, netlink.FAMILY_V4)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v2IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				break
+			}
+			if retry {
+				goto refetch2
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+
+	// Swap MAC addresses of veth0 and veth1, veth2 and veth3 to ensure the MAC address of veth1 changed.
+	// Trigger neighbor refresh on veth0 and check whether the arp entry was updated.
+	var veth0HwAddr, veth1HwAddr, veth2HwAddr, veth3HwAddr, updatedHwAddrFromArpEntry net.HardwareAddr
+	veth0HwAddr = veth0.Attrs().HardwareAddr
+	veth2HwAddr = veth2.Attrs().HardwareAddr
+	err = netns0.Do(func(ns.NetNS) error {
+		veth1, err := netlink.LinkByName("veth1")
+		c.Assert(err, check.IsNil)
+		veth1HwAddr = veth1.Attrs().HardwareAddr
+		err = netlink.LinkSetHardwareAddr(veth1, veth0HwAddr)
+		c.Assert(err, check.IsNil)
+
+		veth3, err := netlink.LinkByName("veth3")
+		c.Assert(err, check.IsNil)
+		veth3HwAddr = veth3.Attrs().HardwareAddr
+		err = netlink.LinkSetHardwareAddr(veth3, veth2HwAddr)
+		c.Assert(err, check.IsNil)
+		return nil
+	})
+	c.Assert(err, check.IsNil)
+
+	now = time.Now()
+	err = netlink.LinkSetHardwareAddr(veth0, veth1HwAddr)
+	c.Assert(err, check.IsNil)
+	err = netlink.LinkSetHardwareAddr(veth2, veth3HwAddr)
+	c.Assert(err, check.IsNil)
+
+	linuxNodeHandler.NodeNeighborRefresh(context.TODO(), nodev1)
+	wait(nodev1.Identity(), "veth0", &now, false)
+	wait(nodev1.Identity(), "veth2", &now, false)
+refetch3:
+	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v1IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				updatedHwAddrFromArpEntry = n.HardwareAddr
+				break
+			}
+			if retry {
+				goto refetch3
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+	c.Assert(updatedHwAddrFromArpEntry.String(), check.Equals, veth0HwAddr.String())
+
+refetch4:
+	neighs, err = netlink.NeighList(veth2.Attrs().Index, netlink.FAMILY_V4)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v2IP1) {
+			good, retry := neighStateOk(n)
+			if good {
+				found = true
+				updatedHwAddrFromArpEntry = n.HardwareAddr
+				break
+			}
+			if retry {
+				goto refetch4
+			}
+		}
+	}
+	c.Assert(found, check.Equals, true)
+	c.Assert(updatedHwAddrFromArpEntry.String(), check.Equals, veth2HwAddr.String())
+
+	// Remove nodev1, and check whether the arp entry was removed
+	err = linuxNodeHandler.NodeDelete(nodev1)
+	c.Assert(err, check.IsNil)
+	// deleteNeighbor is invoked async too
+	wait(nodev1.Identity(), "veth0", nil, true)
+	wait(nodev1.Identity(), "veth2", nil, true)
+
+	neighs, err = netlink.NeighList(veth0.Attrs().Index, netlink.FAMILY_V4)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v1IP1) {
+			found = true
+			break
+		}
+	}
+	c.Assert(found, check.Equals, false)
+
+	neighs, err = netlink.NeighList(veth2.Attrs().Index, netlink.FAMILY_V4)
+	c.Assert(err, check.IsNil)
+	found = false
+	for _, n := range neighs {
+		if n.IP.Equal(v2IP1) {
+			found = true
+			break
+		}
+	}
+	c.Assert(found, check.Equals, false)
 }
 
 func (s *linuxPrivilegedBaseTestSuite) benchmarkNodeUpdate(c *check.C, config datapath.LocalNodeConfiguration) {

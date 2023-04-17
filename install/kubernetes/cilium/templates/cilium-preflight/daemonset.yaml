@@ -16,7 +16,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
+        app.kubernetes.io/part-of: cilium
         k8s-app: cilium-pre-flight-check
+        app.kubernetes.io/name: cilium-pre-flight-check
         kubernetes.io/cluster-service: "true"
         {{- with .Values.preflight.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -26,6 +28,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 6 }}
       {{- end }}
+      {{- with .Values.preflight.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         - name: clean-cilium-state
           image: {{ include "cilium.image" .Values.preflight.image | quote }}
@@ -33,6 +39,7 @@ spec:
           command: ["/bin/echo"]
           args:
           - "hello"
+          terminationMessagePolicy: FallbackToLogsOnError
       containers:
         - name: cilium-pre-flight-check
           image: {{ include "cilium.image" .Values.preflight.image | quote }}
@@ -55,6 +62,10 @@ spec:
               - /tmp/ready
             initialDelaySeconds: 5
             periodSeconds: 5
+          {{- with .Values.preflight.extraEnv }}
+          env:
+            {{- toYaml . | trim | nindent 12 }}
+          {{- end }}
           volumeMounts:
           - name: cilium-run
             mountPath: /var/run/cilium
@@ -68,6 +79,18 @@ spec:
             readOnly: true
           {{- end }}
           {{- end }}
+          {{- with .Values.preflight.extraVolumeMounts }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- with .Values.preflight.resources }}
+          resources:
+            {{- toYaml . | trim | nindent 12 }}
+          {{- end }}
+          {{- with .Values.preflight.securityContext }}
+          securityContext:
+            {{- toYaml . | trim | nindent 14 }}
+          {{- end }}
+          terminationMessagePolicy: FallbackToLogsOnError
         {{- if ne .Values.preflight.tofqdnsPreCache "" }}
         - name: cilium-pre-flight-fqdn-precache
           image: {{ include "cilium.image" .Values.preflight.image | quote }}
@@ -115,6 +138,21 @@ spec:
             readOnly: true
           {{- end }}
           {{- end }}
+          {{- with .Values.preflight.extraVolumeMounts }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- with .Values.preflight.extraEnv }}
+          {{- toYaml . | trim | nindent 10 }}
+          {{- end }}
+          {{- with .Values.preflight.resources }}
+          resources:
+            {{- toYaml . | trim | nindent 12 }}
+          {{- end }}
+          {{- with .Values.preflight.securityContext }}
+          securityContext:
+            {{- toYaml . | trim | nindent 14 }}
+          {{- end }}
+          terminationMessagePolicy: FallbackToLogsOnError
         {{- end }}
       hostNetwork: true
       # This is here to seamlessly allow migrate-identity to work with
@@ -127,8 +165,9 @@ spec:
       priorityClassName: {{ include "cilium.priorityClass" (list $ .Values.preflight.priorityClassName "system-node-critical") }}
       serviceAccount: {{ .Values.serviceAccounts.preflight.name | quote }}
       serviceAccountName: {{ .Values.serviceAccounts.preflight.name | quote }}
-      terminationGracePeriodSeconds: 1
-      {{- with .Values.tolerations }}
+      automountServiceAccountToken: {{ .Values.serviceAccounts.preflight.automount }}
+      terminationGracePeriodSeconds: {{ .Values.preflight.terminationGracePeriodSeconds }}
+      {{- with .Values.preflight.tolerations }}
       tolerations:
         {{- toYaml . | trim | nindent 8 }}
       {{- end }}
@@ -160,6 +199,9 @@ spec:
           # note: the leading zero means this number is in octal representation: do not remove it
           defaultMode: 0400
           optional: true
+      {{- end }}
+      {{- with .Values.preflight.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- end }}
 {{- end }}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cilium/cilium/test/helpers/constants"
 	"github.com/onsi/ginkgo"
+
+	"github.com/cilium/cilium/test/helpers/constants"
 )
 
 // ContainerExec executes cmd in the container with the provided name along with
@@ -174,7 +175,8 @@ func (s *SSHMeta) SampleContainersActions(mode string, networkName string, creat
 	switch mode {
 	case Create:
 		for k, v := range images {
-			s.ContainerCreate(k, v, networkName, fmt.Sprintf("-l id.%s %s", k, createOptionsString))
+			res := s.ContainerCreate(k, v, networkName, fmt.Sprintf("-l id.%s %s", k, createOptionsString))
+			res.ExpectSuccess("failed to create container %s", k)
 		}
 		s.WaitEndpointsReady()
 	case Delete:

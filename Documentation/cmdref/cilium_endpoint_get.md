@@ -19,18 +19,18 @@ cilium endpoint get 4598, cilium endpoint get pod-name:default:foobar, cilium en
 ```
   -h, --help             help for get
   -l, --labels strings   list of labels
-  -o, --output string    json| jsonpath='{}'
+  -o, --output string    json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium endpoint](../cilium_endpoint)	 - Manage endpoints
+* [cilium endpoint](cilium_endpoint.md)	 - Manage endpoints
 

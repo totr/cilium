@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package metadata
 
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
+
+	"github.com/cilium/cilium/pkg/safeio"
 )
 
 func newClient() (*imds.Client, error) {
@@ -30,7 +31,7 @@ func getMetadata(client *imds.Client, path string) (string, error) {
 	}
 
 	defer res.Content.Close()
-	value, err := io.ReadAll(res.Content)
+	value, err := safeio.ReadAllLimit(res.Content, safeio.MB)
 	if err != nil {
 		return "", fmt.Errorf("unable to read response content for AWS metadata %q: %w", path, err)
 	}
@@ -39,7 +40,7 @@ func getMetadata(client *imds.Client, path string) (string, error) {
 }
 
 // GetInstanceMetadata returns required AWS metadatas
-func GetInstanceMetadata() (instanceID, instanceType, availabilityZone, vpcID string, err error) {
+func GetInstanceMetadata() (instanceID, instanceType, availabilityZone, vpcID, subnetID string, err error) {
 	client, err := newClient()
 	if err != nil {
 		return
@@ -61,6 +62,12 @@ func GetInstanceMetadata() (instanceID, instanceType, availabilityZone, vpcID st
 	}
 	vpcIDPath := fmt.Sprintf("network/interfaces/macs/%s/vpc-id", eth0MAC)
 	vpcID, err = getMetadata(client, vpcIDPath)
+	if err != nil {
+		return
+	}
+
+	subnetIDPath := fmt.Sprintf("network/interfaces/macs/%s/subnet-id", eth0MAC)
+	subnetID, err = getMetadata(client, subnetIDPath)
 	if err != nil {
 		return
 	}

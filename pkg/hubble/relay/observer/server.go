@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package observer
 
@@ -7,17 +7,17 @@ import (
 	"context"
 	"fmt"
 
-	observerpb "github.com/cilium/cilium/api/v1/observer"
-	relaypb "github.com/cilium/cilium/api/v1/relay"
-	"github.com/cilium/cilium/pkg/hubble/build"
-	poolTypes "github.com/cilium/cilium/pkg/hubble/relay/pool/types"
-
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	grpcStatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	observerpb "github.com/cilium/cilium/api/v1/observer"
+	relaypb "github.com/cilium/cilium/api/v1/relay"
+	"github.com/cilium/cilium/pkg/hubble/build"
+	poolTypes "github.com/cilium/cilium/pkg/hubble/relay/pool/types"
 )
 
 // numUnavailableNodesReportMax represents the maximum number of unavailable
@@ -304,7 +304,7 @@ func (s *Server) ServerStatus(ctx context.Context, req *observerpb.ServerStatusR
 		resp.SeenFlows += status.SeenFlows
 		// use the oldest uptime as a reference for the uptime as cumulating
 		// values would make little sense
-		if resp.UptimeNs == 0 || resp.UptimeNs > status.UptimeNs {
+		if resp.UptimeNs < status.UptimeNs {
 			resp.UptimeNs = status.UptimeNs
 		}
 	}

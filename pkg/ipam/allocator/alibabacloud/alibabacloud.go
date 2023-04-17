@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package alibabacloud
 
 import (
 	"context"
 	"fmt"
+
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
 
 	operatorMetrics "github.com/cilium/cilium/operator/metrics"
 	operatorOption "github.com/cilium/cilium/operator/option"
@@ -19,9 +22,6 @@ import (
 	ipamMetrics "github.com/cilium/cilium/pkg/ipam/metrics"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "ipam-allocator-alibaba-cloud")
@@ -37,7 +37,7 @@ func (a *AllocatorAlibabaCloud) Init(ctx context.Context) error {
 	var aMetrics openapi.MetricsAPI
 
 	if operatorOption.Config.EnableMetrics {
-		aMetrics = apiMetrics.NewPrometheusMetrics(operatorMetrics.Namespace, "alibaba-cloud", operatorMetrics.Registry)
+		aMetrics = apiMetrics.NewPrometheusMetrics(operatorMetrics.Namespace, "alibabacloud", operatorMetrics.Registry)
 	} else {
 		aMetrics = &apiMetrics.NoOpMetrics{}
 	}
@@ -63,6 +63,17 @@ func (a *AllocatorAlibabaCloud) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Send API requests to "vpc" network endpoints instead of the default "public" network
+	// endpoints, so the ECS instance hosting cilium-operator doesn't require public network access
+	// to reach alibabacloud API.
+	// vpc endpoints are spliced to the format: <product>-<network>.<region_id>.aliyuncs.com
+	// e.g. ecs-vpc.cn-shanghai.aliyuncs.com
+	// ref https://github.com/aliyun/alibaba-cloud-sdk-go/blob/master/docs/11-Endpoint-EN.md
+	vpcClient.Network = "vpc"
+	ecsClient.Network = "vpc"
+
+	vpcClient.GetConfig().WithScheme("HTTPS")
+	ecsClient.GetConfig().WithScheme("HTTPS")
 
 	a.client = openapi.NewClient(vpcClient, ecsClient, aMetrics, operatorOption.Config.IPAMAPIQPSLimit,
 		operatorOption.Config.IPAMAPIBurst, map[string]string{openapi.VPCID: vpcID})
@@ -89,7 +100,7 @@ func (a *AllocatorAlibabaCloud) Start(ctx context.Context, getterUpdater ipam.Ci
 	}
 	instances := eni.NewInstancesManager(a.client)
 	nodeManager, err := ipam.NewNodeManager(instances, getterUpdater, iMetrics,
-		operatorOption.Config.ParallelAllocWorkers, operatorOption.Config.AlibabaCloudReleaseExcessIPs)
+		operatorOption.Config.ParallelAllocWorkers, operatorOption.Config.AlibabaCloudReleaseExcessIPs, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize AlibabaCloud node manager: %w", err)
 	}

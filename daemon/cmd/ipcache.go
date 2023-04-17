@@ -1,24 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
 	"net"
 
+	"github.com/go-openapi/runtime/middleware"
+
 	"github.com/cilium/cilium/api/v1/models"
 	. "github.com/cilium/cilium/api/v1/server/restapi/policy"
 	"github.com/cilium/cilium/pkg/api"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/ipcache"
-
-	"github.com/go-openapi/runtime/middleware"
 )
 
-type getIP struct{}
+type getIP struct {
+	d *Daemon
+}
 
 // NewGetIPHandler for the global IP cache
-func NewGetIPHandler() GetIPHandler {
-	return &getIP{}
+func NewGetIPHandler(d *Daemon) GetIPHandler {
+	return &getIP{d: d}
 }
 
 func (h *getIP) Handle(params GetIPParams) middleware.Responder {
@@ -30,9 +33,7 @@ func (h *getIP) Handle(params GetIPParams) middleware.Responder {
 		}
 		listener.cidrFilter = cidrFilter
 	}
-	ipcache.IPIdentityCache.RLock()
-	ipcache.IPIdentityCache.DumpToListenerLocked(listener)
-	ipcache.IPIdentityCache.RUnlock()
+	h.d.ipcache.DumpToListener(listener)
 	if len(listener.entries) == 0 {
 		return NewGetIPNotFound()
 	}
@@ -47,8 +48,10 @@ type ipCacheDumpListener struct {
 
 // OnIPIdentityCacheChange is called by DumpToListenerLocked
 func (ipc *ipCacheDumpListener) OnIPIdentityCacheChange(modType ipcache.CacheModification,
-	cidr net.IPNet, oldHostIP, newHostIP net.IP, oldID *ipcache.Identity,
-	newID ipcache.Identity, encryptKey uint8, k8sMeta *ipcache.K8sMetadata) {
+	cidrCluster cmtypes.PrefixCluster, oldHostIP, newHostIP net.IP, oldID *ipcache.Identity,
+	newID ipcache.Identity, encryptKey uint8, _ uint16, k8sMeta *ipcache.K8sMetadata) {
+	cidr := cidrCluster.AsIPNet()
+
 	// only capture entries which are a subnet of cidrFilter
 	if ipc.cidrFilter != nil && !containsSubnet(*ipc.cidrFilter, cidr) {
 		return

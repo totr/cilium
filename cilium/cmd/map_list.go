@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,10 +9,10 @@ import (
 	"path"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 // mapListCmd represents the map_list command
@@ -31,7 +31,7 @@ var mapListCmd = &cobra.Command{
 			return
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(mapList); err != nil {
 				os.Exit(1)
 			}
@@ -76,6 +76,6 @@ func printMapList(mapList *models.BPFMapList) {
 
 func init() {
 	mapCmd.AddCommand(mapListCmd)
-	command.AddJSONOutput(mapListCmd)
+	command.AddOutputOption(mapListCmd)
 	mapListCmd.Flags().BoolVar(&verbose, "verbose", false, "Print cache contents of all maps")
 }

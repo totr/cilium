@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package exporter
 
@@ -13,14 +10,14 @@ import (
 	"io"
 	"testing"
 
+	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
-	"github.com/golang/protobuf/ptypes/timestamp"
-
-	"github.com/sirupsen/logrus"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestExporter(t *testing.T) {

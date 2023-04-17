@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package types
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 const (
 	// LostEventSourceUnspec indicates an event has been lost at an unknown
@@ -23,6 +27,8 @@ const (
 
 // MonitorEvent is the top-level type for all events consumed by the observer
 type MonitorEvent struct {
+	// UUID is a unique identifier for this event
+	UUID uuid.UUID
 	// Timestamp when the event was received by the consumer
 	Timestamp time.Time
 	// NodeName where the event occurred

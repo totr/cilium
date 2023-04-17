@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	endpointApi "github.com/cilium/cilium/api/v1/client/endpoint"
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/api"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 var lbls []string
@@ -48,7 +48,7 @@ var endpointGetCmd = &cobra.Command{
 			endpointInst = append(endpointInst, result)
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(endpointInst); err != nil {
 				os.Exit(1)
 			}
@@ -74,5 +74,5 @@ var endpointGetCmd = &cobra.Command{
 func init() {
 	endpointCmd.AddCommand(endpointGetCmd)
 	endpointGetCmd.Flags().StringSliceVarP(&lbls, "labels", "l", []string{}, "list of labels")
-	command.AddJSONOutput(endpointGetCmd)
+	command.AddOutputOption(endpointGetCmd)
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,12 +8,12 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	daemonAPI "github.com/cilium/cilium/api/v1/client/daemon"
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/api"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 // mapGetCmd represents the map_get command
@@ -22,7 +22,7 @@ var mapGetCmd = &cobra.Command{
 	Short:   "Display cached content of given BPF map",
 	Example: "cilium map get cilium_ipcache",
 	Run: func(cmd *cobra.Command, args []string) {
-		if len(args) == 0 {
+		if len(args) == 0 || args[0] == "" {
 			Fatalf("map name must be specified")
 		}
 
@@ -38,7 +38,7 @@ var mapGetCmd = &cobra.Command{
 			return
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(m); err != nil {
 				os.Exit(1)
 			}
@@ -73,5 +73,5 @@ func printMapEntries(m *models.BPFMap) {
 
 func init() {
 	mapCmd.AddCommand(mapGetCmd)
-	command.AddJSONOutput(mapGetCmd)
+	command.AddOutputOption(mapGetCmd)
 }

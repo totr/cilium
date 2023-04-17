@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package k8s
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
-	"time"
+
+	"github.com/sirupsen/logrus"
+	v1 "k8s.io/api/core/v1"
 
 	"github.com/cilium/cilium/pkg/annotation"
 	"github.com/cilium/cilium/pkg/cidr"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/comparator"
-	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/ip"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/k8s/utils"
@@ -21,15 +25,16 @@ import (
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 	serviceStore "github.com/cilium/cilium/pkg/service/store"
-
-	"github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
 )
 
-const annotationTopologyAwareHints = "service.kubernetes.io/topology-aware-hints"
+const (
+	serviceAffinityNone   = ""
+	serviceAffinityLocal  = "local"
+	serviceAffinityRemote = "remote"
+)
 
 func getAnnotationIncludeExternal(svc *slim_corev1.Service) bool {
-	if value, ok := svc.ObjectMeta.Annotations[annotation.GlobalService]; ok {
+	if value, ok := annotation.Get(svc, annotation.GlobalService, annotation.GlobalServiceAlias); ok {
 		return strings.ToLower(value) == "true"
 	}
 
@@ -37,15 +42,34 @@ func getAnnotationIncludeExternal(svc *slim_corev1.Service) bool {
 }
 
 func getAnnotationShared(svc *slim_corev1.Service) bool {
-	if value, ok := svc.ObjectMeta.Annotations[annotation.SharedService]; ok {
+	// The SharedService annotation is ignored if the service is not declared as global.
+	if !getAnnotationIncludeExternal(svc) {
+		return false
+	}
+
+	if value, ok := annotation.Get(svc, annotation.SharedService, annotation.SharedServiceAlias); ok {
 		return strings.ToLower(value) == "true"
 	}
 
-	return getAnnotationIncludeExternal(svc)
+	// A global service is marked as shared by default.
+	return true
+}
+
+func getAnnotationServiceAffinity(svc *slim_corev1.Service) string {
+	// The ServiceAffinity annotation is ignored if the service is not declared as global.
+	if !getAnnotationIncludeExternal(svc) {
+		return serviceAffinityNone
+	}
+
+	if value, ok := annotation.Get(svc, annotation.ServiceAffinity, annotation.ServiceAffinityAlias); ok {
+		return strings.ToLower(value)
+	}
+
+	return serviceAffinityNone
 }
 
 func getAnnotationTopologyAwareHints(svc *slim_corev1.Service) bool {
-	if value, ok := svc.ObjectMeta.Annotations[annotationTopologyAwareHints]; ok {
+	if value, ok := svc.ObjectMeta.Annotations[v1.AnnotationTopologyAwareHints]; ok {
 		return strings.ToLower(value) == "auto"
 	}
 
@@ -71,7 +95,7 @@ func ParseServiceID(svc *slim_corev1.Service) ServiceID {
 }
 
 // ParseService parses a Kubernetes service and returns a Service.
-func ParseService(svc *slim_corev1.Service, nodeAddressing datapath.NodeAddressing) (ServiceID, *Service) {
+func ParseService(svc *slim_corev1.Service, nodeAddressing types.NodeAddressing) (ServiceID, *Service) {
 	scopedLog := log.WithFields(logrus.Fields{
 		logfields.K8sSvcName:    svc.ObjectMeta.Name,
 		logfields.K8sNamespace:  svc.ObjectMeta.Namespace,
@@ -129,12 +153,20 @@ func ParseService(svc *slim_corev1.Service, nodeAddressing datapath.NodeAddressi
 		headless = true
 	}
 
-	var trafficPolicy loadbalancer.SVCTrafficPolicy
+	var extTrafficPolicy loadbalancer.SVCTrafficPolicy
 	switch svc.Spec.ExternalTrafficPolicy {
 	case slim_corev1.ServiceExternalTrafficPolicyTypeLocal:
-		trafficPolicy = loadbalancer.SVCTrafficPolicyLocal
+		extTrafficPolicy = loadbalancer.SVCTrafficPolicyLocal
 	default:
-		trafficPolicy = loadbalancer.SVCTrafficPolicyCluster
+		extTrafficPolicy = loadbalancer.SVCTrafficPolicyCluster
+	}
+
+	var intTrafficPolicy loadbalancer.SVCTrafficPolicy
+	switch svc.Spec.InternalTrafficPolicy {
+	case slim_corev1.ServiceInternalTrafficPolicyTypeLocal:
+		intTrafficPolicy = loadbalancer.SVCTrafficPolicyLocal
+	default:
+		intTrafficPolicy = loadbalancer.SVCTrafficPolicyCluster
 	}
 
 	for _, ip := range svc.Status.LoadBalancer.Ingress {
@@ -149,12 +181,13 @@ func ParseService(svc *slim_corev1.Service, nodeAddressing datapath.NodeAddressi
 	}
 
 	svcInfo := NewService(clusterIPs, svc.Spec.ExternalIPs, loadBalancerIPs,
-		lbSrcRanges, headless, trafficPolicy,
+		lbSrcRanges, headless, extTrafficPolicy, intTrafficPolicy,
 		uint16(svc.Spec.HealthCheckNodePort), svc.Labels, svc.Spec.Selector,
 		svc.GetNamespace(), svcType)
 
 	svcInfo.IncludeExternal = getAnnotationIncludeExternal(svc)
 	svcInfo.Shared = getAnnotationShared(svc)
+	svcInfo.ServiceAffinity = getAnnotationServiceAffinity(svc)
 
 	if svc.Spec.SessionAffinity == slim_corev1.ServiceAffinityClientIP {
 		svcInfo.SessionAffinity = true
@@ -201,7 +234,7 @@ func ParseService(svc *slim_corev1.Service, nodeAddressing datapath.NodeAddressi
 					utils.GetClusterIPByFamily(slim_corev1.IPv4Protocol, svc) != "" {
 
 					for _, ip := range nodeAddressing.IPv4().LoadBalancerNodeAddresses() {
-						nodePortFE := loadbalancer.NewL3n4AddrID(proto, ip, port,
+						nodePortFE := loadbalancer.NewL3n4AddrID(proto, cmtypes.MustAddrClusterFromIP(ip), port,
 							loadbalancer.ScopeExternal, id)
 						svcInfo.NodePorts[portName][nodePortFE.String()] = nodePortFE
 					}
@@ -210,7 +243,7 @@ func ParseService(svc *slim_corev1.Service, nodeAddressing datapath.NodeAddressi
 					utils.GetClusterIPByFamily(slim_corev1.IPv6Protocol, svc) != "" {
 
 					for _, ip := range nodeAddressing.IPv6().LoadBalancerNodeAddresses() {
-						nodePortFE := loadbalancer.NewL3n4AddrID(proto, ip, port,
+						nodePortFE := loadbalancer.NewL3n4AddrID(proto, cmtypes.MustAddrClusterFromIP(ip), port,
 							loadbalancer.ScopeExternal, id)
 						svcInfo.NodePorts[portName][nodePortFE.String()] = nodePortFE
 					}
@@ -226,12 +259,16 @@ func ParseService(svc *slim_corev1.Service, nodeAddressing datapath.NodeAddressi
 
 // ServiceID identifies the Kubernetes service
 type ServiceID struct {
+	Cluster   string `json:"cluster,omitempty"`
 	Name      string `json:"serviceName,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 }
 
 // String returns the string representation of a service ID
 func (s ServiceID) String() string {
+	if s.Cluster != "" {
+		return fmt.Sprintf("%s/%s/%s", s.Cluster, s.Namespace, s.Name)
+	}
 	return fmt.Sprintf("%s/%s", s.Namespace, s.Name)
 }
 
@@ -286,21 +323,29 @@ type Service struct {
 
 	// IncludeExternal is true when external endpoints from other clusters
 	// should be included
-	// +deepequal-gen=false
 	IncludeExternal bool
 
 	// Shared is true when the service should be exposed/shared to other clusters
-	// +deepequal-gen=false
 	Shared bool
 
-	// TrafficPolicy controls how backends are selected. If set to "Local", only
-	// node-local backends are chosen
-	TrafficPolicy loadbalancer.SVCTrafficPolicy
+	// ServiceAffinity determines the preferred endpoint destination (e.g. local
+	// vs remote clusters)
+	//
+	// Applicable values: local, remote, none (default).
+	ServiceAffinity string
+
+	// ExtTrafficPolicy controls how backends are selected for North-South traffic.
+	// If set to "Local", only node-local backends are chosen.
+	ExtTrafficPolicy loadbalancer.SVCTrafficPolicy
+
+	// IntTrafficPolicy controls how backends are selected for East-West traffic.
+	// If set to "Local", only node-local backends are chosen.
+	IntTrafficPolicy loadbalancer.SVCTrafficPolicy
 
 	// HealthCheckNodePort defines on which port the node runs a HTTP health
 	// check server which may be used by external loadbalancers to determine
 	// if a node has local backends. This will only have effect if both
-	// LoadBalancerIPs is not empty and TrafficPolicy is SVCTrafficPolicyLocal.
+	// LoadBalancerIPs is not empty and ExtTrafficPolicy is SVCTrafficPolicyLocal.
 	HealthCheckNodePort uint16
 
 	Ports map[loadbalancer.FEPortName]*loadbalancer.L4Addr
@@ -341,10 +386,14 @@ type Service struct {
 	TopologyAware bool
 }
 
-// DeepEqual returns true if both the receiver and 'o' are deeply equal.
+// DeepEqual returns true if s and other are deeply equal.
 func (s *Service) DeepEqual(other *Service) bool {
 	if s == nil {
 		return other == nil
+	}
+
+	if !s.deepEqual(other) {
+		return false
 	}
 
 	if !ip.UnsortedIPListsAreEqual(s.FrontendIPs, other.FrontendIPs) {
@@ -391,7 +440,7 @@ func (s *Service) DeepEqual(other *Service) bool {
 		}
 	}
 
-	return s.deepEqual(other)
+	return true
 }
 
 // String returns the string representation of a service resource
@@ -428,7 +477,7 @@ func parseIPs(externalIPs []string) map[string]net.IP {
 
 // NewService returns a new Service with the Ports map initialized.
 func NewService(ips []net.IP, externalIPs, loadBalancerIPs, loadBalancerSourceRanges []string,
-	headless bool, trafficPolicy loadbalancer.SVCTrafficPolicy,
+	headless bool, extTrafficPolicy, intTrafficPolicy loadbalancer.SVCTrafficPolicy,
 	healthCheckNodePort uint16, labels, selector map[string]string,
 	namespace string, svcType loadbalancer.SVCType) *Service {
 
@@ -444,8 +493,21 @@ func NewService(ips []net.IP, externalIPs, loadBalancerIPs, loadBalancerSourceRa
 		loadBalancerSourceCIDRs[cidr.String()] = cidr
 	}
 
+	// If EnableNodePort is not true we do not want to process
+	// events which only differ in external or load balancer IPs.
+	// By omitting these IPs in the returned Service object, they
+	// are no longer considered in equality checks and thus save
+	// CPU cycles processing events Cilium will not act upon.
 	if option.Config.EnableNodePort {
 		k8sExternalIPs = parseIPs(externalIPs)
+		k8sLoadBalancerIPs = parseIPs(loadBalancerIPs)
+	} else if option.Config.BGPAnnounceLBIP {
+		// The BGP LB Announcement feature requires that
+		// loadBalancerIPs be parsed. This is because
+		// an event must occur when a Service's Status field
+		// is updated with a new Ingress, ultimately triggering a
+		// BGP announcement. If we do not parse loadBalancerIPs
+		// this will not occur.
 		k8sLoadBalancerIPs = parseIPs(loadBalancerIPs)
 	}
 
@@ -454,7 +516,8 @@ func NewService(ips []net.IP, externalIPs, loadBalancerIPs, loadBalancerSourceRa
 		FrontendIPs: ips,
 
 		IsHeadless:          headless,
-		TrafficPolicy:       trafficPolicy,
+		ExtTrafficPolicy:    extTrafficPolicy,
+		IntTrafficPolicy:    intTrafficPolicy,
 		HealthCheckNodePort: healthCheckNodePort,
 
 		Ports:                    map[loadbalancer.FEPortName]*loadbalancer.L4Addr{},
@@ -505,9 +568,12 @@ func NewClusterService(id ServiceID, k8sService *Service, k8sEndpoints *Endpoint
 	}
 
 	svc.Backends = map[string]serviceStore.PortConfiguration{}
-	for ipString, backend := range k8sEndpoints.Backends {
-		svc.Backends[ipString] = backend.Ports
+	for addrCluster, backend := range k8sEndpoints.Backends {
+		svc.Backends[addrCluster.Addr().String()] = backend.Ports
 	}
+
+	svc.Shared = k8sService.Shared
+	svc.IncludeExternal = k8sService.IncludeExternal
 
 	return svc
 }
@@ -528,14 +594,15 @@ func NewClusterService(id ServiceID, k8sService *Service, k8sEndpoints *Endpoint
 // has the above wired in.
 func ParseClusterService(svc *serviceStore.ClusterService) *Service {
 	svcInfo := &Service{
-		IsHeadless:      len(svc.Frontends) == 0,
-		IncludeExternal: true,
-		Shared:          true,
-		TrafficPolicy:   loadbalancer.SVCTrafficPolicyCluster,
-		Ports:           map[loadbalancer.FEPortName]*loadbalancer.L4Addr{},
-		Labels:          svc.Labels,
-		Selector:        svc.Selector,
-		Type:            loadbalancer.SVCTypeClusterIP,
+		IsHeadless:       len(svc.Frontends) == 0,
+		IncludeExternal:  true,
+		Shared:           true,
+		ExtTrafficPolicy: loadbalancer.SVCTrafficPolicyCluster,
+		IntTrafficPolicy: loadbalancer.SVCTrafficPolicyCluster,
+		Ports:            map[loadbalancer.FEPortName]*loadbalancer.L4Addr{},
+		Labels:           svc.Labels,
+		Selector:         svc.Selector,
+		Type:             loadbalancer.SVCTypeClusterIP,
 	}
 
 	feIPs := make([]net.IP, len(svc.Frontends))
@@ -584,9 +651,10 @@ func (s *Service) EqualsClusterService(svc *serviceStore.ClusterService) bool {
 	// These comparisons must match the ParseClusterService() function above.
 	if ip.UnsortedIPListsAreEqual(s.FrontendIPs, feIPs) &&
 		s.IsHeadless == (len(svc.Frontends) == 0) &&
-		s.IncludeExternal == true &&
-		s.Shared == true &&
-		s.TrafficPolicy == loadbalancer.SVCTrafficPolicyCluster &&
+		s.IncludeExternal &&
+		s.Shared &&
+		s.ExtTrafficPolicy == loadbalancer.SVCTrafficPolicyCluster &&
+		s.IntTrafficPolicy == loadbalancer.SVCTrafficPolicyCluster &&
 		s.HealthCheckNodePort == 0 &&
 		len(s.NodePorts) == 0 &&
 		len(s.K8sExternalIPs) == 0 &&
@@ -623,21 +691,36 @@ type ServiceIPGetter interface {
 // CreateCustomDialer returns a custom dialer that picks the service IP,
 // from the given ServiceIPGetter, if the address the used to dial is a k8s
 // service.
-func CreateCustomDialer(b ServiceIPGetter, log *logrus.Entry) func(s string, duration time.Duration) (conn net.Conn, e error) {
-	return func(s string, duration time.Duration) (conn net.Conn, e error) {
+func CreateCustomDialer(b ServiceIPGetter, log *logrus.Entry) func(ctx context.Context, addr string) (conn net.Conn, e error) {
+	return func(ctx context.Context, s string) (conn net.Conn, e error) {
 		// If the service is available, do the service translation to
 		// the service IP. Otherwise dial with the original service
 		// name `s`.
 		u, err := url.Parse(s)
 		if err == nil {
-			svc := ParseServiceIDFrom(u.Host)
+			var svc *ServiceID
+			// In etcd v3.5.0, 's' doesn't contain the URL Scheme and the u.Host
+			// will be empty because url.Parse will consider the "host" as the
+			// url Scheme. If 's' doesn't contain the URL Scheme then we will be
+			// able to parse the service ID directly from it without the need
+			// to do url.Parse.
+			if u.Host != "" {
+				svc = ParseServiceIDFrom(u.Host)
+			} else {
+				svc = ParseServiceIDFrom(s)
+			}
 			if svc != nil {
 				svcIP := b.GetServiceIP(*svc)
 				if svcIP != nil {
 					s = svcIP.String()
+				} else {
+					log.Debug("Service not found in the service IP getter")
 				}
 			} else {
-				log.Debug("Service not found")
+				log.WithFields(logrus.Fields{
+					"url-host": u.Host,
+					"url":      s,
+				}).Debug("Unable to parse etcd service URL into a service ID")
 			}
 			log.Debugf("custom dialer based on k8s service backend is dialing to %q", s)
 		} else {

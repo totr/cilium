@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package linux
 
 import (
-	"github.com/cilium/cilium/pkg/datapath"
 	"github.com/cilium/cilium/pkg/datapath/linux/config"
 	"github.com/cilium/cilium/pkg/datapath/loader"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
+	"github.com/cilium/cilium/pkg/maps/lbmap"
 )
 
 // DatapathConfiguration is the static configuration of the datapath. The
@@ -14,6 +15,8 @@ import (
 type DatapathConfiguration struct {
 	// HostDevice is the name of the device to be used to access the host.
 	HostDevice string
+
+	ProcFs string
 }
 
 type linuxDatapath struct {
@@ -24,6 +27,7 @@ type linuxDatapath struct {
 	config         DatapathConfiguration
 	loader         *loader.Loader
 	wgAgent        datapath.WireguardAgent
+	lbmap          datapath.LBMap
 }
 
 // NewDatapath creates a new Linux datapath
@@ -33,8 +37,9 @@ func NewDatapath(cfg DatapathConfiguration, ruleManager datapath.IptablesManager
 		IptablesManager: ruleManager,
 		nodeAddressing:  NewNodeAddressing(),
 		config:          cfg,
-		loader:          loader.NewLoader(canDisableDwarfRelocations),
+		loader:          loader.NewLoader(),
 		wgAgent:         wgAgent,
+		lbmap:           lbmap.New(),
 	}
 
 	dp.node = NewNodeHandler(cfg, dp.nodeAddressing, wgAgent)
@@ -58,4 +63,12 @@ func (l *linuxDatapath) Loader() datapath.Loader {
 
 func (l *linuxDatapath) WireguardAgent() datapath.WireguardAgent {
 	return l.wgAgent
+}
+
+func (l *linuxDatapath) Procfs() string {
+	return l.config.ProcFs
+}
+
+func (l *linuxDatapath) LBMap() datapath.LBMap {
+	return l.lbmap
 }

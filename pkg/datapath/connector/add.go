@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package connector
 
@@ -7,12 +7,12 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/rand"
 	"github.com/cilium/cilium/pkg/sysctl"
-
-	"golang.org/x/sys/unix"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "endpoint-connector")

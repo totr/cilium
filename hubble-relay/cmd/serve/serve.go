@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package serve
 
@@ -8,27 +8,31 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/google/gops/agent"
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"golang.org/x/sys/unix"
+
 	"github.com/cilium/cilium/pkg/crypto/certloader"
 	"github.com/cilium/cilium/pkg/hubble/relay/defaults"
 	"github.com/cilium/cilium/pkg/hubble/relay/server"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/pprof"
-
-	"github.com/google/gops/agent"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"golang.org/x/sys/unix"
 )
 
 const (
+	keyClusterName            = "cluster-name"
 	keyPprof                  = "pprof"
+	keyPprofAddress           = "pprof-address"
 	keyPprofPort              = "pprof-port"
 	keyGops                   = "gops"
 	keyGopsPort               = "gops-port"
 	keyDialTimeout            = "dial-timeout"
 	keyRetryTimeout           = "retry-timeout"
 	keyListenAddress          = "listen-address"
+	keyMetricsListenAddress   = "metrics-listen-address"
 	keyPeerService            = "peer-service"
 	keySortBufferMaxLen       = "sort-buffer-len-max"
 	keySortBufferDrainTimeout = "sort-buffer-drain-timeout"
@@ -52,11 +56,18 @@ func New(vp *viper.Viper) *cobra.Command {
 		},
 	}
 	flags := cmd.Flags()
+	flags.String(
+		keyClusterName,
+		defaults.ClusterName,
+		"Name of the current cluster")
 	flags.Bool(
 		keyPprof, false, "Enable serving the pprof debugging API",
 	)
+	flags.String(
+		keyPprofAddress, defaults.PprofAddress, "Address that pprof listens on",
+	)
 	flags.Int(
-		keyPprofPort, defaults.PprofPort, "Port that the pprof listens on",
+		keyPprofPort, defaults.PprofPort, "Port that pprof listens on",
 	)
 	flags.Bool(
 		keyGops, true, "Run gops agent",
@@ -78,8 +89,12 @@ func New(vp *viper.Viper) *cobra.Command {
 		defaults.ListenAddress,
 		"Address on which to listen")
 	flags.String(
+		keyMetricsListenAddress,
+		"",
+		"Address on which to listen for metrics")
+	flags.String(
 		keyPeerService,
-		defaults.HubbleTarget,
+		defaults.PeerTarget,
 		"Address of the server that implements the peer gRPC service")
 	flags.Int(
 		keySortBufferMaxLen,
@@ -136,13 +151,26 @@ func runServe(vp *viper.Viper) error {
 	logger := logging.DefaultLogger.WithField(logfields.LogSubsys, "hubble-relay")
 
 	opts := []server.Option{
+		server.WithLocalClusterName(vp.GetString(keyClusterName)),
 		server.WithDialTimeout(vp.GetDuration(keyDialTimeout)),
-		server.WithHubbleTarget(vp.GetString(keyPeerService)),
+		server.WithPeerTarget(vp.GetString(keyPeerService)),
 		server.WithListenAddress(vp.GetString(keyListenAddress)),
 		server.WithRetryTimeout(vp.GetDuration(keyRetryTimeout)),
 		server.WithSortBufferMaxLen(vp.GetInt(keySortBufferMaxLen)),
 		server.WithSortBufferDrainTimeout(vp.GetDuration(keySortBufferDrainTimeout)),
 		server.WithLogger(logger),
+	}
+
+	metricsListenAddress := vp.GetString(keyMetricsListenAddress)
+	if metricsListenAddress != "" {
+		grpcMetrics := grpc_prometheus.NewServerMetrics()
+		opts = append(
+			opts,
+			server.WithMetricsListenAddress(metricsListenAddress),
+			server.WithGRPCMetrics(grpcMetrics),
+			server.WithGRPCStreamInterceptor(grpcMetrics.StreamServerInterceptor()),
+			server.WithGRPCUnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
+		)
 	}
 
 	// Relay to Hubble TLS/mTLS setup.
@@ -180,7 +208,7 @@ func runServe(vp *viper.Viper) error {
 	}
 
 	if vp.GetBool(keyPprof) {
-		pprof.Enable(vp.GetInt(keyPprofPort))
+		pprof.Enable(vp.GetString(keyPprofAddress), vp.GetInt(keyPprofPort))
 	}
 	gopsEnabled := vp.GetBool(keyGops)
 	if gopsEnabled {

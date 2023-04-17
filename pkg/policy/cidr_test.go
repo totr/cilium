@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package policy
 
 import (
-	"net"
+	"net/netip"
+
+	. "gopkg.in/check.v1"
 
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	. "gopkg.in/check.v1"
 )
 
 func (ds *PolicyTestSuite) TestgetPrefixesFromCIDR(c *C) {
@@ -26,11 +23,10 @@ func (ds *PolicyTestSuite) TestgetPrefixesFromCIDR(c *C) {
 		"::/0":         "::/0",
 		"fdff::ff":     "fdff::ff/128",
 	}
-	expected := []*net.IPNet{}
+	expected := []netip.Prefix{}
 	inputs := []api.CIDR{}
 	for ruleStr, cidr := range inputToCIDRString {
-		_, net, err := net.ParseCIDR(cidr)
-		c.Assert(err, IsNil)
+		net := netip.MustParsePrefix(cidr)
 		expected = append(expected, net)
 		inputs = append(inputs, api.CIDR(ruleStr))
 	}
@@ -70,10 +66,9 @@ func (ds *PolicyTestSuite) TestGetCIDRPrefixes(c *C) {
 		"192.0.2.0/24",
 		"192.0.3.0/24",
 	}
-	expectedCIDRs := []*net.IPNet{}
+	expectedCIDRs := []netip.Prefix{}
 	for _, ipStr := range expectedCIDRStrings {
-		_, cidr, err := net.ParseCIDR(ipStr)
-		c.Assert(err, IsNil)
+		cidr := netip.MustParsePrefix(ipStr)
 		expectedCIDRs = append(expectedCIDRs, cidr)
 	}
 	c.Assert(GetCIDRPrefixes(rules), checker.DeepEquals, expectedCIDRs)
@@ -123,10 +118,9 @@ func (ds *PolicyTestSuite) TestGetCIDRPrefixes(c *C) {
 		"10.1.0.0/16",
 		// Not "10.0.0.0/16",
 	}
-	expectedCIDRs = []*net.IPNet{}
+	expectedCIDRs = []netip.Prefix{}
 	for _, ipStr := range expectedCIDRStrings {
-		_, cidr, err := net.ParseCIDR(ipStr)
-		c.Assert(err, IsNil)
+		cidr := netip.MustParsePrefix(ipStr)
 		expectedCIDRs = append(expectedCIDRs, cidr)
 	}
 	c.Assert(GetCIDRPrefixes(rules), checker.DeepEquals, expectedCIDRs)

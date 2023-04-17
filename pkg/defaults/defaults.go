@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package defaults
 
@@ -9,10 +9,13 @@ import (
 
 const (
 	// AgentHealthPort is the default value for option.AgentHealthPort
-	AgentHealthPort = 9876
+	AgentHealthPort = 9879
 
 	// ClusterHealthPort is the default value for option.ClusterHealthPort
 	ClusterHealthPort = 4240
+
+	// ClusterMeshHealthPort is the default value for option.ClusterMeshHealthPort
+	ClusterMeshHealthPort = 80
 
 	// GopsPortAgent is the default value for option.GopsPort in the agent
 	GopsPortAgent = 9890
@@ -28,6 +31,12 @@ const (
 
 	// IPv6ClusterAllocCIDRBase is the default base for IPv6ClusterAllocCIDR
 	IPv6ClusterAllocCIDRBase = "f00d::"
+
+	// IPv6NAT46x64CIDR is the default prefix for NAT46x64 gateway
+	IPv6NAT46x64CIDR = IPv6NAT46x64CIDRBase + "/96"
+
+	// IPv6NAT46x64CIDRBase is the default base for IPv6NAT46x64CIDR
+	IPv6NAT46x64CIDRBase = "64:ff9b::"
 
 	// RuntimePath is the default path to the runtime directory
 	RuntimePath = "/var/run/cilium"
@@ -82,33 +91,42 @@ const (
 	// PidFilePath is the path to the pid file for the agent.
 	PidFilePath = RuntimePath + "/cilium.pid"
 
+	// DeletionQueueDir is the directory used for the CNI plugin to queue deletion requests
+	// if the agent is down
+	DeleteQueueDir = RuntimePath + "/deleteQueue"
+
+	// DeleteQueueLockfile is the file used to synchronize access of the queue directory between
+	// the agent and the CNI plugin processes
+	DeleteQueueLockfile = DeleteQueueDir + "/lockfile"
+
 	// EnableHostIPRestore controls whether the host IP should be restored
 	// from previous state automatically
 	EnableHostIPRestore = true
 
-	// DefaultMapRoot is the default path where BPFFS should be mounted
-	DefaultMapRoot = "/sys/fs/bpf"
+	// BPFFSRoot is the default path where BPFFS should be mounted
+	BPFFSRoot = "/sys/fs/bpf"
+
+	// BPFFSRootFallback is the path which is used when /sys/fs/bpf has
+	// a mount, but with the other filesystem than BPFFS.
+	BPFFSRootFallback = "/run/cilium/bpffs"
+
+	// TCGlobalsPath is the default prefix for all BPF maps.
+	TCGlobalsPath = "tc/globals"
 
 	// DefaultCgroupRoot is the default path where cilium cgroup2 should be mounted
 	DefaultCgroupRoot = "/run/cilium/cgroupv2"
-
-	// SockopsEnable controsl whether sockmap should be used
-	SockopsEnable = false
-
-	// DefaultMapRootFallback is the path which is used when /sys/fs/bpf has
-	// a mount, but with the other filesystem than BPFFS.
-	DefaultMapRootFallback = "/run/cilium/bpffs"
-
-	// DefaultMapPrefix is the default prefix for all BPF maps.
-	DefaultMapPrefix = "tc/globals"
 
 	// DNSMaxIPsPerRestoredRule defines the maximum number of IPs to maintain
 	// for each FQDN selector in endpoint's restored DNS rules.
 	DNSMaxIPsPerRestoredRule = 1000
 
+	// FFQDNRegexCompileLRUSize defines the maximum size for the FQDN regex
+	// compilation LRU used by the DNS proxy and policy validation.
+	FQDNRegexCompileLRUSize = 1024
+
 	// ToFQDNsMinTTL is the default lower bound for TTLs used with ToFQDNs rules.
 	// This is used in DaemonConfig.Populate
-	ToFQDNsMinTTL = 3600 // 1 hour in seconds
+	ToFQDNsMinTTL = 0
 
 	// ToFQDNsMaxIPsPerHost defines the maximum number of IPs to maintain
 	// for each FQDN name in an endpoint's FQDN cache
@@ -123,6 +141,11 @@ const (
 	// still considered alive
 	ToFQDNsIdleConnectionGracePeriod = 0 * time.Second
 
+	// FQDNProxyResponseMaxDelay The maximum time the DNS proxy holds an allowed
+	// DNS response before sending it along. Responses are sent as soon as the
+	//datapath is updated with the new IP information.
+	FQDNProxyResponseMaxDelay = 100 * time.Millisecond
+
 	// ToFQDNsPreCache is a path to a file with DNS cache data to insert into the
 	// global cache on startup.
 	// The file is not re-read after agent start.
@@ -135,6 +158,10 @@ const (
 	// IdentityChangeGracePeriod is the default value for
 	// option.IdentityChangeGracePeriod
 	IdentityChangeGracePeriod = 5 * time.Second
+
+	// IdentityRestoreGracePeriod is the default value for
+	// option.IdentityRestoreGracePeriod
+	IdentityRestoreGracePeriod = 10 * time.Minute
 
 	// ExecTimeout is a timeout for executing commands.
 	ExecTimeout = 300 * time.Second
@@ -159,8 +186,20 @@ const (
 	// EnableIPv6NDP is the default value for IPv6 NDP support enablement
 	EnableIPv6NDP = false
 
+	// EnableSRv6 is the default value for the SRv6 support enablement.
+	EnableSRv6 = false
+
+	// SRv6EncapMode is the encapsulation mode for SRv6.
+	SRv6EncapMode = "reduced"
+
+	// EnableSCTP is the default value for SCTP support enablement
+	EnableSCTP = false
+
 	// EnableL7Proxy is the default value for L7 proxy enablement
 	EnableL7Proxy = true
+
+	// EnvoyConfigTimeout determines how long to wait Envoy to N/ACK resources
+	EnvoyConfigTimeout = 2 * time.Minute
 
 	// EnableHostLegacyRouting is the default value for using the old routing path via stack.
 	EnableHostLegacyRouting = false
@@ -180,6 +219,10 @@ const (
 	// EncryptNode enables encrypting traffic from host networking applications
 	// which are not part of Cilium manged pods.
 	EncryptNode = false
+
+	// NodeEncryptionOptOutLabels contains the label selectors for nodes opting out of
+	// node-to-node encryption
+	NodeEncryptionOptOutLabels = "node-role.kubernetes.io/control-plane"
 
 	// MonitorQueueSizePerCPU is the default value for the monitor queue
 	// size per CPU
@@ -248,12 +291,8 @@ const (
 	// EndpointQueueSize is the default queue size for an endpoint.
 	EndpointQueueSize = 25
 
-	// SelectiveRegeneration specifies whether regeneration of endpoints will be
-	// invoked only for endpoints which are selected by policy changes.
-	SelectiveRegeneration = true
-
-	// K8sSyncTimeout specifies the standard time to allow for synchronizing
-	// local caches with Kubernetes state before exiting.
+	// K8sSyncTimeout specifies the default time to wait after the last event
+	// of a Kubernetes resource type before timing out while waiting for synchronization.
 	K8sSyncTimeout = 3 * time.Minute
 
 	// AllocatorListTimeout specifies the standard time to allow for listing
@@ -266,9 +305,6 @@ const (
 
 	// ConntrackGCMaxLRUInterval is the maximum conntrack GC interval when using LRU maps
 	ConntrackGCMaxLRUInterval = 12 * time.Hour
-
-	// ConntrackGCMaxInterval is the maximum conntrack GC interval for non-LRU maps
-	ConntrackGCMaxInterval = 30 * time.Minute
 
 	// ConntrackGCMinInterval is the minimum conntrack GC interval
 	ConntrackGCMinInterval = 10 * time.Second
@@ -286,23 +322,14 @@ const (
 	// LoopbackIPv4 is the default address for service loopback
 	LoopbackIPv4 = "169.254.42.1"
 
-	// EndpointInterfaceNamePrefix is the default prefix name of the
-	// interface names shared by all endpoints
-	EndpointInterfaceNamePrefix = "lxc+"
-
-	// ForceLocalPolicyEvalAtSource is the default value for
-	// option.ForceLocalPolicyEvalAtSource. It is enabled by default to
-	// provide backwards compatibility, it can be disabled via an option
-	ForceLocalPolicyEvalAtSource = true
-
 	// EnableEndpointRoutes is the value for option.EnableEndpointRoutes.
 	// It is disabled by default for backwards compatibility.
 	EnableEndpointRoutes = false
 
 	// AnnotateK8sNode is the default value for option.AnnotateK8sNode. It is
-	// enabled by default to annotate kubernetes node and can be disabled using
+	// disabled by default to annotate kubernetes node and can be enabled using
 	// the provided option.
-	AnnotateK8sNode = true
+	AnnotateK8sNode = false
 
 	// MonitorBufferPages is the default number of pages to use for the
 	// ring buffer interacting with the kernel
@@ -339,14 +366,51 @@ const (
 	// CiliumNode.Spec.ENI.FirstInterfaceIndex if no value is set.
 	ENIFirstInterfaceIndex = 0
 
+	// UseENIPrimaryAddress is the default value for
+	// CiliumNode.Spec.ENI.UsePrimaryAddress if no value is set.
+	UseENIPrimaryAddress = false
+
+	// ENIDisableNodeLevelPD  is the default value for
+	// CiliumNode.Spec.ENI.DisablePrefixDelegation if no value is set.
+	ENIDisableNodeLevelPD = false
+
+	// ENIGarbageCollectionTagManagedName is part of the ENIGarbageCollectionTags default tag set
+	ENIGarbageCollectionTagManagedName = "io.cilium/cilium-managed"
+
+	// ENIGarbageCollectionTagManagedValue is part of the ENIGarbageCollectionTags default tag set
+	ENIGarbageCollectionTagManagedValue = "true"
+
+	// ENIGarbageCollectionTagClusterName is part of the ENIGarbageCollectionTags default tag set
+	ENIGarbageCollectionTagClusterName = "io.cilium/cluster-name"
+
+	// ENIGarbageCollectionTagClusterValue is part of the ENIGarbageCollectionTags default tag set
+	ENIGarbageCollectionTagClusterValue = ClusterName
+
+	// ENIGarbageCollectionInterval is the default interval for the ENIGarbageCollectionInterval operator flag
+	ENIGarbageCollectionInterval = 5 * time.Minute
+
+	// ENIGarbageCollectionMaxPerInterval is the maximum number of ENIs which might be garbage collected
+	// per GC interval
+	ENIGarbageCollectionMaxPerInterval = 25
+
 	// ParallelAllocWorkers is the default max number of parallel workers doing allocation in the operator
 	ParallelAllocWorkers = 50
 
 	// IPAMAPIBurst is the default burst value when rate limiting access to external APIs
-	IPAMAPIBurst = 4
+	IPAMAPIBurst = 20
 
 	// IPAMAPIQPSLimit is the default QPS limit when rate limiting access to external APIs
-	IPAMAPIQPSLimit = 20.0
+	IPAMAPIQPSLimit = 4.0
+
+	// IPAMPodCIDRAllocationThreshold is the default value for
+	// CiliumNode.Spec.IPAM.PodCIDRAllocationThreshold if no value is set
+	// Defaults to 8, which is similar to IPAMPreAllocation
+	IPAMPodCIDRAllocationThreshold = 8
+
+	// IPAMPodCIDRReleaseThreshold is the default value for
+	// CiliumNode.Spec.IPAM.PodCIDRReleaseThreshold if no value is set
+	// Defaults to 16, which is 2x the allocation threshold to avoid flapping
+	IPAMPodCIDRReleaseThreshold = 16
 
 	// AutoCreateCiliumNodeResource enables automatic creation of a
 	// CiliumNode resource for the local node
@@ -388,7 +452,7 @@ const (
 	CertsDirectory = RuntimePath + "/certs"
 
 	// EnableRemoteNodeIdentity is the default value for option.EnableRemoteNodeIdentity
-	EnableRemoteNodeIdentity = false
+	EnableRemoteNodeIdentity = true
 
 	// IPAMExpiration is the timeout after which an IP subject to expiratio
 	// is being released again if no endpoint is being created in time.
@@ -402,7 +466,7 @@ const (
 	// the map used to track datagram fragments.
 	FragmentsMapEntries = 8192
 
-	// K8sEnableAPIDiscovery defines whether Kuberntes API groups and
+	// K8sEnableAPIDiscovery defines whether Kubernetes API groups and
 	// resources should be probed using the discovery API
 	K8sEnableAPIDiscovery = false
 
@@ -432,7 +496,13 @@ const (
 	ExternalClusterIP = false
 
 	// EnableICMPRules enables ICMP-based rule support for Cilium Network Policies.
-	EnableICMPRules = false
+	EnableICMPRules = true
+
+	// RoutingMode enables choosing between native routing mode or tunneling mode.
+	RoutingMode = "tunnel"
+
+	// TunnelProtocol is the default tunneling protocol
+	TunnelProtocol = "vxlan"
 
 	// TunnelPortVXLAN is the default VXLAN port
 	TunnelPortVXLAN = 8472
@@ -441,4 +511,46 @@ const (
 
 	// ARPBaseReachableTime resembles the kernel's NEIGH_VAR_BASE_REACHABLE_TIME which defaults to 30 seconds.
 	ARPBaseReachableTime = 30 * time.Second
+
+	// EnableVTEP enables VXLAN Tunnel Endpoint (VTEP) Integration
+	EnableVTEP     = false
+	MaxVTEPDevices = 8
+
+	// Enable BGP control plane features.
+	EnableBGPControlPlane = false
+
+	// EnableK8sNetworkPolicy enables support for K8s NetworkPolicy.
+	EnableK8sNetworkPolicy = true
+)
+
+var (
+	// BPFEventBufferConfigs contains default configuration entries for bpf map event buffers.
+	// These are to be merged with the client configuration to create the final config.
+	// Note: The TTL corresponds to GC interval times, which is a somewhat expensive operation.
+	// Under the worst case GC may need to memcopy almost the entire buffer, which will
+	// cause memory spikes. Be mindful of this when increasing the default buffer configurations.
+	BPFEventBufferConfigs = map[string]string{
+		"cilium_lxc": "enabled,128,0",
+		// cilium_ipcache is the likely the most useful use of this feature, but also has
+		// the highest churn.
+		"cilium_ipcache":           "enabled,1024,0",
+		"cilium_tunnel_map":        "enabled,128,0",
+		"cilium_lb_affinity_match": "enabled,128,0",
+
+		// ip4
+		"cilium_lb4_services_v2":    "enabled,128,0",
+		"cilium_lb4_backends_v2":    "enabled,128,0",
+		"cilium_lb4_reverse_nat":    "enabled,128,0",
+		"cilium_lb4_backends_v3":    "enabled,128,0",
+		"cilium_lb4_source_range":   "enabled,128,0",
+		"cilium_lb4_affinity_match": "enabled,128,0",
+
+		// ip6
+		"cilium_lb6_services_v2":    "enabled,128,0",
+		"cilium_lb6_backends_v2":    "enabled,128,0",
+		"cilium_lb6_reverse_nat":    "enabled,128,0",
+		"cilium_lb6_backends_v3":    "enabled,128,0",
+		"cilium_lb6_source_range":   "enabled,128,0",
+		"cilium_lb6_affinity_match": "enabled,128,0",
+	}
 )

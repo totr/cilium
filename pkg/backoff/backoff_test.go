@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package backoff
 
@@ -45,6 +42,14 @@ func (f *fakeNodeManager) ClusterSizeDependantInterval(baseInterval time.Duratio
 
 	waitNanoseconds := float64(baseInterval.Nanoseconds()) * math.Log1p(float64(numNodes))
 	return time.Duration(int64(waitNanoseconds))
+}
+
+func (b *BackoffSuite) TestNewNodeManager(c *check.C) {
+	mgr := NewNodeManager(func(baseInterval time.Duration) time.Duration { return 2 * baseInterval })
+	c.Assert(mgr.ClusterSizeDependantInterval(1*time.Second), check.Equals, 2*time.Second)
+
+	mgr = NewNodeManager(nil)
+	c.Assert(mgr.ClusterSizeDependantInterval(1*time.Second), check.Equals, 1*time.Second)
 }
 
 func (b *BackoffSuite) TestClusterSizeDependantInterval(c *check.C) {

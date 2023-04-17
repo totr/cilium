@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build privileged_tests
-// +build privileged_tests
+// Copyright Authors of Cilium
 
 package config
 
@@ -11,20 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"strings"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/bpf"
-	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/vishvananda/netlink"
+	. "gopkg.in/check.v1"
+
+	"github.com/cilium/ebpf/rlimit"
+
 	"github.com/cilium/cilium/pkg/datapath/loader"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/testutils"
-
-	"github.com/vishvananda/netlink"
-
-	. "gopkg.in/check.v1"
 )
 
 type ConfigSuite struct{}
@@ -39,20 +37,22 @@ var (
 	dummyNodeCfg  = datapath.LocalNodeConfiguration{}
 	dummyDevCfg   = testutils.NewTestEndpoint()
 	dummyEPCfg    = testutils.NewTestEndpoint()
-	ipv4DummyAddr = []byte{192, 0, 2, 3}
-	ipv6DummyAddr = []byte{0x20, 0x01, 0xdb, 0x8, 0x0b, 0xad, 0xca, 0xfe, 0x60, 0x0d, 0xbe, 0xe2, 0x0b, 0xad, 0xca, 0xfe}
+	ipv4DummyAddr = netip.MustParseAddr("192.0.2.3")
+	ipv6DummyAddr = netip.MustParseAddr("2001:db08:0bad:cafe:600d:bee2:0bad:cafe")
 )
 
 func (s *ConfigSuite) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
+
 	ctmap.InitMapInfo(option.CTMapEntriesGlobalTCPDefault, option.CTMapEntriesGlobalAnyDefault, true, true, true)
 }
 
 func (s *ConfigSuite) SetUpTest(c *C) {
-	err := bpf.ConfigureResourceLimits()
+	err := rlimit.RemoveMemlock()
 	c.Assert(err, IsNil)
 	node.InitDefaultPrefix("")
-	node.SetInternalIPv4Router(ipv4DummyAddr)
-	node.SetIPv4Loopback(ipv4DummyAddr)
+	node.SetInternalIPv4Router(ipv4DummyAddr.AsSlice())
+	node.SetIPv4Loopback(ipv4DummyAddr.AsSlice())
 }
 
 func (s *ConfigSuite) TearDownTest(c *C) {
@@ -145,7 +145,7 @@ func (s *ConfigSuite) TestWriteEndpointConfig(c *C) {
 			preTestRun: func(t *testutils.TestEndpoint, e *testutils.TestEndpoint) {
 				option.Config.EnableIPv6 = false
 				t.IPv6 = ipv6DummyAddr // Template bpf prog always has dummy IPv6
-				e.IPv6 = nil           // This endpoint does not have an IPv6 addr
+				e.IPv6 = netip.Addr{}  // This endpoint does not have an IPv6 addr
 			},
 			templateExp: true,
 			endpointExp: false,
@@ -181,7 +181,7 @@ func (s *ConfigSuite) TestWriteEndpointConfig(c *C) {
 			preTestRun: func(t *testutils.TestEndpoint, e *testutils.TestEndpoint) {
 				option.Config.EnableIPv6 = true
 				t.IPv6 = ipv6DummyAddr
-				e.IPv6 = nil
+				e.IPv6 = netip.Addr{}
 			},
 			templateExp: true,
 			endpointExp: false,
@@ -267,9 +267,9 @@ func createVlanLink(vlanId int, mainLink *netlink.Dummy, c *C) *netlink.Vlan {
 }
 
 func (s *ConfigSuite) TestVLANBypassConfig(c *C) {
-	oldDevices := option.Config.Devices
+	oldDevices := option.Config.GetDevices()
 	defer func() {
-		option.Config.Devices = oldDevices
+		option.Config.SetDevices(oldDevices)
 	}()
 
 	main1 := createMainLink("dummy0", c)
@@ -296,7 +296,7 @@ func (s *ConfigSuite) TestVLANBypassConfig(c *C) {
 		}()
 	}
 
-	option.Config.Devices = []string{"dummy0", "dummy0.4000", "dummy0.4001", "dummy1", "dummy1.4003"}
+	option.Config.SetDevices([]string{"dummy0", "dummy0.4000", "dummy0.4001", "dummy1", "dummy1.4003"})
 	option.Config.VLANBPFBypass = []int{4004}
 	m, err := vlanFilterMacros()
 	c.Assert(err, Equals, nil)

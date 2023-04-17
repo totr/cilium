@@ -25,14 +25,14 @@ cilium kvstore set foo=bar
 ### Options inherited from parent commands
 
 ```
-      --config string     config file (default is $HOME/.cilium.yaml)
+      --config string     Config file (default is $HOME/.cilium.yaml)
   -D, --debug             Enable debug messages
   -H, --host string       URI to server-side API
-      --kvstore string    kvstore type
-      --kvstore-opt map   kvstore options (default map[])
+      --kvstore string    Key-Value Store type
+      --kvstore-opt map   Key-Value Store options
 ```
 
 ### SEE ALSO
 
-* [cilium kvstore](../cilium_kvstore)	 - Direct access to the kvstore
+* [cilium kvstore](cilium_kvstore.md)	 - Direct access to the kvstore
 

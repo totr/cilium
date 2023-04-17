@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package api
 
@@ -10,8 +7,11 @@ import (
 	"context"
 	"testing"
 
-	cniTypesVer "github.com/containernetworking/cni/pkg/types/040"
+	cniTypesVer "github.com/containernetworking/cni/pkg/types/100"
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/client"
+	"github.com/cilium/cilium/plugins/cilium-cni/lib"
 )
 
 func Test(t *testing.T) {
@@ -24,7 +24,7 @@ var _ = check.Suite(&APISuite{})
 
 type pluginTest struct{}
 
-func (p *pluginTest) Add(ctx context.Context, pluginContext PluginContext) (res *cniTypesVer.Result, err error) {
+func (p *pluginTest) Add(ctx context.Context, pluginContext PluginContext, cli *client.Client) (res *cniTypesVer.Result, err error) {
 	return nil, nil
 }
 
@@ -32,12 +32,16 @@ func (p *pluginTest) ImplementsAdd() bool {
 	return true
 }
 
-func (p *pluginTest) Delete(ctx context.Context, pluginContext PluginContext) (err error) {
+func (p *pluginTest) Delete(ctx context.Context, pluginContext PluginContext, cli *lib.DeletionFallbackClient) (err error) {
 	return nil
 }
 
 func (p *pluginTest) ImplementsDelete() bool {
 	return true
+}
+
+func (p *pluginTest) Check(ctx context.Context, pluginContext PluginContext, cli *client.Client) error {
+	return nil
 }
 
 func (a *APISuite) TestRegistration(c *check.C) {

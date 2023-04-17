@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package types
 
@@ -21,6 +21,10 @@ type Limits struct {
 
 	// IPv6 is the maximum number of IPv6 addresses per adapter/interface
 	IPv6 int
+
+	// HypervisorType tracks the instance's hypervisor type if available. Used to determine if features like prefix
+	// delegation are supported on an instance. Bare metal instances would have empty string.
+	HypervisorType string
 }
 
 // AllocationIP is an IP which is available for allocation, or already
@@ -98,6 +102,25 @@ type IPAMSpec struct {
 	//
 	// +kubebuilder:validation:Minimum=0
 	MaxAboveWatermark int `json:"max-above-watermark,omitempty"`
+
+	// PodCIDRAllocationThreshold defines the minimum number of free IPs which
+	// must be available to this node via its pod CIDR pool. If the total number
+	// of IP addresses in the pod CIDR pool is less than this value, the pod
+	// CIDRs currently in-use by this node will be marked as depleted and
+	// cilium-operator will allocate a new pod CIDR to this node.
+	// This value effectively defines the buffer of IP addresses available
+	// immediately without requiring cilium-operator to get involved.
+	//
+	// +kubebuilder:validation:Minimum=0
+	PodCIDRAllocationThreshold int `json:"pod-cidr-allocation-threshold,omitempty"`
+
+	// PodCIDRReleaseThreshold defines the maximum number of free IPs which may
+	// be available to this node via its pod CIDR pool. While the total number
+	// of free IP addresses in the pod CIDR pool is larger than this value,
+	// cilium-agent will attempt to release currently unused pod CIDRs.
+	//
+	// +kubebuilder:validation:Minimum=0
+	PodCIDRReleaseThreshold int `json:"pod-cidr-release-threshold,omitempty"`
 }
 
 // IPReleaseStatus  defines the valid states in IP release handshake
@@ -115,6 +138,11 @@ type IPAMStatus struct {
 	// +optional
 	Used AllocationMap `json:"used,omitempty"`
 
+	// PodCIDRs lists the status of each pod CIDR allocated to this node.
+	//
+	// +optional
+	PodCIDRs PodCIDRMap `json:"pod-cidrs,omitempty"`
+
 	// Operator is the Operator status of the node
 	//
 	// +optional
@@ -129,6 +157,24 @@ type IPAMStatus struct {
 	//
 	// +optional
 	ReleaseIPs map[string]IPReleaseStatus `json:"release-ips,omitempty"`
+}
+
+type PodCIDRMap map[string]PodCIDRMapEntry
+
+// +kubebuilder:validation:Enum=released;depleted;in-use
+type PodCIDRStatus string
+
+const (
+	PodCIDRStatusReleased PodCIDRStatus = "released"
+	PodCIDRStatusDepleted PodCIDRStatus = "depleted"
+	PodCIDRStatusInUse    PodCIDRStatus = "in-use"
+)
+
+type PodCIDRMapEntry struct {
+	// Status describes the status of a pod CIDR
+	//
+	// +optional
+	Status PodCIDRStatus `json:"status,omitempty"`
 }
 
 // OperatorStatus is the status used by cilium-operator to report
@@ -435,4 +481,21 @@ func (m *InstanceMap) NumInstances() (size int) {
 	size = len(m.data)
 	m.mutex.RUnlock()
 	return
+}
+
+// Exists returns whether the instance ID is in the instanceMap
+func (m *InstanceMap) Exists(instanceID string) (exists bool) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	if instance := m.data[instanceID]; instance != nil {
+		return true
+	}
+	return false
+}
+
+// Delete instance from m.data
+func (m *InstanceMap) Delete(instanceID string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	delete(m.data, instanceID)
 }

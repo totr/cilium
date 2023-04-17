@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/go-openapi/runtime/middleware"
+
 	"github.com/cilium/cilium/api/v1/models"
 	. "github.com/cilium/cilium/api/v1/server/restapi/prefilter"
 	"github.com/cilium/cilium/pkg/api"
-	"github.com/go-openapi/runtime/middleware"
 )
 
 type getPrefilter struct {

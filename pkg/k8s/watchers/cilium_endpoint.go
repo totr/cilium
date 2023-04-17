@@ -1,53 +1,56 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package watchers
 
 import (
+	"fmt"
 	"net"
 	"sync"
+
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/k8s"
 	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/k8s/informer"
 	"github.com/cilium/cilium/pkg/k8s/types"
+	"github.com/cilium/cilium/pkg/k8s/utils"
+	"github.com/cilium/cilium/pkg/k8s/watchers/resources"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/node"
-	"github.com/cilium/cilium/pkg/option"
-	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/source"
+	ciliumTypes "github.com/cilium/cilium/pkg/types"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/client-go/tools/cache"
 )
 
-func (k *K8sWatcher) ciliumEndpointsInit(ciliumNPClient *k8s.K8sCiliumClient, asyncControllers *sync.WaitGroup) {
+func (k *K8sWatcher) ciliumEndpointsInit(ciliumNPClient client.Clientset, asyncControllers *sync.WaitGroup) {
 	// CiliumEndpoint objects are used for ipcache discovery until the
 	// key-value store is connected
 	var once sync.Once
+	apiGroup := k8sAPIGroupCiliumEndpointV2
 	for {
-		_, ciliumEndpointInformer := informer.NewInformer(
-			cache.NewListWatchFromClient(ciliumNPClient.CiliumV2().RESTClient(),
-				cilium_v2.CEPPluralName, v1.NamespaceAll, fields.Everything()),
+		cepIndexer, ciliumEndpointInformer := informer.NewIndexerInformer(
+			utils.ListerWatcherFromTyped[*cilium_v2.CiliumEndpointList](ciliumNPClient.CiliumV2().CiliumEndpoints("")),
 			&cilium_v2.CiliumEndpoint{},
 			0,
 			cache.ResourceEventHandlerFuncs{
 				AddFunc: func(obj interface{}) {
 					var valid, equal bool
-					defer func() { k.K8sEventReceived(metricCiliumEndpoint, metricCreate, valid, equal) }()
+					defer func() {
+						k.K8sEventReceived(apiGroup, metricCiliumEndpoint, resources.MetricCreate, valid, equal)
+					}()
 					if ciliumEndpoint, ok := obj.(*types.CiliumEndpoint); ok {
 						valid = true
 						k.endpointUpdated(nil, ciliumEndpoint)
-						k.K8sEventProcessed(metricCiliumEndpoint, metricCreate, true)
+						k.K8sEventProcessed(metricCiliumEndpoint, resources.MetricCreate, true)
 					}
 				},
 				UpdateFunc: func(oldObj, newObj interface{}) {
 					var valid, equal bool
-					defer func() { k.K8sEventReceived(metricCiliumEndpoint, metricUpdate, valid, equal) }()
+					defer func() { k.K8sEventReceived(apiGroup, metricCiliumEndpoint, resources.MetricUpdate, valid, equal) }()
 					if oldCE := k8s.ObjToCiliumEndpoint(oldObj); oldCE != nil {
 						if newCE := k8s.ObjToCiliumEndpoint(newObj); newCE != nil {
 							valid = true
@@ -56,13 +59,13 @@ func (k *K8sWatcher) ciliumEndpointsInit(ciliumNPClient *k8s.K8sCiliumClient, as
 								return
 							}
 							k.endpointUpdated(oldCE, newCE)
-							k.K8sEventProcessed(metricCiliumEndpoint, metricUpdate, true)
+							k.K8sEventProcessed(metricCiliumEndpoint, resources.MetricUpdate, true)
 						}
 					}
 				},
 				DeleteFunc: func(obj interface{}) {
 					var valid, equal bool
-					defer func() { k.K8sEventReceived(metricCiliumEndpoint, metricDelete, valid, equal) }()
+					defer func() { k.K8sEventReceived(apiGroup, metricCiliumEndpoint, resources.MetricDelete, valid, equal) }()
 					ciliumEndpoint := k8s.ObjToCiliumEndpoint(obj)
 					if ciliumEndpoint == nil {
 						return
@@ -72,7 +75,13 @@ func (k *K8sWatcher) ciliumEndpointsInit(ciliumNPClient *k8s.K8sCiliumClient, as
 				},
 			},
 			k8s.ConvertToCiliumEndpoint,
+			cache.Indexers{
+				"localNode": CreateCiliumEndpointLocalPodIndexFunc(),
+			},
 		)
+		k.ciliumEndpointIndexerMU.Lock()
+		k.ciliumEndpointIndexer = cepIndexer
+		k.ciliumEndpointIndexerMU.Unlock()
 		isConnected := make(chan struct{})
 		// once isConnected is closed, it will stop waiting on caches to be
 		// synchronized.
@@ -108,7 +117,6 @@ func (k *K8sWatcher) endpointUpdated(oldEndpoint, endpoint *types.CiliumEndpoint
 			k.policyManager.TriggerPolicyUpdates(true, "Named ports added or updated")
 		}
 	}()
-
 	var ipsAdded []string
 	if oldEndpoint != nil && oldEndpoint.Networking != nil {
 		// Delete the old IP addresses from the IP cache
@@ -124,13 +132,13 @@ func (k *K8sWatcher) endpointUpdated(oldEndpoint, endpoint *types.CiliumEndpoint
 					}
 				}
 				if !v4Added {
-					portsChanged := ipcache.IPIdentityCache.Delete(oldPair.IPV4, source.CustomResource)
+					portsChanged := k.ipcache.DeleteOnMetadataMatch(oldPair.IPV4, source.CustomResource, endpoint.Namespace, endpoint.Name)
 					if portsChanged {
 						namedPortsChanged = true
 					}
 				}
 				if !v6Added {
-					portsChanged := ipcache.IPIdentityCache.Delete(oldPair.IPV6, source.CustomResource)
+					portsChanged := k.ipcache.DeleteOnMetadataMatch(oldPair.IPV6, source.CustomResource, endpoint.Namespace, endpoint.Name)
 					if portsChanged {
 						namedPortsChanged = true
 					}
@@ -167,14 +175,14 @@ func (k *K8sWatcher) endpointUpdated(oldEndpoint, endpoint *types.CiliumEndpoint
 	k8sMeta := &ipcache.K8sMetadata{
 		Namespace:  endpoint.Namespace,
 		PodName:    endpoint.Name,
-		NamedPorts: make(policy.NamedPortMap, len(endpoint.NamedPorts)),
+		NamedPorts: make(ciliumTypes.NamedPortMap, len(endpoint.NamedPorts)),
 	}
 	for _, port := range endpoint.NamedPorts {
 		p, err := u8proto.ParseProtocol(port.Protocol)
 		if err != nil {
 			continue
 		}
-		k8sMeta.NamedPorts[port.Name] = policy.PortProto{
+		k8sMeta.NamedPorts[port.Name] = ciliumTypes.PortProto{
 			Port:  port.Port,
 			Proto: uint8(p),
 		}
@@ -183,7 +191,7 @@ func (k *K8sWatcher) endpointUpdated(oldEndpoint, endpoint *types.CiliumEndpoint
 	for _, pair := range endpoint.Networking.Addressing {
 		if pair.IPV4 != "" {
 			ipsAdded = append(ipsAdded, pair.IPV4)
-			portsChanged, _ := ipcache.IPIdentityCache.Upsert(pair.IPV4, nodeIP, encryptionKey, k8sMeta,
+			portsChanged, _ := k.ipcache.Upsert(pair.IPV4, nodeIP, encryptionKey, k8sMeta,
 				ipcache.Identity{ID: id, Source: source.CustomResource})
 			if portsChanged {
 				namedPortsChanged = true
@@ -192,7 +200,7 @@ func (k *K8sWatcher) endpointUpdated(oldEndpoint, endpoint *types.CiliumEndpoint
 
 		if pair.IPV6 != "" {
 			ipsAdded = append(ipsAdded, pair.IPV6)
-			portsChanged, _ := ipcache.IPIdentityCache.Upsert(pair.IPV6, nodeIP, encryptionKey, k8sMeta,
+			portsChanged, _ := k.ipcache.Upsert(pair.IPV6, nodeIP, encryptionKey, k8sMeta,
 				ipcache.Identity{ID: id, Source: source.CustomResource})
 			if portsChanged {
 				namedPortsChanged = true
@@ -200,7 +208,7 @@ func (k *K8sWatcher) endpointUpdated(oldEndpoint, endpoint *types.CiliumEndpoint
 		}
 	}
 
-	if option.Config.EnableIPv4EgressGateway {
+	if k.egressGatewayManager != nil {
 		k.egressGatewayManager.OnUpdateEndpoint(endpoint)
 	}
 }
@@ -210,14 +218,14 @@ func (k *K8sWatcher) endpointDeleted(endpoint *types.CiliumEndpoint) {
 		namedPortsChanged := false
 		for _, pair := range endpoint.Networking.Addressing {
 			if pair.IPV4 != "" {
-				portsChanged := ipcache.IPIdentityCache.DeleteOnMetadataMatch(pair.IPV4, source.CustomResource, endpoint.Namespace, endpoint.Name)
+				portsChanged := k.ipcache.DeleteOnMetadataMatch(pair.IPV4, source.CustomResource, endpoint.Namespace, endpoint.Name)
 				if portsChanged {
 					namedPortsChanged = true
 				}
 			}
 
 			if pair.IPV6 != "" {
-				portsChanged := ipcache.IPIdentityCache.DeleteOnMetadataMatch(pair.IPV6, source.CustomResource, endpoint.Namespace, endpoint.Name)
+				portsChanged := k.ipcache.DeleteOnMetadataMatch(pair.IPV6, source.CustomResource, endpoint.Namespace, endpoint.Name)
 				if portsChanged {
 					namedPortsChanged = true
 				}
@@ -227,7 +235,29 @@ func (k *K8sWatcher) endpointDeleted(endpoint *types.CiliumEndpoint) {
 			k.policyManager.TriggerPolicyUpdates(true, "Named ports deleted")
 		}
 	}
-	if option.Config.EnableIPv4EgressGateway {
+	if k.egressGatewayManager != nil {
 		k.egressGatewayManager.OnDeleteEndpoint(endpoint)
+	}
+}
+
+// CreateCiliumEndpointLocalPodIndexFunc returns an IndexFunc that indexes only local
+// CiliumEndpoints, by their local Node IP.
+func CreateCiliumEndpointLocalPodIndexFunc() cache.IndexFunc {
+	nodeIP := node.GetCiliumEndpointNodeIP()
+	return func(obj interface{}) ([]string, error) {
+		cep, ok := obj.(*types.CiliumEndpoint)
+		if !ok {
+			return nil, fmt.Errorf("unexpected object type: %T", obj)
+		}
+		indices := []string{}
+		if cep.Networking == nil {
+			log.WithField("ciliumendpoint", cep.GetNamespace()+"/"+cep.GetName()).
+				Debug("cannot index CiliumEndpoint by node without network status")
+			return nil, nil
+		}
+		if cep.Networking.NodeIP == nodeIP {
+			indices = append(indices, cep.Networking.NodeIP)
+		}
+		return indices, nil
 	}
 }

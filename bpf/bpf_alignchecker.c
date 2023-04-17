@@ -1,96 +1,87 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2018-2020 Authors of Cilium */
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* Copyright Authors of Cilium */
 
-/* Ensure declaration of notification event types */
 #define DEBUG
 #define TRACE_NOTIFY
 #define DROP_NOTIFY
 #define POLICY_VERDICT_NOTIFY
-#define ENABLE_EGRESS_GATEWAY
 #define ENABLE_CAPTURE
-#undef ENABLE_ARP_RESPONDER
+#define TRACE_SOCK_NOTIFY
 
 #include <bpf/ctx/unspec.h>
-#include <bpf/api.h>
 
 #include "node_config.h"
-#include "lib/conntrack.h"
-#include "lib/dbg.h"
-#include "lib/drop.h"
-#include "lib/ipv4.h"
-#define SKIP_UNDEF_LPM_LOOKUP_FN
+#include "lib/common.h"
 #include "lib/maps.h"
 #include "lib/nat.h"
 #include "lib/trace.h"
 #include "lib/policy_log.h"
 #include "lib/pcap.h"
-#include "sockops/bpf_sockops.h"
+#include "lib/trace_sock.h"
 
-/* DECLARE declares a unique usage of the union or struct 'x' on the stack.
- *
- * To prevent compiler from optimizing away the var, we pass a reference
- * to the var to a BPF helper function which accepts a reference as
- * an argument.
+/*
+ * The __COUNTER__ macro expands to an integer value which is increasing every
+ * time the macro is used.  Extra macros are required so that the __COUNTER__
+ * value is actually expanded before concatenation with the _ prefix.  Thus,
+ * the first occurrence of add_type(TYPE) will expand to "TYPE _0", the second
+ * to "TYPE _1", etc.
  */
-#define DECLARE(datatype, x, iter)		\
-{						\
-	datatype x s ## iter = {};		\
-	trace_printk("%p", 1, &s ## iter);	\
-	iter++;					\
-}
+#define __add_type(TYPE, N) TYPE _ ## N
+#define __expand(TYPE, N) __add_type(TYPE, N)
+#define add_type(TYPE) __expand(TYPE, __COUNTER__)
 
-/* This function is a placeholder for C struct definitions shared with Go,
- * it is never executed.
- */
-int main(void)
-{
-	int iter = 0;
-
-	DECLARE(struct, ipv4_ct_tuple, iter);
-	DECLARE(struct, ipv6_ct_tuple, iter);
-	DECLARE(struct, ct_entry, iter);
-	DECLARE(struct, ipcache_key, iter);
-	DECLARE(struct, remote_endpoint_info, iter);
-	DECLARE(struct, lb4_key, iter);
-	DECLARE(struct, lb4_service, iter);
-	DECLARE(struct, lb4_backend, iter);
-	DECLARE(struct, lb6_key, iter);
-	DECLARE(struct, lb6_service, iter);
-	DECLARE(struct, lb6_backend, iter);
-	DECLARE(struct, endpoint_key, iter);
-	DECLARE(struct, endpoint_info, iter);
-	DECLARE(struct, metrics_key, iter);
-	DECLARE(struct, metrics_value, iter);
-	DECLARE(struct, sock_key, iter);
-	DECLARE(struct, policy_key, iter);
-	DECLARE(struct, policy_entry, iter);
-	DECLARE(struct, ipv4_nat_entry, iter);
-	DECLARE(struct, ipv6_nat_entry, iter);
-	DECLARE(struct, trace_notify, iter);
-	DECLARE(struct, drop_notify, iter);
-	DECLARE(struct, policy_verdict_notify, iter);
-	DECLARE(struct, debug_msg, iter);
-	DECLARE(struct, debug_capture_msg, iter);
-	DECLARE(struct, ipv4_revnat_tuple, iter);
-	DECLARE(struct, ipv4_revnat_entry, iter);
-	DECLARE(struct, ipv6_revnat_tuple, iter);
-	DECLARE(struct, ipv6_revnat_entry, iter);
-	DECLARE(struct, ipv4_frag_id, iter);
-	DECLARE(struct, ipv4_frag_l4ports, iter);
-	DECLARE(union, macaddr, iter);
-	DECLARE(struct, lb4_affinity_key, iter);
-	DECLARE(struct, lb6_affinity_key, iter);
-	DECLARE(struct, lb_affinity_val, iter);
-	DECLARE(struct, lb_affinity_match, iter);
-	DECLARE(struct, lb4_src_range_key, iter);
-	DECLARE(struct, lb6_src_range_key, iter);
-	DECLARE(struct, edt_id, iter);
-	DECLARE(struct, edt_info, iter);
-	DECLARE(struct, egress_gw_policy_key, iter);
-	DECLARE(struct, egress_gw_policy_entry, iter);
-	DECLARE(struct, capture4_wcard, iter);
-	DECLARE(struct, capture6_wcard, iter);
-	DECLARE(struct, capture_rule, iter);
-
-	return 0;
-}
+add_type(struct ipv4_ct_tuple);
+add_type(struct ipv6_ct_tuple);
+add_type(struct ct_entry);
+add_type(struct ipcache_key);
+add_type(struct remote_endpoint_info);
+add_type(struct lb4_key);
+add_type(struct lb4_service);
+add_type(struct lb4_backend);
+add_type(struct lb6_key);
+add_type(struct lb6_service);
+add_type(struct lb6_backend);
+add_type(struct endpoint_key);
+add_type(struct endpoint_info);
+add_type(struct metrics_key);
+add_type(struct metrics_value);
+add_type(struct policy_key);
+add_type(struct policy_entry);
+add_type(struct ipv4_nat_entry);
+add_type(struct ipv6_nat_entry);
+add_type(struct trace_notify);
+add_type(struct drop_notify);
+add_type(struct policy_verdict_notify);
+add_type(struct debug_msg);
+add_type(struct debug_capture_msg);
+add_type(struct ipv4_revnat_tuple);
+add_type(struct ipv4_revnat_entry);
+add_type(struct ipv6_revnat_tuple);
+add_type(struct ipv6_revnat_entry);
+add_type(struct ipv4_frag_id);
+add_type(struct ipv4_frag_l4ports);
+add_type(union macaddr);
+add_type(struct lb4_affinity_key);
+add_type(struct lb6_affinity_key);
+add_type(struct lb_affinity_val);
+add_type(struct lb_affinity_match);
+add_type(struct lb4_src_range_key);
+add_type(struct lb6_src_range_key);
+add_type(struct edt_id);
+add_type(struct edt_info);
+add_type(struct egress_gw_policy_key);
+add_type(struct egress_gw_policy_entry);
+add_type(struct vtep_key);
+add_type(struct vtep_value);
+add_type(struct capture4_wcard);
+add_type(struct capture6_wcard);
+add_type(struct capture_rule);
+add_type(struct srv6_vrf_key4);
+add_type(struct srv6_vrf_key6);
+add_type(struct srv6_policy_key4);
+add_type(struct srv6_policy_key6);
+add_type(struct trace_sock_notify);
+add_type(struct tunnel_key);
+add_type(struct tunnel_value);
+add_type(struct auth_key);
+add_type(struct auth_info);

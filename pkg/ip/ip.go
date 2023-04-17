@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package ip
 
@@ -8,7 +8,10 @@ import (
 	"encoding/binary"
 	"math/big"
 	"net"
+	"net/netip"
 	"sort"
+
+	"golang.org/x/exp/slices"
 )
 
 const (
@@ -245,7 +248,7 @@ func excludeContainedCIDR(allowCIDR, removeCIDR *net.IPNet) []*net.IPNet {
 
 // Flip the 'n'th highest bit in 'ip'. 'ip' is modified in place. 'n' is zero indexed.
 func flipNthHighestBit(ip net.IP, n uint) {
-	i := (n / 8)
+	i := n / 8
 	ip[i] = ip[i] ^ 0x80>>(n%8)
 }
 
@@ -274,6 +277,37 @@ func ipNetToRange(ipNet net.IPNet) netWithRange {
 	return netWithRange{First: &firstIP, Last: &lastIP, Network: &ipNet}
 }
 
+// PrefixCeil converts the given number of IPs to the minimum number of prefixes needed to host those IPs.
+// multiple indicates the number of IPs in a single prefix.
+func PrefixCeil(numIPs int, multiple int) int {
+	if numIPs == 0 {
+		return 0
+	}
+	quotient := numIPs / multiple
+	rem := numIPs % multiple
+	if rem > 0 {
+		return quotient + 1
+	}
+	return quotient
+}
+
+// PrefixToIps converts the given prefix to an array containing all IPs in the prefix / CIDR block.
+func PrefixToIps(prefixCidr string) ([]string, error) {
+	var prefixIps []string
+	_, ipNet, err := net.ParseCIDR(prefixCidr)
+	if err != nil {
+		return prefixIps, err
+	}
+	netWithRange := ipNetToRange(*ipNet)
+	for ip := *netWithRange.First; !ip.Equal(*netWithRange.Last); ip = GetNextIP(ip) {
+		prefixIps = append(prefixIps, ip.String())
+	}
+
+	// Add the last IP
+	prefixIps = append(prefixIps, netWithRange.Last.String())
+	return prefixIps, nil
+}
+
 // GetIPAtIndex get the IP by index in the range of ipNet. The index is start with 0.
 func GetIPAtIndex(ipNet net.IPNet, index int64) net.IP {
 	netRange := ipNetToRange(ipNet)
@@ -283,7 +317,7 @@ func GetIPAtIndex(ipNet net.IPNet, index int64) net.IP {
 		ip = *netRange.First
 	} else {
 		ip = *netRange.Last
-		index += 1
+		index++
 	}
 	if ip.To4() != nil {
 		val.SetBytes(ip.To4())
@@ -299,7 +333,7 @@ func GetIPAtIndex(ipNet net.IPNet, index int64) net.IP {
 
 func getPreviousIP(ip net.IP) net.IP {
 	// Cannot go lower than zero!
-	if ip.Equal(net.IP(defaultIPv4)) || ip.Equal(net.IP(defaultIPv6)) {
+	if ip.Equal(defaultIPv4) || ip.Equal(defaultIPv6) {
 		return ip
 	}
 
@@ -538,7 +572,7 @@ func rangeToCIDRs(firstIP, lastIP net.IP) []*net.IPNet {
 		} else {
 			bitLen = ipv6BitLen
 		}
-		_, _, right := partitionCIDR(spanningCIDR, net.IPNet{IP: prevFirstRangeIP, Mask: net.CIDRMask(bitLen, bitLen)})
+		_, _, right := PartitionCIDR(spanningCIDR, net.IPNet{IP: prevFirstRangeIP, Mask: net.CIDRMask(bitLen, bitLen)})
 
 		// Append all CIDRs but the first, as this CIDR includes the upper
 		// bound of the spanning CIDR, which we still need to partition on.
@@ -561,7 +595,7 @@ func rangeToCIDRs(firstIP, lastIP net.IP) []*net.IPNet {
 		} else {
 			bitLen = ipv6BitLen
 		}
-		left, _, _ := partitionCIDR(spanningCIDR, net.IPNet{IP: nextFirstRangeIP, Mask: net.CIDRMask(bitLen, bitLen)})
+		left, _, _ := PartitionCIDR(spanningCIDR, net.IPNet{IP: nextFirstRangeIP, Mask: net.CIDRMask(bitLen, bitLen)})
 		cidrList = append(cidrList, left...)
 	} else {
 		// Otherwise, there is no need to partition; just use add the spanning
@@ -571,13 +605,13 @@ func rangeToCIDRs(firstIP, lastIP net.IP) []*net.IPNet {
 	return cidrList
 }
 
-// partitionCIDR returns a list of IP Networks partitioned upon excludeCIDR.
+// PartitionCIDR returns a list of IP Networks partitioned upon excludeCIDR.
 // The first list contains the networks to the left of the excludeCIDR in the
 // partition,  the second is a list containing the excludeCIDR itself if it is
 // contained within the targetCIDR (nil otherwise), and the
 // third is a list containing the networks to the right of the excludeCIDR in
 // the partition.
-func partitionCIDR(targetCIDR net.IPNet, excludeCIDR net.IPNet) ([]*net.IPNet, []*net.IPNet, []*net.IPNet) {
+func PartitionCIDR(targetCIDR net.IPNet, excludeCIDR net.IPNet) ([]*net.IPNet, []*net.IPNet, []*net.IPNet) {
 	var targetIsIPv4 bool
 	if targetCIDR.IP.To4() != nil {
 		targetIsIPv4 = true
@@ -732,6 +766,20 @@ func KeepUniqueIPs(ips []net.IP) []net.IP {
 	return returnIPs
 }
 
+// KeepUniqueAddrs transforms the provided multiset of IP addresses into a
+// single set, lexicographically sorted via comparison of the addresses using
+// netip.Addr.Compare (i.e. IPv4 addresses show up before IPv6).
+// The slice is manipulated in-place destructively; it does not create a new slice.
+func KeepUniqueAddrs(addrs []netip.Addr) []netip.Addr {
+	if len(addrs) == 0 {
+		return addrs
+	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return addrs[i].Compare(addrs[j]) < 0
+	})
+	return slices.Compact(addrs)
+}
+
 var privateIPBlocks []*net.IPNet
 
 func initPrivatePrefixes() {
@@ -768,17 +816,6 @@ func init() {
 	initPrivatePrefixes()
 }
 
-// IsExcluded returns whether a given IP is must be excluded
-// due to coming from blacklisted device.
-func IsExcluded(excludeList []net.IP, ip net.IP) bool {
-	for _, e := range excludeList {
-		if e.Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
-
 // IsPublicAddr returns whether a given global IP is from
 // a public range.
 func IsPublicAddr(ip net.IP) bool {
@@ -788,18 +825,6 @@ func IsPublicAddr(ip net.IP) bool {
 		}
 	}
 	return true
-}
-
-// GetCIDRPrefixesFromIPs returns all of the ips as a slice of *net.IPNet.
-func GetCIDRPrefixesFromIPs(ips []net.IP) []*net.IPNet {
-	if len(ips) == 0 {
-		return nil
-	}
-	res := make([]*net.IPNet, 0, len(ips))
-	for _, ip := range ips {
-		res = append(res, IPToPrefix(ip))
-	}
-	return res
 }
 
 // IPToPrefix returns the corresponding IPNet for the given IP.
@@ -824,6 +849,16 @@ func IsIPv4(ip net.IP) bool {
 // IsIPv6 returns if netIP is IPv6.
 func IsIPv6(ip net.IP) bool {
 	return ip != nil && ip.To4() == nil
+}
+
+// ListContainsIP returns whether a list of IPs contains a given IP.
+func ListContainsIP(ipList []net.IP, ip net.IP) bool {
+	for _, e := range ipList {
+		if e.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // SortIPList sorts the provided net.IP slice in place.
@@ -887,4 +922,50 @@ func GetIPFromListByFamily(ipList []net.IP, v4Family bool) net.IP {
 	}
 
 	return nil
+}
+
+// AddrFromIP converts a net.IP to netip.Addr using netip.AddrFromSlice, but preserves
+// the original address family. It assumes given net.IP is not an IPv4 mapped IPv6
+// address.
+//
+// The problem behind this is that when we convert the IPv4 net.IP address with
+// netip.AddrFromSlice, the address is interpreted as an IPv4 mapped IPv6 address in some
+// cases.
+//
+// For example, when we do netip.AddrFromSlice(net.ParseIP("1.1.1.1")), it is interpreted
+// as an IPv6 address "::ffff:1.1.1.1". This is because 1) net.IP created with
+// net.ParseIP(IPv4 string) holds IPv4 address as an IPv4 mapped IPv6 address internally
+// and 2) netip.AddrFromSlice recognizes address family with length of the slice (4-byte =
+// IPv4 and 16-byte = IPv6).
+//
+// By using AddrFromIP, we can preserve the address family, but since we cannot distinguish
+// IPv4 and IPv4 mapped IPv6 address only from net.IP value (see #37921 on golang/go) we
+// need an assumption that given net.IP is not an IPv4 mapped IPv6 address.
+func AddrFromIP(ip net.IP) (netip.Addr, bool) {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return addr, ok
+	}
+	return addr.Unmap(), ok
+}
+
+// MustAddrFromIP is the same as AddrFromIP except that it assumes the input is
+// a valid IP address and always returns a valid netip.Addr.
+func MustAddrFromIP(ip net.IP) netip.Addr {
+	addr, ok := AddrFromIP(ip)
+	if !ok {
+		panic("addr is not a valid IP address")
+	}
+	return addr
+}
+
+// MustAddrsFromIPs converts a slice of net.IP to a slice of netip.Addr. It assumes
+// the input slice contains only valid IP addresses and always returns a slice
+// containing valid netip.Addr.
+func MustAddrsFromIPs(ips []net.IP) []netip.Addr {
+	addrs := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		addrs = append(addrs, MustAddrFromIP(ip))
+	}
+	return addrs
 }

@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package mock
 
 import (
-	"github.com/cilium/cilium/pkg/k8s"
-
 	"go.universe.tf/metallb/pkg/bgp"
 	metallbk8s "go.universe.tf/metallb/pkg/k8s"
 	"go.universe.tf/metallb/pkg/k8s/types"
 	metallbspr "go.universe.tf/metallb/pkg/speaker"
 	v1 "k8s.io/api/core/v1"
+
+	"github.com/cilium/cilium/pkg/k8s"
 )
 
 // MockMetalLBSpeaker implements the speaker.Speaker interface by delegating to
 // a set of functions defined during test.
 type MockMetalLBSpeaker struct {
-	SetService_    func(name string, svc *metallbspr.Service, eps *metallbspr.Endpoints) types.SyncState
-	SetNodeLabels_ func(labels map[string]string) types.SyncState
-	PeerSession_   func() []metallbspr.Session
+	SetService_       func(name string, svc *metallbspr.Service, eps *metallbspr.Endpoints) types.SyncState
+	SetNodeLabels_    func(labels map[string]string) types.SyncState
+	PeerSession_      func() []metallbspr.Session
+	GetBGPController_ func() *metallbspr.BGPController
 }
 
 func (m *MockMetalLBSpeaker) SetService(name string, svc *metallbspr.Service, eps *metallbspr.Endpoints) types.SyncState {
@@ -31,6 +32,10 @@ func (m *MockMetalLBSpeaker) SetNodeLabels(labels map[string]string) types.SyncS
 
 func (m *MockMetalLBSpeaker) PeerSessions() []metallbspr.Session {
 	return m.PeerSession_()
+}
+
+func (m *MockMetalLBSpeaker) GetBGPController() *metallbspr.BGPController {
+	return m.GetBGPController_()
 }
 
 // MockEndpointGetter implements the method set for obtaining th endpoints

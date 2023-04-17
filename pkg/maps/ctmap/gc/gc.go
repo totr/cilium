@@ -1,23 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package gc
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"time"
 
-	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/inctimer"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/signal"
-	"github.com/sirupsen/logrus"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "ct-gc")
@@ -29,11 +31,14 @@ type EndpointManager interface {
 }
 
 // Enable enables the connection tracking garbage collection.
-func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr EndpointManager) {
+// The restored endpoints and local node addresses are used to avoid GCing
+// connections that may still be in use: connections of active endpoints and,
+// in case the host firewall is enabled, connections of the local host.
+func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr EndpointManager,
+	nodeAddressing types.NodeAddressing) {
 	var (
 		initialScan         = true
 		initialScanComplete = make(chan struct{})
-		mapType             bpf.MapType
 	)
 
 	go func() {
@@ -49,7 +54,7 @@ func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr Endpoin
 
 				// epsMap contains an IP -> EP mapping. It is used by EmitCTEntryCB to
 				// avoid doing mgr.LookupIP, which is more expensive.
-				epsMap = make(map[string]*endpoint.Endpoint)
+				epsMap = make(map[netip.Addr]*endpoint.Endpoint)
 
 				// gcStart and emitEntryCB are used to populate DNSZombieMapping fields
 				// on endpoints. These hold IPs that are deletable in the DNS caches,
@@ -68,12 +73,12 @@ func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr Endpoin
 				// alive during idle periods of upto ToFQDNsIdleConnectionGracePeriod.
 				aliveTime = gcStart.Add(option.Config.ToFQDNsIdleConnectionGracePeriod)
 
-				emitEntryCB = func(srcIP, dstIP net.IP, srcPort, dstPort uint16, nextHdr, flags uint8, entry *ctmap.CtEntry) {
+				emitEntryCB = func(srcIP, dstIP netip.Addr, srcPort, dstPort uint16, nextHdr, flags uint8, entry *ctmap.CtEntry) {
 					// FQDN related connections can only be outbound
 					if flags != ctmap.TUPLE_F_OUT {
 						return
 					}
-					if ep, exists := epsMap[srcIP.String()]; exists {
+					if ep, exists := epsMap[srcIP]; exists {
 						ep.MarkDNSCTEntry(dstIP, aliveTime)
 					}
 				}
@@ -81,12 +86,13 @@ func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr Endpoin
 
 			eps := mgr.GetEndpoints()
 			for _, e := range eps {
-				epsMap[e.GetIPv4Address()] = e
-				epsMap[e.GetIPv6Address()] = e
+				epsMap[e.IPv4Address()] = e
+				epsMap[e.IPv6Address()] = e
 			}
 
 			if len(eps) > 0 || initialScan {
-				mapType, maxDeleteRatio = runGC(nil, ipv4, ipv6, triggeredBySignal, createGCFilter(initialScan, restoredEndpoints, emitEntryCB))
+				gcFilter := createGCFilter(initialScan, restoredEndpoints, emitEntryCB, nodeAddressing)
+				maxDeleteRatio = runGC(nil, ipv4, ipv6, triggeredBySignal, gcFilter)
 			}
 			for _, e := range eps {
 				if !e.ConntrackLocal() {
@@ -131,7 +137,7 @@ func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr Endpoin
 						ipv6 = true
 					}
 				}
-			case <-ctTimer.After(ctmap.GetInterval(mapType, maxDeleteRatio)):
+			case <-ctTimer.After(ctmap.GetInterval(maxDeleteRatio)):
 				ipv4 = ipv4Orig
 				ipv6 = ipv6Orig
 			}
@@ -155,11 +161,23 @@ func Enable(ipv4, ipv6 bool, restoredEndpoints []*endpoint.Endpoint, mgr Endpoin
 // The provided endpoint is optional; if it is provided, then its map will be
 // garbage collected and any failures will be logged to the endpoint log.
 // Otherwise it will garbage-collect the global map and use the global log.
-func runGC(e *endpoint.Endpoint, ipv4, ipv6, triggeredBySignal bool, filter *ctmap.GCFilter) (mapType bpf.MapType, maxDeleteRatio float64) {
+func runGC(e *endpoint.Endpoint, ipv4, ipv6, triggeredBySignal bool, filter *ctmap.GCFilter) (maxDeleteRatio float64) {
 	var maps []*ctmap.Map
 
 	if e == nil {
 		maps = ctmap.GlobalMaps(ipv4, ipv6)
+
+		// We treat per-cluster CT Maps as global map. When we don't enable
+		// cluster-aware addressing, ctmap.PerClusterCTMaps is nil (this is
+		// the default).
+		if ctmap.PerClusterCTMaps != nil {
+			perClusterMaps, err := ctmap.PerClusterCTMaps.GetAllClusterCTMaps()
+			if err != nil {
+				log.Error("Failed to get per-cluster CT maps. Continue without them.")
+			} else {
+				maps = append(maps, perClusterMaps...)
+			}
+		}
 	} else {
 		maps = ctmap.LocalMaps(e, ipv4, ipv6)
 	}
@@ -182,8 +200,6 @@ func runGC(e *endpoint.Endpoint, ipv4, ipv6, triggeredBySignal bool, filter *ctm
 			continue
 		}
 		defer m.Close()
-
-		mapType = m.MapInfo.MapType
 
 		deleted := ctmap.GC(m, filter)
 
@@ -216,6 +232,7 @@ func runGC(e *endpoint.Endpoint, ipv4, ipv6, triggeredBySignal bool, filter *ctm
 					"ingressDeleted": stats.IngressDeleted,
 					"egressDeleted":  stats.EgressDeleted,
 					"ingressAlive":   stats.IngressAlive,
+					"egressAlive":    stats.EgressAlive,
 					"ctMapIPVersion": vsn,
 				}).Info("Deleted orphan SNAT entries from map")
 			}
@@ -225,7 +242,8 @@ func runGC(e *endpoint.Endpoint, ipv4, ipv6, triggeredBySignal bool, filter *ctm
 	return
 }
 
-func createGCFilter(initialScan bool, restoredEndpoints []*endpoint.Endpoint, emitEntryCB ctmap.EmitCTEntryCBFunc) *ctmap.GCFilter {
+func createGCFilter(initialScan bool, restoredEndpoints []*endpoint.Endpoint,
+	emitEntryCB ctmap.EmitCTEntryCBFunc, nodeAddressing types.NodeAddressing) *ctmap.GCFilter {
 	filter := &ctmap.GCFilter{
 		RemoveExpired: true,
 		EmitCTEntryCB: emitEntryCB,
@@ -236,10 +254,39 @@ func createGCFilter(initialScan bool, restoredEndpoints []*endpoint.Endpoint, em
 	// endpoints can appear yet so we can assume that any other entry not
 	// belonging to a restored endpoint has become stale.
 	if initialScan {
-		filter.ValidIPs = map[string]struct{}{}
+		filter.ValidIPs = map[netip.Addr]struct{}{}
 		for _, ep := range restoredEndpoints {
-			filter.ValidIPs[ep.IPv6.String()] = struct{}{}
-			filter.ValidIPs[ep.IPv4.String()] = struct{}{}
+			if ep.IsHost() {
+				continue
+			}
+			if ep.IPv6.IsValid() {
+				filter.ValidIPs[ep.IPv6] = struct{}{}
+			}
+			if ep.IPv4.IsValid() {
+				filter.ValidIPs[ep.IPv4] = struct{}{}
+			}
+		}
+
+		// Once the host firewall is enabled, we will start tracking (and
+		// potentially enforcing policies) on all connections to and from the
+		// host IP addresses. Thus, we also need to avoid GCing the host IPs.
+		if option.Config.EnableHostFirewall {
+			addrs, err := nodeAddressing.IPv4().LocalAddresses()
+			if err != nil {
+				log.WithError(err).Warning("Unable to list local IPv4 addresses")
+			}
+			addrsV6, err := nodeAddressing.IPv6().LocalAddresses()
+			if err != nil {
+				log.WithError(err).Warning("Unable to list local IPv6 addresses")
+			}
+			addrs = append(addrs, addrsV6...)
+
+			for _, ip := range addrs {
+				if option.Config.IsExcludedLocalAddress(ip) {
+					continue
+				}
+				filter.ValidIPs[iputil.MustAddrFromIP(ip)] = struct{}{}
+			}
 		}
 	}
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package policy
 
@@ -46,7 +46,7 @@ func NewEndpointSet(m map[Endpoint]struct{}) *EndpointSet {
 	}
 }
 
-// ForEachGo runs epFunc asynchronously inside a go routine for each endpoint in
+// ForEachGo runs epFunc asynchronously inside a goroutine for each endpoint in
 // the EndpointSet. It signals to the provided WaitGroup when epFunc has been
 // executed for each endpoint.
 func (e *EndpointSet) ForEachGo(wg *sync.WaitGroup, epFunc func(epp Endpoint)) {

@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package testparsers
 
 import (
-	. "github.com/cilium/cilium/proxylib/proxylib"
+	"github.com/sirupsen/logrus"
 
-	log "github.com/sirupsen/logrus"
+	. "github.com/cilium/cilium/proxylib/proxylib"
 )
 
 type PasserParserFactory struct{}
 
 func init() {
-	log.Debug("init(): Registering PasserParserFactory")
+	logrus.Debug("init(): Registering PasserParserFactory")
 	RegisterParserFactory("test.passer", &PasserParserFactory{})
 }
 
@@ -24,13 +24,11 @@ func (p *PasserParserFactory) Create(connection *Connection) interface{} {
 		return nil
 	}
 
-	log.Debugf("PasserParserFactory: Create: %v", connection)
+	logrus.Debugf("PasserParserFactory: Create: %v", connection)
 	return &PasserParser{}
 }
 
-//
 // This simply passes all data in either direction.
-//
 func (p *PasserParser) OnData(reply, endStream bool, data [][]byte) (OpType, int) {
 	n_bytes := 0
 	for _, s := range data {
@@ -40,9 +38,9 @@ func (p *PasserParser) OnData(reply, endStream bool, data [][]byte) (OpType, int
 		return NOP, 0
 	}
 	if !reply {
-		log.Debugf("PasserParser: Request: %d bytes", n_bytes)
+		logrus.Debugf("PasserParser: Request: %d bytes", n_bytes)
 	} else {
-		log.Debugf("PasserParser: Response: %d bytes", n_bytes)
+		logrus.Debugf("PasserParser: Response: %d bytes", n_bytes)
 	}
 	return PASS, n_bytes
 }

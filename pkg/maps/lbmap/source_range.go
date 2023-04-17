@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package lbmap
 
@@ -11,6 +11,7 @@ import (
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/byteorder"
 	"github.com/cilium/cilium/pkg/cidr"
+	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/types"
 )
 
@@ -47,7 +48,10 @@ type SourceRangeKey4 struct {
 
 func (k *SourceRangeKey4) GetKeyPtr() unsafe.Pointer { return unsafe.Pointer(k) }
 func (k *SourceRangeKey4) NewValue() bpf.MapValue    { return &SourceRangeValue{} }
-func (k *SourceRangeKey4) String() string            { return fmt.Sprintf("%s", k.Address) }
+func (k *SourceRangeKey4) String() string {
+	kHost := k.ToHost().(*SourceRangeKey4)
+	return fmt.Sprintf("%s (%d)", kHost.GetCIDR().String(), kHost.GetRevNATID())
+}
 func (k *SourceRangeKey4) ToNetwork() SourceRangeKey {
 	n := *k
 	// For some reasons rev_nat_index is stored in network byte order in
@@ -88,7 +92,10 @@ type SourceRangeKey6 struct {
 
 func (k *SourceRangeKey6) GetKeyPtr() unsafe.Pointer { return unsafe.Pointer(k) }
 func (k *SourceRangeKey6) NewValue() bpf.MapValue    { return &SourceRangeValue{} }
-func (k *SourceRangeKey6) String() string            { return fmt.Sprintf("%s", k.Address) }
+func (k *SourceRangeKey6) String() string {
+	kHost := k.ToHost().(*SourceRangeKey6)
+	return fmt.Sprintf("%s (%d)", kHost.GetCIDR().String(), kHost.GetRevNATID())
+}
 func (k *SourceRangeKey6) ToNetwork() SourceRangeKey {
 	n := *k
 	// For some reasons rev_nat_index is stored in network byte order in
@@ -139,16 +146,19 @@ var (
 // initSourceRange creates the BPF maps for storing both IPv4 and IPv6
 // service source ranges.
 func initSourceRange(params InitParams) {
+	SourceRangeMapMaxEntries = params.SourceRangeMapMaxEntries
+
 	if params.IPv4 {
 		SourceRange4Map = bpf.NewMap(
 			SourceRange4MapName,
 			bpf.MapTypeLPMTrie,
 			&SourceRangeKey4{}, int(unsafe.Sizeof(SourceRangeKey4{})),
 			&SourceRangeValue{}, int(unsafe.Sizeof(SourceRangeValue{})),
-			MaxEntries,
+			SourceRangeMapMaxEntries,
 			bpf.BPF_F_NO_PREALLOC, 0,
 			bpf.ConvertKeyValue,
-		).WithCache().WithPressureMetric()
+		).WithCache().WithPressureMetric().
+			WithEvents(option.Config.GetEventBufferConfig(SourceRange4MapName))
 	}
 
 	if params.IPv6 {
@@ -157,10 +167,11 @@ func initSourceRange(params InitParams) {
 			bpf.MapTypeLPMTrie,
 			&SourceRangeKey6{}, int(unsafe.Sizeof(SourceRangeKey6{})),
 			&SourceRangeValue{}, int(unsafe.Sizeof(SourceRangeValue{})),
-			MaxEntries,
+			SourceRangeMapMaxEntries,
 			bpf.BPF_F_NO_PREALLOC, 0,
 			bpf.ConvertKeyValue,
-		).WithCache().WithPressureMetric()
+		).WithCache().WithPressureMetric().
+			WithEvents(option.Config.GetEventBufferConfig(SourceRange6MapName))
 	}
 }
 

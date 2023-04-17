@@ -1,18 +1,6 @@
 #!/bin/bash
-#
-# Copyright 2018 Authors of Cilium
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Authors of Cilium
 
 trap cleanup EXIT
 
@@ -30,16 +18,19 @@ function cleanup {
 }
 
 function get_cilium_pods {
-    kubectl -n "${K8S_NAMESPACE}" get pods -l k8s-app=cilium | \
-       awk '{print $1}' | \
+    kubectl -n "${K8S_NAMESPACE}" get pods -l k8s-app=cilium -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName | \
        grep cilium
 }
 
 K8S_NAMESPACE="${K8S_NAMESPACE:-kube-system}"
 CONTAINER="${CONTAINER:-cilium-agent}"
 
-while read -r p; do
-	kubectl -n "${K8S_NAMESPACE}" exec -c "${CONTAINER}" "${p}" -- "${@}" &
+while read -r podName nodeName ; do
+	(
+		title="==== detail from pod $podName , on node $nodeName "
+		msg=$( kubectl -n "${K8S_NAMESPACE}" exec -c "${CONTAINER}" "${podName}" -- "${@}" 2>&1 )
+		echo -e "$title \n$msg\n"
+	)&
 done <<< "$(get_cilium_pods)"
 
 wait

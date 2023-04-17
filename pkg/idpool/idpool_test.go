@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package idpool
 
@@ -12,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 func Test(t *testing.T) {
@@ -314,7 +311,7 @@ func (s *IDPoolTestSuite) testAllocatedID(c *C, nGoRoutines int) {
 	bufferChannelSize := 100
 	minID, maxID := 1, 6000
 	if maxID-minID < nGoRoutines+bufferChannelSize {
-		panic(fmt.Sprintf("Number of go routines and size of the buffered channel (%d) "+
+		panic(fmt.Sprintf("Number of goroutines and size of the buffered channel (%d) "+
 			"should be lower than the number of IDs to be tested (%d)",
 			nGoRoutines+bufferChannelSize, maxID-minID))
 	}

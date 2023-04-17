@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package loader
 
@@ -10,34 +10,37 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
+
 	"github.com/cilium/cilium/pkg/bpf"
-	"github.com/cilium/cilium/pkg/cgroups"
 	"github.com/cilium/cilium/pkg/command/exec"
 	"github.com/cilium/cilium/pkg/common"
-	"github.com/cilium/cilium/pkg/datapath"
 	"github.com/cilium/cilium/pkg/datapath/alignchecker"
 	"github.com/cilium/cilium/pkg/datapath/connector"
 	"github.com/cilium/cilium/pkg/datapath/linux/ethtool"
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
 	linuxrouting "github.com/cilium/cilium/pkg/datapath/linux/routing"
-	datapathOption "github.com/cilium/cilium/pkg/datapath/option"
 	"github.com/cilium/cilium/pkg/datapath/prefilter"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/defaults"
 	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
+	"github.com/cilium/cilium/pkg/socketlb"
 	"github.com/cilium/cilium/pkg/sysctl"
-	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
 )
 
 const (
 	initArgLib int = iota
 	initArgRundir
+	initArgProcSysNetDir
+	initArgSysDir
 	initArgIPv4NodeIP
 	initArgIPv6NodeIP
 	initArgMode
@@ -47,9 +50,8 @@ const (
 	initArgHostDev1
 	initArgHostDev2
 	initArgMTU
-	initArgHostReachableServices
-	initArgHostReachableServicesUDP
-	initArgHostReachableServicesPeer
+	initArgSocketLB
+	initArgSocketLBPeer
 	initArgCgroupRoot
 	initArgBpffsRoot
 	initArgNodePort
@@ -58,6 +60,7 @@ const (
 	initArgNrCPUs
 	initArgEndpointRoutes
 	initArgProxyRule
+	initTCFilterPriority
 	initArgMax
 )
 
@@ -102,8 +105,8 @@ func writePreFilterHeader(preFilter *prefilter.PreFilter, dir string) error {
 
 	fw := bufio.NewWriter(f)
 	fmt.Fprint(fw, "/*\n")
-	fmt.Fprintf(fw, " * XDP devices: %s\n", strings.Join(option.Config.Devices, " "))
-	fmt.Fprintf(fw, " * XDP mode: %s\n", option.Config.ModePreFilter)
+	fmt.Fprintf(fw, " * XDP devices: %s\n", strings.Join(option.Config.GetDevices(), " "))
+	fmt.Fprintf(fw, " * XDP mode: %s\n", option.Config.NodePortAcceleration)
 	fmt.Fprint(fw, " */\n\n")
 	preFilter.WriteConfig(fw)
 	return fw.Flush()
@@ -157,6 +160,7 @@ func addENIRules(sysSettings []sysctl.Setting, nodeAddressing datapath.NodeAddre
 		IP:   nodeAddressing.IPv4().Router(),
 		Mask: net.CIDRMask(32, 32),
 	}
+
 	for _, cidr := range cidrs {
 		if err = linuxrouting.SetupRules(&routerIP, &cidr, info.GetMac().String(), info.GetInterfaceNumber()); err != nil {
 			return nil, fmt.Errorf("unable to install ip rule for cilium_host: %w", err)
@@ -207,11 +211,11 @@ func (l *Loader) reinitializeIPSec(ctx context.Context) error {
 }
 
 func (l *Loader) reinitializeXDPLocked(ctx context.Context, extraCArgs []string) error {
-	maybeUnloadObsoleteXDPPrograms(option.Config.Devices, option.Config.XDPMode)
+	maybeUnloadObsoleteXDPPrograms(option.Config.GetDevices(), option.Config.XDPMode)
 	if option.Config.XDPMode == option.XDPModeDisabled {
 		return nil
 	}
-	for _, dev := range option.Config.Devices {
+	for _, dev := range option.Config.GetDevices() {
 		if err := compileAndLoadXDPProg(ctx, dev, option.Config.XDPMode, extraCArgs); err != nil {
 			return err
 		}
@@ -235,13 +239,12 @@ func (l *Loader) ReinitializeXDP(ctx context.Context, o datapath.BaseProgramOwne
 func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, deviceMTU int, iptMgr datapath.IptablesManager, p datapath.Proxy) error {
 	var (
 		args []string
-		ret  error
 	)
 
 	args = make([]string, initArgMax)
 
 	sysSettings := []sysctl.Setting{
-		{Name: "net.core.bpf_jit_enable", Val: "1", IgnoreErr: true},
+		{Name: "net.core.bpf_jit_enable", Val: "1", IgnoreErr: true, Warn: "Unable to ensure that BPF JIT compilation is enabled. This can be ignored when Cilium is running inside non-host network namespace (e.g. with kind or minikube)"},
 		{Name: "net.ipv4.conf.all.rp_filter", Val: "0", IgnoreErr: false},
 		{Name: "net.ipv4.fib_multipath_use_neigh", Val: "1", IgnoreErr: true},
 		{Name: "kernel.unprivileged_bpf_disabled", Val: "1", IgnoreErr: true},
@@ -259,14 +262,16 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 		log.WithError(err).Warn("Unable to write netdev header")
 		return err
 	}
+	args[initArgProcSysNetDir] = filepath.Join(o.Datapath().Procfs(), "sys", "net")
+	args[initArgSysDir] = filepath.Join("/sys", "class", "net")
 
 	if option.Config.EnableXDPPrefilter {
-		scopedLog := log.WithField(logfields.Devices, option.Config.Devices)
+		scopedLog := log.WithField(logfields.Devices, option.Config.GetDevices())
 
 		preFilter, err := prefilter.NewPreFilter()
 		if err != nil {
-			scopedLog.WithError(ret).Warn("Unable to init prefilter")
-			return ret
+			scopedLog.WithError(err).Warn("Unable to init prefilter")
+			return err
 		}
 
 		if err := writePreFilterHeader(preFilter, "./"); err != nil {
@@ -279,8 +284,6 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 
 	args[initArgLib] = option.Config.BpfDir
 	args[initArgRundir] = option.Config.StateDir
-	args[initArgCgroupRoot] = cgroups.GetCgroupRoot()
-	args[initArgBpffsRoot] = bpf.GetMapRoot()
 
 	if option.Config.EnableIPv4 {
 		args[initArgIPv4NodeIP] = node.GetInternalIPv4Router().String()
@@ -289,7 +292,7 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 	}
 
 	if option.Config.EnableIPv6 {
-		args[initArgIPv6NodeIP] = node.GetIPv6().String()
+		args[initArgIPv6NodeIP] = node.GetIPv6Router().String()
 		// Docker <17.05 has an issue which causes IPv6 to be disabled in the initns for all
 		// interface (https://github.com/docker/libnetwork/issues/1720)
 		// Enable IPv6 for now
@@ -301,35 +304,13 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 
 	args[initArgMTU] = fmt.Sprintf("%d", deviceMTU)
 
-	if option.Config.EnableHostReachableServices {
-		args[initArgHostReachableServices] = "true"
-		if option.Config.EnableHostServicesUDP {
-			args[initArgHostReachableServicesUDP] = "true"
-		} else {
-			args[initArgHostReachableServicesUDP] = "false"
-		}
-		if option.Config.EnableHostServicesPeer {
-			args[initArgHostReachableServicesPeer] = "true"
-		} else {
-			args[initArgHostReachableServicesPeer] = "false"
-		}
-	} else {
-		args[initArgHostReachableServices] = "false"
-		args[initArgHostReachableServicesUDP] = "false"
-		args[initArgHostReachableServicesPeer] = "false"
-	}
+	args[initArgSocketLB] = "<nil>"
+	args[initArgSocketLBPeer] = "<nil>"
+	args[initArgCgroupRoot] = "<nil>"
+	args[initArgBpffsRoot] = "<nil>"
 
-	devices := make([]netlink.Link, 0, len(option.Config.Devices))
-	if len(option.Config.Devices) != 0 {
-		for _, device := range option.Config.Devices {
-			link, err := netlink.LinkByName(device)
-			if err != nil {
-				log.WithError(err).WithField("device", device).Warn("Link does not exist")
-				return err
-			}
-			devices = append(devices, link)
-		}
-		args[initArgDevices] = strings.Join(option.Config.Devices, ";")
+	if len(option.Config.GetDevices()) != 0 {
+		args[initArgDevices] = strings.Join(option.Config.GetDevices(), ";")
 	} else {
 		args[initArgDevices] = "<nil>"
 	}
@@ -337,11 +318,9 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 	var mode baseDeviceMode
 	args[initArgTunnelMode] = "<nil>"
 	switch {
-	case option.Config.Tunnel != option.TunnelDisabled:
+	case option.Config.TunnelingEnabled():
 		mode = tunnelMode
-		args[initArgTunnelMode] = option.Config.Tunnel
-	case option.Config.DatapathMode == datapathOption.DatapathModeIpvlan:
-		mode = ipvlanMode
+		args[initArgTunnelMode] = option.Config.TunnelProtocol
 	case option.Config.EnableHealthDatapath:
 		mode = option.DSRDispatchIPIP
 		sysSettings = append(sysSettings,
@@ -352,10 +331,16 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 	}
 	args[initArgMode] = string(mode)
 
-	if option.Config.Tunnel == option.TunnelDisabled && option.Config.EnableIPv4EgressGateway {
-		// Enable tunnel mode to vxlan if egress gateway is configured
+	if !option.Config.TunnelingEnabled() && option.Config.EnableIPv4EgressGateway {
 		// Tunnel is required for egress traffic under this config
-		args[initArgTunnelMode] = option.TunnelVXLAN
+		args[initArgTunnelMode] = option.Config.TunnelProtocol
+	}
+
+	if !option.Config.TunnelingEnabled() &&
+		option.Config.EnableNodePort &&
+		option.Config.NodePortMode == option.NodePortModeDSR &&
+		option.Config.LoadBalancerDSRDispatch == option.DSRDispatchGeneve {
+		args[initArgTunnelMode] = option.TunnelGeneve
 	}
 
 	args[initArgTunnelPort] = "<nil>"
@@ -370,11 +355,7 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 		args[initArgNodePort] = "false"
 	}
 
-	if option.Config.NodePortBindProtection {
-		args[initArgNodePortBind] = "true"
-	} else {
-		args[initArgNodePortBind] = "false"
-	}
+	args[initArgNodePortBind] = "<nil>"
 
 	args[initBPFCPU] = GetBPFCPU()
 	args[initArgNrCPUs] = fmt.Sprintf("%d", common.GetNumPossibleCPUs(log))
@@ -401,18 +382,20 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 	sysctl.ApplySettings(sysSettings)
 
 	// Datapath initialization
-	hostDev1, hostDev2, err := setupBaseDevice(devices, mode, deviceMTU)
+	hostDev1, hostDev2, err := SetupBaseDevice(deviceMTU)
 	if err != nil {
 		return fmt.Errorf("failed to setup base devices in mode %s: %w", mode, err)
 	}
 	args[initArgHostDev1] = hostDev1.Attrs().Name
 	args[initArgHostDev2] = hostDev2.Attrs().Name
 
-	if option.Config.InstallIptRules {
+	if option.Config.InstallIptRules && option.Config.EnableL7Proxy {
 		args[initArgProxyRule] = "true"
 	} else {
 		args[initArgProxyRule] = "false"
 	}
+
+	args[initTCFilterPriority] = strconv.Itoa(int(option.Config.TCFilterPriority))
 
 	// "Legacy" datapath inizialization with the init.sh script
 	// TODO(mrostecki): Rewrite the whole init.sh in Go, step by step.
@@ -425,11 +408,6 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 	ctx, cancel := context.WithTimeout(ctx, defaults.ExecTimeout)
 	defer cancel()
 
-	extraArgs := []string{"-Dcapture_enabled=0"}
-	if err := l.reinitializeXDPLocked(ctx, extraArgs); err != nil {
-		log.WithError(err).Fatal("Failed to compile XDP program")
-	}
-
 	prog := filepath.Join(option.Config.BpfDir, "init.sh")
 	cmd := exec.CommandContext(ctx, prog, args...)
 	cmd.Env = bpf.Environment()
@@ -437,13 +415,32 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 		return err
 	}
 
-	if l.canDisableDwarfRelocations {
-		// Validate alignments of C and Go equivalent structs
-		if err := alignchecker.CheckStructAlignments(defaults.AlignCheckerName); err != nil {
-			log.WithError(err).Fatal("C and Go structs alignment check failed")
+	if option.Config.EnableSocketLB {
+		// compile bpf_sock.c and attach/detach progs for socketLB
+		if err := CompileWithOptions(ctx, "bpf_sock.c", "bpf_sock.o", []string{"-DCALLS_MAP=cilium_calls_lb"}); err != nil {
+			log.WithError(err).Fatal("failed to compile bpf_sock.c")
+		}
+		if err := socketlb.Enable(); err != nil {
+			return err
 		}
 	} else {
-		log.Warning("Cannot check matching of C and Go common struct alignments due to old LLVM/clang version")
+		if err := socketlb.Disable(); err != nil {
+			return err
+		}
+	}
+
+	extraArgs := []string{"-Dcapture_enabled=0"}
+	if err := l.reinitializeXDPLocked(ctx, extraArgs); err != nil {
+		log.WithError(err).Fatal("Failed to compile XDP program")
+	}
+
+	// Compile alignchecker program
+	if err := Compile(ctx, "bpf_alignchecker.c", defaults.AlignCheckerName); err != nil {
+		log.WithError(err).Fatal("alignchecker compile failed")
+	}
+	// Validate alignments of C and Go equivalent structs
+	if err := alignchecker.CheckStructAlignments(defaults.AlignCheckerName); err != nil {
+		log.WithError(err).Fatal("C and Go structs alignment check failed")
 	}
 
 	if err := l.reinitializeIPSec(ctx); err != nil {
@@ -454,13 +451,15 @@ func (l *Loader) Reinitialize(ctx context.Context, o datapath.BaseProgramOwner, 
 		return err
 	}
 
-	if err := iptMgr.InstallRules(option.Config.HostDevice, firstInitialization, option.Config.InstallIptRules); err != nil {
+	if err := iptMgr.InstallRules(ctx, defaults.HostDevice, firstInitialization, option.Config.InstallIptRules); err != nil {
 		return err
 	}
 
 	// Reinstall proxy rules for any running proxies if needed
 	if p != nil {
-		p.ReinstallRules()
+		if err := p.ReinstallRules(ctx); err != nil {
+			return err
+		}
 	}
 
 	return nil

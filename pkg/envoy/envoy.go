@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017, 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package envoy
 
@@ -15,13 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cilium/lumberjack/v2"
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/flowdebug"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/metrics"
-
-	"github.com/sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
+	"github.com/cilium/cilium/pkg/safeio"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "envoy-manager")
@@ -87,7 +88,7 @@ func (a *admin) transact(query string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := safeio.ReadAllLimit(resp.Body, safeio.MB)
 	if err != nil {
 		return err
 	}
@@ -231,14 +232,11 @@ func StartEnvoy(stateDir, logPath string, baseID uint64) *Envoy {
 			go func() {
 				if err := cmd.Wait(); err != nil {
 					log.WithError(err).Warn("Envoy: Proxy crashed")
+					// Avoid busy loop & hogging CPU resources by waiting before restarting envoy.
+					time.Sleep(100 * time.Millisecond)
 				}
 				close(crashCh)
 			}()
-
-			// start again after a short wait. If Cilium exits this should be enough
-			// time to not start Envoy again in that case.
-			log.Info("Envoy: Sleeping for 100ms before restarting proxy")
-			time.Sleep(100 * time.Millisecond)
 
 			select {
 			case <-crashCh:

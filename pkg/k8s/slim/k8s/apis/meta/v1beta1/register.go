@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
+
 // Copyright 2017 The Kubernetes Authors.
-// Copyright 2020-2021 Authors of Cilium
 
 package v1beta1
 

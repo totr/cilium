@@ -13,7 +13,7 @@ Upgrade Guide
 .. _upgrade_general:
 
 This upgrade guide is intended for Cilium running on Kubernetes. If you have
-questions, feel free to ping us on the `Slack channel`.
+questions, feel free to ping us on the :term:`Slack channel`.
 
 .. include:: upgrade-warning.rst
 
@@ -106,7 +106,7 @@ continuing with the upgrade.
 Clean up pre-flight check
 -------------------------
 
-Once the number of READY for the preflight `DaemonSet` is the same as the number
+Once the number of READY for the preflight :term:`DaemonSet` is the same as the number
 of cilium pods running and the preflight ``Deployment`` is marked as READY ``1/1``
 you can delete the cilium-preflight and proceed with the upgrade.
 
@@ -136,14 +136,14 @@ one stable release to a later stable release.
 
 .. include:: upgrade-warning.rst
 
-Step 1: Upgrade to latest micro version (Recommended)
------------------------------------------------------
+Step 1: Upgrade to latest patch version
+---------------------------------------
 
 When upgrading from one minor release to another minor release, for example
-1.x to 1.y, it is recommended to upgrade to the latest micro release for a
-Cilium release series first. The latest micro releases for each supported
+1.x to 1.y, it is recommended to upgrade to the latest patch release for a
+Cilium release series first. The latest patch releases for each supported
 version of Cilium are `here <https://github.com/cilium/cilium#stable-releases>`_.
-Upgrading to the latest micro release ensures the most seamless experience if a
+Upgrading to the latest patch release ensures the most seamless experience if a
 rollback is required following the minor release upgrade. The upgrade guides
 for previous versions can be found for each minor version at the bottom left
 corner.
@@ -151,7 +151,7 @@ corner.
 Step 2: Use Helm to Upgrade your Cilium deployment
 --------------------------------------------------------------------------------------
 
-`Helm` can be used to either upgrade Cilium directly or to generate a new set of
+:term:`Helm` can be used to either upgrade Cilium directly or to generate a new set of
 YAML files that can be used to upgrade an existing deployment via ``kubectl``.
 By default, Helm will generate the new templates using the default values files
 packaged with each new release. You still need to ensure that you are
@@ -159,16 +159,11 @@ specifying the equivalent options as used for the initial deployment, either by
 specifying a them at the command line or by committing the values to a YAML
 file.
 
-.. include:: ../gettingstarted/k8s-install-download-release.rst
+.. include:: ../installation/k8s-install-download-release.rst
 
 To minimize datapath disruption during the upgrade, the
 ``upgradeCompatibility`` option should be set to the initial Cilium
-version which was installed in this cluster. Valid options are:
-
-* ``1.7`` if the initial install was Cilium 1.7.x or earlier.
-* ``1.8`` if the initial install was Cilium 1.8.x.
-* ``1.9`` if the initial install was Cilium 1.9.x.
-* ``1.10`` if the initial install was Cilium 1.10.x.
+version which was installed in this cluster.
 
 .. tabs::
   .. group-tab:: kubectl
@@ -198,7 +193,7 @@ version which was installed in this cluster. Valid options are:
    Instead of using ``--set``, you can also save the values relative to your
    deployment in a YAML file and use it to regenerate the YAML for the latest
    Cilium version. Running any of the previous commands will overwrite
-   the existing cluster's `ConfigMap` so it is critical to preserve any existing
+   the existing cluster's :term:`ConfigMap` so it is critical to preserve any existing
    options, either by setting them at the command line or storing them in a
    YAML file, similar to:
 
@@ -219,6 +214,24 @@ version which was installed in this cluster. Valid options are:
       helm upgrade cilium |CHART_RELEASE| \\
         --namespace=kube-system \\
         -f my-values.yaml
+
+When upgrading from one minor release to another minor release using
+``helm upgrade``, do *not* use Helm's ``--reuse-values`` flag.
+The ``--reuse-values`` flag ignores any newly introduced values present in
+the new release and thus may cause the Helm template to render incorrectly.
+Instead, if you want to reuse the values from your existing installation,
+save the old values in a values file, check the file for any renamed or
+deprecated values, and then pass it to the ``helm upgrade`` command as
+described above. You can retrieve and save the values from an existing
+installation with the following command:
+
+.. code-block:: shell-session
+
+  helm get values cilium --namespace=kube-system -o yaml > old-values.yaml
+
+The ``--reuse-values`` flag may only be safely used if the Cilium chart version
+remains unchanged, for example when ``helm upgrade`` is used to apply
+configuration changes without upgrading Cilium.
 
 Step 3: Rolling Back
 --------------------
@@ -250,7 +263,7 @@ Cilium to the state it was in prior to the upgrade.
     incompatible feature use before downgrading/rolling back. This step is only
     required after new functionality introduced in the new minor version has
     already been explicitly used by creating new resources or by opting into
-    new features via the `ConfigMap`.
+    new features via the :term:`ConfigMap`.
 
 .. _version_notes:
 .. _upgrade_version_specifics:
@@ -268,16 +281,16 @@ The table below lists suggested upgrade transitions, from a specified current
 version running in a cluster to a specified target version. If a specific
 combination is not listed in the table below, then it may not be safe. In that
 case, consider performing incremental upgrades between versions (e.g. upgrade
-from ``1.9.x`` to ``1.10.y`` first, and to ``1.11.z`` only afterwards).
+from ``1.11.x`` to ``1.12.y`` first, and to ``1.13.z`` only afterwards).
 
 +-----------------------+-----------------------+-------------------------+---------------------------+
 | Current version       | Target version        | L3/L4 impact            | L7 impact                 |
 +=======================+=======================+=========================+===========================+
+| ``1.12.x``            | ``1.13.y``            | Minimal to None         | Clients must reconnect[1] |
++-----------------------+-----------------------+-------------------------+---------------------------+
+| ``1.11.x``            | ``1.12.y``            | Minimal to None         | Clients must reconnect[1] |
++-----------------------+-----------------------+-------------------------+---------------------------+
 | ``1.10.x``            | ``1.11.y``            | Minimal to None         | Clients must reconnect[1] |
-+-----------------------+-----------------------+-------------------------+---------------------------+
-| ``1.9.x``             | ``1.10.y``            | Minimal to None         | Clients must reconnect[1] |
-+-----------------------+-----------------------+-------------------------+---------------------------+
-| ``1.8.x``             | ``1.9.y``             | Minimal to None         | Clients must reconnect[1] |
 +-----------------------+-----------------------+-------------------------+---------------------------+
 
 Annotations:
@@ -289,121 +302,91 @@ Annotations:
 
 .. _current_release_required_changes:
 
-.. _1.12_upgrade_notes:
+.. _1.14_upgrade_notes:
 
-1.12 Upgrade Notes
+1.14 Upgrade Notes
 ------------------
-
-New Options
-~~~~~~~~~~~
-
-* ``ipv6-native-routing-cidr``: This option specifies the IPv6 CIDR for native
-  routing. It must be set whenever running in direct routing mode with IPv6
-  masquerading enabled.
-
-.. _1.11_upgrade_notes:
-
-1.11 Upgrade Notes
-------------------
-
-* The Cilium agent will now fail instead of falling back to auto-detection
-  when device wildcard expansion (``--devices=eth+``) yields no devices.
-* Device auto-detection now discovers devices through the routing table and
-  only considers devices that have a global unicast route in some routing table.
-* The XDP-based prefilter is enabled for all devices specified by ``--devices``
-  if ``--prefilter-device`` is set.
-* New flags were added to enable installation where alternative VXLAN/Geneve and
-  health ports need to be used (``--tunnel-port`` and ``--cluster-health-port``).
-  Default values of these flags haven't changed, however if ``--tunnel-port`` gets
-  set to non-default values on upgrade, there will datapath downtime between nodes.
-  If ``--tunnel-port`` needs to change, it's recommended to perform the upgrade
-  first, and change the port afterwards, in order to separate agent upgrade from
-  configuration update. Changing ``--cluster-health-port`` will not affect datapath,
-  however it's recommended to still handle configuration change separately from
-  agent upgrade. Changing both ports simultaneously shouldn't cause any issues.
-* When Egress Gateway is enabled, upgrading to 1.11 will cause a brief
-  interruption of the connectivity between the client pods and the egress
-  gateway nodes. Once the connectivity is restored, clients will need to
-  reconnect.
-
-Removed Metrics/Labels
-~~~~~~~~~~~~~~~~~~~~~~
-
-* ``cilium_operator_identity_gc_entries_total`` is removed. Please use ``cilium_operator_identity_gc_entries`` instead.
-* ``cilium_operator_identity_gc_runs_total`` is removed. Please use ``cilium_operator_identity_gc_runs`` instead.
+* The default value of ``--tofqdns-min-ttl`` has changed from 3600 seconds to
+  zero. This means Cilium DNS network policy now honors the TTLs returned from
+  the upstream DNS server by default. Explicitly configure ``--tofqdns-min-ttl``
+  if you need to preserve the previous DNS network policy behavior that lets
+  applications create new connections after the TTL specified by the upstream
+  DNS server is expired.
+* Cilium now writes its CNI configuration file to ``05-cilium.conflist`` in
+  all cases, rather than the previous default of ``05-cilium.conf``.
+* The default value of ``--update-ec2-adapter-limit-via-api`` has changed from
+  ``false`` to ``true``. This means that the Cilium Operator will fetch the
+  most up-to-date EC2 adapter limits from the AWS API. This now requires
+  updated IAM permissions for Cilium to have ``ec2:DescribeInstances``. In EKS,
+  nodes usually have ``AmazonEKSWorkerNodePolicy`` which includes this
+  permission, so it should work in most cases. If your nodes don't have this
+  policy, then consider adding it to your IAM permissions. Explicitly configure
+  ``--update-ec2-adapter-limit-via-api`` to ``false`` if you want to avoid this
+  additional IAM permission. Beware that if your EC2 instance type that Cilium
+  is running on is not known to Cilium, it may cause a crash.
 
 Removed Options
 ~~~~~~~~~~~~~~~
 
-* ``bpf-compile-debug``: This option does not have any effect since 1.10
-  and is now removed.
-* ``k8s-force-json-patch``: This option does not have any effect for
-  environments running Kubernetes >= 1.13, is deprecated since 1.10, and
-  now removed.
-* ``masquerade``: This option has been deprecated in 1.10 and replaced by
-  ``enable-ipv4-masquerade``.
-* ``skip-crd-creation``: This option does not have any effect since 1.10
-  and is now removed.
-* ``hubble-flow-buffer-size``: This option was deprecated in 1.10 in favor
-  of ``hubble-event-buffer-capacity``. It is now removed.
-* The ``Capabilities`` Helm value has been removed. When using ``helm template``
-  to generate the Kubernetes manifest for a specific Kubernetes version,
-  please use the ``--kube-version`` flag (introduced in Helm 3.6.0) instead.
-* The deprecated ``hubble-ca-cert`` ConfigMap has been removed. Use
-  ``hubble-ca-secret`` secret instead.
-* The ``azure-cloud-name`` option for ``cilium-operator-azure`` was deprecated
-  in 1.10 and is now removed.
-
-Deprecated Options
-~~~~~~~~~~~~~~~~~~
-
-* ``native-routing-cidr``: This option has been deprecated in favor of
-  ``ipv4-native-routing-cidr`` and will be removed in 1.12.
-* ``prefilter-device`` and ``prefilter-mode``: These options have been
-  deprecated in favor of ``enable-xdp-prefilter`` and ``bpf-lb-acceleration``,
-  and will be removed in 1.12. To select the prefilter devices use ``devices``.
-* The NodePort related ``bpf-lb-bypass-fib-lookup`` option to enable a FIB
-  lookup bypass optimization for NodePort's reverse NAT handling has been
-  deprecated as the Linux kernel's FIB table is now always consulted. Thus,
-  explicitly setting the option has no effect. It is scheduled for removal
-  in 1.12.
-* IPVLAN support has been deprecated due to lack of feature support and lack
-  of community interest. `Recent improvements Virtual Ethernet device performance
-  <https://cilium.io/blog/2020/11/10/cilium-19#veth>`_ have granted many of the
-  benefits of IPVLAN to the standard veth mode.
-* Support for Consul as a kvstore backend has been deprecated due to a lack
-  of community interest. It is planned for removal in 1.12.
-* The in-pod Cilium CLI command ``cilium policy trace`` has been deprecated
-  in favor of approaches using the `Network Policy Editor <https://app.networkpolicy.io>`_
-  or guide for `policy_verdicts`.
-* Cilium no longer recognizes label sources from Mesos.
+* The ``sockops-enable`` and ``force-local-policy-eval-at-source`` options deprecated in version
+  1.13 are removed.
 
 New Options
 ~~~~~~~~~~~
 
-* ``kvstore-max-consecutive-quorum-errors``: This option configures the max
-  acceptable kvstore consecutive quorum errors before the agent assumes
-  permanent failure.
+* ``routing-mode=native``: This option enables native-routing mode, in place of
+  ``tunnel=disabled``, now deprecated.
+* ``tunnel-protocol``: This option allows setting the tunneling protocol, in place
+  of e.g., ``tunnel=vxlan``.
 
-Renamed Options
+Deprecated Options
+~~~~~~~~~~~~~~~~~~
+
+* The ``tunnel`` option is deprecated and will be removed in v1.15. To enable
+  native-routing mode, set ``routing-mode=native`` (previously
+  ``tunnel=disabled``). To configure the tunneling protocol, set
+  ``tunnel-protocol=geneve`` (previously ``tunnel=geneve``).
+
+Added Metrics
+~~~~~~~~~~~~~
+
+* ``cilium_operator_ces_sync_total``
+* ``cilium_policy_change_total``
+* ``go_sched_latencies_seconds``
+
+Deprecated Metrics
+~~~~~~~~~~~~~~~~~~
+
+* ``cilium_operator_ces_sync_errors_total`` is deprecated. Please use ``cilium_operator_ces_sync_total`` instead.
+* ``cilium_policy_import_errors_total`` is deprecated. Please use
+  ``cilium_policy_change_total``, which counts all policy changes (Add, Update, Delete)
+  based on outcome ("success" or "failure").
+
+Changed Metrics
 ~~~~~~~~~~~~~~~
 
-The following option has been renamed:
-
-* ``enable-egress-gateway`` to ``enable-ipv4-egress-gateway``.
-
-Deprecated Options in Cilium Operator
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* ``nodes-gc-interval``: This option will be removed in 1.12. Its value does not
-  have any effect in 1.11.
+* ``cilium_bpf_map_pressure`` is now enabled by default.
 
 Helm Options
 ~~~~~~~~~~~~
 
-* ``hostFirewall`` was renamed to ``hostFirewall.enabled``.
-* ``ipam.operator.clusterPoolIPv4PodCIDR`` was deprecated in favor of ``ipam.operator.clusterPoolIPv4PodCIDRList``
-* ``ipam.operator.clusterPoolIPv6PodCIDR`` was deprecated in favor of ``ipam.operator.clusterPoolIPv6PodCIDRList``
-* ``nativeRoutingCIDR``: was deprecated in favor of ``ipv4NativeRoutingCIDR``
+* The ``securityContext`` for Hubble Relay now applies to the container, not
+  the pod. To update the security context of the pod, use
+  ``podSecurityContext``.
+* The ``securityContext`` for Hubble Relay now defaults to drop all
+  capabilities and run as non-root user.
+* The ``containerRuntime.integration`` value is being deprecated in favor of ``bpf.autoMount.enabled``.
+* Following the deprecation of the ``tunnel`` agent flag, ``tunnel`` is being
+  deprecated in favor of ``routingMode`` and ``tunnelProtocol`` and will be
+  removed in v1.15.
+
+.. _earlier_upgrade_notes:
+
+Earlier Upgrade Notes
+---------------------
+
+For upgrades from earlier releases, see the
+:prev-docs:`upgrade notes from the previous version <operations/upgrade/#upgrade-notes>`.
 
 Advanced
 ========
@@ -436,7 +419,7 @@ available during the upgrade:
 Rebasing a ConfigMap
 --------------------
 
-This section describes the procedure to rebase an existing `ConfigMap` to the
+This section describes the procedure to rebase an existing :term:`ConfigMap` to the
 template of another version.
 
 Export the current ConfigMap
@@ -472,7 +455,7 @@ Export the current ConfigMap
           selfLink: /api/v1/namespaces/kube-system/configmaps/cilium-config
 
 
-In the `ConfigMap` above, we can verify that Cilium is using ``debug`` with
+In the :term:`ConfigMap` above, we can verify that Cilium is using ``debug`` with
 ``true``, it has a etcd endpoint running with `TLS <https://etcd.io/docs/latest/op-guide/security/>`_,
 and the etcd is set up to have `client to server authentication <https://etcd.io/docs/latest/op-guide/security/#example-2-client-to-server-authentication-with-https-client-certificates>`_.
 
@@ -491,7 +474,7 @@ Generate the latest ConfigMap
 Add new options
 ~~~~~~~~~~~~~~~
 
-Add the new options manually to your old `ConfigMap`, and make the necessary
+Add the new options manually to your old :term:`ConfigMap`, and make the necessary
 changes.
 
 In this example, the ``debug`` option is meant to be kept with ``true``, the
@@ -499,7 +482,7 @@ In this example, the ``debug`` option is meant to be kept with ``true``, the
 option, but after reading the :ref:`version_notes` the value was kept unchanged
 from the default value.
 
-After making the necessary changes, the old `ConfigMap` was migrated with the
+After making the necessary changes, the old :term:`ConfigMap` was migrated with the
 new options while keeping the configuration that we wanted:
 
 ::
@@ -536,94 +519,15 @@ Apply new ConfigMap
 ~~~~~~~~~~~~~~~~~~~
 
 After adding the options, manually save the file with your changes and install
-the `ConfigMap` in the ``kube-system`` namespace of your cluster.
+the :term:`ConfigMap` in the ``kube-system`` namespace of your cluster.
 
 .. code-block:: shell-session
 
         $ kubectl apply -n kube-system -f ./cilium-cm-old.yaml
 
-As the `ConfigMap` is successfully upgraded we can start upgrading Cilium
+As the :term:`ConfigMap` is successfully upgraded we can start upgrading Cilium
 ``DaemonSet`` and ``RBAC`` which will pick up the latest configuration from the
-`ConfigMap`.
-
-
-.. _cidr_limitations:
-
-Restrictions on unique prefix lengths for CIDR policy rules
------------------------------------------------------------
-
-The Linux kernel applies limitations on the complexity of eBPF code that is
-loaded into the kernel so that the code may be verified as safe to execute on
-packets. Over time, Linux releases become more intelligent about the
-verification of programs which allows more complex programs to be loaded.
-However, the complexity limitations affect some features in Cilium depending
-on the kernel version that is used with Cilium.
-
-One such limitation affects Cilium's configuration of CIDR policies. On Linux
-kernels 4.10 and earlier, this manifests as a restriction on the number of
-unique prefix lengths supported in CIDR policy rules.
-
-Unique prefix lengths are counted by looking at the prefix portion of CIDR
-rules and considering which prefix lengths are unique. For example, in the
-following policy example, the ``toCIDR`` section specifies a ``/32``, and the
-``toCIDRSet`` section specifies a ``/8`` with a ``/12`` removed from it. In
-addition, three prefix lengths are always counted: the host prefix length for
-the protocol (IPv4: ``/32``, IPv6: ``/128``), the default prefix length
-(``/0``), and the cluster prefix length (default IPv4: ``/8``, IPv6: ``/64``).
-All in all, the following example counts as seven unique prefix lengths in IPv4:
-
-* ``/32`` (from ``toCIDR``, also from host prefix)
-* ``/12`` (from ``toCIDRSet``)
-* ``/11`` (from ``toCIDRSet``)
-* ``/10`` (from ``toCIDRSet``)
-* ``/9`` (from ``toCIDRSet``)
-* ``/8`` (from cluster prefix)
-* ``/0`` (from default prefix)
-
-.. only:: html
-
-   .. tabs::
-     .. group-tab:: k8s YAML
-
-        .. literalinclude:: ../../examples/policies/l3/cidr/cidr.yaml
-     .. group-tab:: JSON
-
-        .. literalinclude:: ../../examples/policies/l3/cidr/cidr.json
-
-.. only:: epub or latex
-
-        .. literalinclude:: ../../examples/policies/l3/cidr/cidr.json
-
-Affected versions
-~~~~~~~~~~~~~~~~~
-
-* Any version of Cilium running on Linux 4.10 or earlier
-
-When a CIDR policy with too many unique prefix lengths is imported, Cilium will
-reject the policy with a message like the following:
-
-.. code-block:: shell-session
-
-  $ cilium policy import too_many_cidrs.json
-  Error: Cannot import policy: [PUT /policy][500] putPolicyFailure  Adding
-  specified prefixes would result in too many prefix lengths (current: 3,
-  result: 32, max: 18)
-
-The supported count of unique prefix lengths may differ between Cilium minor
-releases, for example Cilium 1.1 supported 20 unique prefix lengths on Linux
-4.10 or older, while Cilium 1.2 only supported 18 (for IPv4) or 4 (for IPv6).
-
-Mitigation
-~~~~~~~~~~
-
-Users may construct CIDR policies that use fewer unique prefix lengths. This
-can be achieved by composing or decomposing adjacent prefixes.
-
-Solution
-~~~~~~~~
-
-Upgrade the host Linux version to 4.11 or later. This step is beyond the scope
-of the Cilium guide.
+:term:`ConfigMap`.
 
 
 Migrating from kvstore-backed identities to Kubernetes CRD-backed identities
@@ -671,8 +575,8 @@ The cilium preflight manifest requires etcd support and can be built with:
       --set agent.enabled=false \
       --set config.enabled=false \
       --set operator.enabled=false \
-      --set global.etcd.enabled=true \
-      --set global.etcd.ssl=true \
+      --set etcd.enabled=true \
+      --set etcd.ssl=true \
       > cilium-preflight.yaml
     kubectl create -f cilium-preflight.yaml
 
@@ -682,7 +586,7 @@ Example migration
 
 .. code-block:: shell-session
 
-      $ kubectl exec -n kube-system cilium-preflight-1234 -- cilium preflight migrate-identity
+      $ kubectl exec -n kube-system cilium-pre-flight-check-1234 -- cilium preflight migrate-identity
       INFO[0000] Setting up kvstore client
       INFO[0000] Connecting to etcd server...                  config=/var/lib/cilium/etcd-config.yml endpoints="[https://192.168.60.11:2379]" subsys=kvstore
       INFO[0000] Setting up kubernetes client
@@ -718,6 +622,13 @@ Example migration
   .. code-block:: shell-session
 
         cilium preflight migrate-identity --k8s-kubeconfig-path /var/lib/cilium/cilium.kubeconfig --kvstore etcd --kvstore-opt etcd.config=/var/lib/cilium/etcd-config.yml
+
+Once the migration is complete, confirm the endpoint identities match by listing the endpoints stored in CRDs and in etcd:
+
+.. code-block:: shell-session
+
+      $ kubectl get ciliumendpoints -A # new CRD-backed endpoints
+      $ kubectl exec -n kube-system cilium-1234 -- cilium endpoint list # existing etcd-backed endpoints
 
 Clearing CRD identities
 ~~~~~~~~~~~~~~~~~~~~~~~

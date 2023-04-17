@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package ciliumTest
 
@@ -12,23 +12,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/logging"
-	"github.com/cilium/cilium/test/config"
-	. "github.com/cilium/cilium/test/ginkgo-ext"
-	"github.com/cilium/cilium/test/helpers"
-	"github.com/cilium/cilium/test/logger"
 	gops "github.com/google/gops/agent"
 	"github.com/onsi/ginkgo"
 	ginkgoconfig "github.com/onsi/ginkgo/config"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/logging"
+	"github.com/cilium/cilium/test/config"
+	. "github.com/cilium/cilium/test/ginkgo-ext"
+	"github.com/cilium/cilium/test/helpers"
+	"github.com/cilium/cilium/test/logger"
+
+	// These packages are where Ginkgo test specs live. They are declared as blank
+	// (_) global variables and are pulled in using package import side effects.
+	_ "github.com/cilium/cilium/test/k8s"
+	_ "github.com/cilium/cilium/test/runtime"
 )
 
 var (
 	log             = logging.DefaultLogger
 	DefaultSettings = map[string]string{
-		"K8S_VERSION": "1.23",
+		"K8S_VERSION": "1.26",
 	}
 	k8sNodesEnv         = "K8S_NODES"
 	commandsLogFileName = "cmds.log"
@@ -59,7 +65,7 @@ func configLogsOutput() {
 	GinkgoWriter = NewWriter(log.Out)
 }
 
-func ShowCommands() {
+func showCommands() {
 	if !config.CiliumTestConfig.ShowCommands {
 		return
 	}
@@ -67,11 +73,19 @@ func ShowCommands() {
 	helpers.SSHMetaLogs = NewWriter(os.Stdout)
 }
 
-func TestTest(t *testing.T) {
+func Test(t *testing.T) {
 	if config.CiliumTestConfig.TestScope != "" {
 		helpers.UserDefinedScope = config.CiliumTestConfig.TestScope
 		fmt.Printf("User specified the scope:  %q\n", config.CiliumTestConfig.TestScope)
 	}
+
+	// Skip the ginkgo test suite if 'go test ./...' is run on the repository.
+	// Require passing a scope or focus to pull in the ginkgo suite.
+	if _, err := helpers.GetScope(); err != nil {
+		fmt.Println("No Ginkgo test scope defined, skipping test suite of package test/")
+		t.Skip("Run this package through Ginkgo with the --focus or -cilium.testScope options")
+	}
+
 	if integration := helpers.GetCurrentIntegration(); integration != "" {
 		fmt.Printf("Using CNI_INTEGRATION=%q\n", integration)
 
@@ -86,7 +100,7 @@ func TestTest(t *testing.T) {
 	}
 
 	configLogsOutput()
-	ShowCommands()
+	showCommands()
 
 	if config.CiliumTestConfig.HoldEnvironment {
 		RegisterFailHandler(helpers.Fail)
@@ -203,7 +217,7 @@ var _ = BeforeAll(func() {
 		go vm.PprofReport()
 
 	case helpers.K8s:
-		//FIXME: This should be:
+		// FIXME: This should be:
 		// Start k8s1 and provision kubernetes.
 		// When finish, start to build cilium in background
 		// Start k8s2

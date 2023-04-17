@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package labels
 
@@ -13,9 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
 	"github.com/stretchr/testify/assert"
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -42,11 +40,6 @@ var (
 
 	DefaultLabelSourceKeyPrefix = LabelSourceAny + "."
 )
-
-func (s *LabelsSuite) TestSHA256Sum(c *C) {
-	str := lbls.SHA256Sum()
-	c.Assert(str, Equals, "cf51cc7e153a09e82b242f2f0fb2f0f3923d2742a9d84de8bb0de669e5e558e3")
-}
 
 func (s *LabelsSuite) TestSortMap(c *C) {
 	lblsString := strings.Join(lblsArray, ";")
@@ -403,12 +396,37 @@ func TestLabels_GetFromSource(t *testing.T) {
 	}
 }
 
+func BenchmarkLabels_SortedList(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = lbls.SortedList()
+	}
+}
+
+func BenchmarkLabel_FormatForKVStore(b *testing.B) {
+	l := NewLabel("io.kubernetes.pod.namespace", "kube-system", "k8s")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = l.FormatForKVStore()
+	}
+}
+
 func BenchmarkLabel_String(b *testing.B) {
 	l := NewLabel("io.kubernetes.pod.namespace", "kube-system", "k8s")
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = l.String()
+	}
+}
+
+func BenchmarkGenerateLabelString(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		generateLabelString("foo", "key", "value")
 	}
 }
 

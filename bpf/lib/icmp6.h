@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #if !defined(__LIB_ICMP6__) && defined(ENABLE_IPV6)
 #define __LIB_ICMP6__
@@ -129,7 +129,7 @@ __section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_SEND_ICMP6_ECHO_REPLY)
 int tail_icmp6_send_echo_reply(struct __ctx_buff *ctx)
 {
 	int ret, nh_off = ctx_load_meta(ctx, 0);
-	__u8 direction  = ctx_load_meta(ctx, 1);
+	enum metric_dir direction  = (enum metric_dir)ctx_load_meta(ctx, 1);
 
 	ctx_store_meta(ctx, 0, 0);
 	ret = __icmp6_send_echo_reply(ctx, nh_off);
@@ -149,7 +149,7 @@ int tail_icmp6_send_echo_reply(struct __ctx_buff *ctx)
  * NOTE: This is terminal function and will cause the BPF program to exit
  */
 static __always_inline int icmp6_send_echo_reply(struct __ctx_buff *ctx,
-						 int nh_off, __u8 direction)
+						 int nh_off, enum metric_dir direction)
 {
 	ctx_store_meta(ctx, 0, nh_off);
 	ctx_store_meta(ctx, 1, direction);
@@ -168,8 +168,9 @@ static __always_inline int icmp6_send_echo_reply(struct __ctx_buff *ctx,
  *
  * Send an ICMPv6 nadv reply in return to an ICMPv6 ndisc.
  */
-static __always_inline int send_icmp6_ndisc_adv(struct __ctx_buff *ctx,
-						int nh_off, union macaddr *mac, bool to_router)
+static __always_inline int
+send_icmp6_ndisc_adv(struct __ctx_buff *ctx, int nh_off,
+		     const union macaddr *mac, bool to_router)
 {
 	struct icmp6hdr icmp6hdr __align_stack_8 = {}, icmp6hdr_old __align_stack_8;
 	__u8 opts[8], opts_old[8];
@@ -243,7 +244,7 @@ static __always_inline __be32 compute_icmp6_csum(char data[80], __u16 payload_le
 	return sum;
 }
 
-#ifdef BPF_HAVE_CHANGE_TAIL
+#ifdef HAVE_CHANGE_TAIL
 static __always_inline int __icmp6_send_time_exceeded(struct __ctx_buff *ctx,
 						      int nh_off)
 {
@@ -281,6 +282,9 @@ static __always_inline int __icmp6_send_time_exceeded(struct __ctx_buff *ctx,
 	/* read original v6 payload into offset 48 */
 	switch (ipv6hdr->nexthdr) {
 	case IPPROTO_ICMPV6:
+#ifdef ENABLE_SCTP
+	case IPPROTO_SCTP:
+#endif  /* ENABLE_SCTP */
 	case IPPROTO_UDP:
 		if (ctx_load_bytes(ctx, nh_off + sizeof(struct ipv6hdr),
 				   upper, 8) < 0)
@@ -331,9 +335,9 @@ static __always_inline int __icmp6_send_time_exceeded(struct __ctx_buff *ctx,
 __section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_SEND_ICMP6_TIME_EXCEEDED)
 int tail_icmp6_send_time_exceeded(struct __ctx_buff *ctx __maybe_unused)
 {
-# ifdef BPF_HAVE_CHANGE_TAIL
+# ifdef HAVE_CHANGE_TAIL
 	int ret, nh_off = ctx_load_meta(ctx, 0);
-	__u8 direction  = ctx_load_meta(ctx, 1);
+	enum metric_dir direction  = (enum metric_dir)ctx_load_meta(ctx, 1);
 
 	ctx_store_meta(ctx, 0, 0);
 	ret = __icmp6_send_time_exceeded(ctx, nh_off);
@@ -357,7 +361,7 @@ int tail_icmp6_send_time_exceeded(struct __ctx_buff *ctx __maybe_unused)
  * NOTE: This is terminal function and will cause the BPF program to exit
  */
 static __always_inline int icmp6_send_time_exceeded(struct __ctx_buff *ctx,
-						    int nh_off, __u8 direction)
+						    int nh_off, enum metric_dir direction)
 {
 	ctx_store_meta(ctx, 0, nh_off);
 	ctx_store_meta(ctx, 1, direction);
@@ -402,7 +406,7 @@ __section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_HANDLE_ICMP6_NS)
 int tail_icmp6_handle_ns(struct __ctx_buff *ctx)
 {
 	int ret, nh_off = ctx_load_meta(ctx, 0);
-	__u8 direction  = ctx_load_meta(ctx, 1);
+	enum metric_dir direction  = (enum metric_dir)ctx_load_meta(ctx, 1);
 
 	ctx_store_meta(ctx, 0, 0);
 	ret = __icmp6_handle_ns(ctx, nh_off);
@@ -423,7 +427,7 @@ int tail_icmp6_handle_ns(struct __ctx_buff *ctx)
  * NOTE: This is terminal function and will cause the BPF program to exit
  */
 static __always_inline int icmp6_handle_ns(struct __ctx_buff *ctx, int nh_off,
-					   __u8 direction)
+					   enum metric_dir direction)
 {
 	ctx_store_meta(ctx, 0, nh_off);
 	ctx_store_meta(ctx, 1, direction);
@@ -434,7 +438,7 @@ static __always_inline int icmp6_handle_ns(struct __ctx_buff *ctx, int nh_off,
 }
 
 static __always_inline int icmp6_handle(struct __ctx_buff *ctx, int nh_off,
-					struct ipv6hdr *ip6, __u8 direction)
+					struct ipv6hdr *ip6, enum metric_dir direction)
 {
 	union v6addr router_ip;
 	__u8 type = icmp6_load_type(ctx, nh_off);

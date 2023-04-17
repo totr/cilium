@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package types
 
 import (
 	"net"
 	"testing"
+
+	. "gopkg.in/check.v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cilium/cilium/pkg/annotation"
 	"github.com/cilium/cilium/pkg/checker"
@@ -17,9 +17,6 @@ import (
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/node/addressing"
 	"github.com/cilium/cilium/pkg/source"
-
-	. "gopkg.in/check.v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -140,11 +137,17 @@ func (s *NodeSuite) TestParseCiliumNode(c *C) {
 				PodCIDRs: []string{
 					"10.10.0.0/16",
 					"c0de::/96",
+					"10.20.0.0/16",
+					"c0fe::/96",
 				},
 			},
 			HealthAddressing: ciliumv2.HealthAddressingSpec{
 				IPv4: "1.1.1.1",
 				IPv6: "c0de::1",
+			},
+			IngressAddressing: ciliumv2.AddressPair{
+				IPV4: "1.1.1.2",
+				IPV6: "c0de::2",
 			},
 			NodeIdentity: uint64(12345),
 		},
@@ -160,12 +163,16 @@ func (s *NodeSuite) TestParseCiliumNode(c *C) {
 			{Type: addressing.NodeInternalIP, IP: net.ParseIP("c0de::1")},
 			{Type: addressing.NodeExternalIP, IP: net.ParseIP("c0de::2")},
 		},
-		EncryptionKey: uint8(10),
-		IPv4AllocCIDR: cidr.MustParseCIDR("10.10.0.0/16"),
-		IPv6AllocCIDR: cidr.MustParseCIDR("c0de::/96"),
-		IPv4HealthIP:  net.ParseIP("1.1.1.1"),
-		IPv6HealthIP:  net.ParseIP("c0de::1"),
-		NodeIdentity:  uint32(12345),
+		EncryptionKey:           uint8(10),
+		IPv4AllocCIDR:           cidr.MustParseCIDR("10.10.0.0/16"),
+		IPv6AllocCIDR:           cidr.MustParseCIDR("c0de::/96"),
+		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("10.20.0.0/16")},
+		IPv6SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("c0fe::/96")},
+		IPv4HealthIP:            net.ParseIP("1.1.1.1"),
+		IPv6HealthIP:            net.ParseIP("c0de::1"),
+		IPv4IngressIP:           net.ParseIP("1.1.1.2"),
+		IPv6IngressIP:           net.ParseIP("c0de::2"),
+		NodeIdentity:            uint32(12345),
 	})
 }
 
@@ -179,13 +186,17 @@ func (s *NodeSuite) TestNode_ToCiliumNode(c *C) {
 			{Type: addressing.NodeInternalIP, IP: net.ParseIP("c0de::1")},
 			{Type: addressing.NodeExternalIP, IP: net.ParseIP("c0de::2")},
 		},
-		EncryptionKey:   uint8(10),
-		IPv4AllocCIDR:   cidr.MustParseCIDR("10.10.0.0/16"),
-		IPv6AllocCIDR:   cidr.MustParseCIDR("c0de::/96"),
-		IPv4HealthIP:    net.ParseIP("1.1.1.1"),
-		IPv6HealthIP:    net.ParseIP("c0de::1"),
-		NodeIdentity:    uint32(12345),
-		WireguardPubKey: "6kiIGGPvMiadJ1brWTVfSGXheE3e3k5GjDTxfjMLYx8=",
+		EncryptionKey:           uint8(10),
+		IPv4AllocCIDR:           cidr.MustParseCIDR("10.10.0.0/16"),
+		IPv6AllocCIDR:           cidr.MustParseCIDR("c0de::/96"),
+		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("10.20.0.0/16")},
+		IPv6SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("c0fe::/96")},
+		IPv4HealthIP:            net.ParseIP("1.1.1.1"),
+		IPv6HealthIP:            net.ParseIP("c0de::1"),
+		IPv4IngressIP:           net.ParseIP("1.1.1.2"),
+		IPv6IngressIP:           net.ParseIP("c0de::2"),
+		NodeIdentity:            uint32(12345),
+		WireguardPubKey:         "6kiIGGPvMiadJ1brWTVfSGXheE3e3k5GjDTxfjMLYx8=",
 	}
 
 	n := nodeResource.ToCiliumNode()
@@ -211,11 +222,17 @@ func (s *NodeSuite) TestNode_ToCiliumNode(c *C) {
 				PodCIDRs: []string{
 					"10.10.0.0/16",
 					"c0de::/96",
+					"10.20.0.0/16",
+					"c0fe::/96",
 				},
 			},
 			HealthAddressing: ciliumv2.HealthAddressingSpec{
 				IPv4: "1.1.1.1",
 				IPv6: "c0de::1",
+			},
+			IngressAddressing: ciliumv2.AddressPair{
+				IPV4: "1.1.1.2",
+				IPV6: "c0de::2",
 			},
 			NodeIdentity: uint64(12345),
 		},

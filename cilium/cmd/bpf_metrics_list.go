@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -10,12 +10,12 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/maps/metricsmap"
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -67,7 +67,7 @@ func listMetrics(m metricsmap.MetricsMap) {
 		os.Exit(1)
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		listJSONMetrics(bpfMetricsList)
 		return
 	}
@@ -76,6 +76,11 @@ func listMetrics(m metricsmap.MetricsMap) {
 }
 
 func listJSONMetrics(bpfMetricsList []*metricsRow) {
+	if len(bpfMetricsList) == 0 {
+		fmt.Fprintf(os.Stderr, "No entries found.\n")
+		return
+	}
+
 	metricsByReason := map[int]jsonMetric{}
 
 	for _, row := range bpfMetricsList {
@@ -101,7 +106,7 @@ func listJSONMetrics(bpfMetricsList []*metricsRow) {
 	}
 
 	if err := command.PrintOutput(metrics); err != nil {
-		fmt.Fprintf(os.Stderr, "error getting output of map in JSON: %s\n", err)
+		fmt.Fprintf(os.Stderr, "error getting output of map in %s: %s\n", command.OutputOptionString(), err)
 		os.Exit(1)
 	}
 }
@@ -147,5 +152,5 @@ func extractRow(key *metricsmap.Key, values *metricsmap.Values) *metricsRow {
 
 func init() {
 	bpfMetricsCmd.AddCommand(bpfMetricsListCmd)
-	command.AddJSONOutput(bpfMetricsListCmd)
+	command.AddOutputOption(bpfMetricsListCmd)
 }

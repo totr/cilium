@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package controller
 
@@ -13,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/testutils"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/testutils"
 )
 
 // Hook up gocheck into the "go test" runner.

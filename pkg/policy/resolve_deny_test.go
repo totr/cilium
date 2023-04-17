@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package policy
 
 import (
 	"sync"
+
+	. "gopkg.in/check.v1"
 
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/identity"
@@ -17,8 +16,6 @@ import (
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
-
-	. "gopkg.in/check.v1"
 )
 
 func GenerateL3IngressDenyRules(numRules int) api.Rules {
@@ -156,16 +153,15 @@ func (ds *PolicyTestSuite) TestL3WithIngressDenyWildcard(c *C) {
 						wildcard: wildcardCachedSelector,
 						L7Parser: ParserTypeNone,
 						Ingress:  true,
-						L7RulesPerSelector: L7DataMap{
-							wildcardCachedSelector: &PerSelectorPolicy{CanShortCircuit: true, IsDeny: true},
+						PerSelectorPolicies: L7DataMap{
+							wildcardCachedSelector: &PerSelectorPolicy{IsDeny: true},
 						},
-						DerivedFromRules: labels.LabelArrayList{nil},
+						RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 					},
 				},
 				Egress: L4PolicyMap{},
 			},
 			IngressPolicyEnabled: true,
-			CIDRPolicy:           policy.CIDRPolicy,
 		},
 		PolicyOwner: DummyOwner{},
 		// inherit this from the result as it is outside of the scope
@@ -179,7 +175,7 @@ func (ds *PolicyTestSuite) TestL3WithIngressDenyWildcard(c *C) {
 	// Assign an empty mutex so that checker.Equal does not complain about the
 	// difference of the internal time.Time from the lock_debug.go.
 	policy.selectorPolicy.L4Policy.mutex = lock.RWMutex{}
-	c.Assert(policy, checker.Equals, &expectedEndpointPolicy)
+	c.Assert(policy, checker.DeepEquals, &expectedEndpointPolicy)
 }
 
 func (ds *PolicyTestSuite) TestL3WithLocalHostWildcardd(c *C) {
@@ -240,16 +236,15 @@ func (ds *PolicyTestSuite) TestL3WithLocalHostWildcardd(c *C) {
 						wildcard: wildcardCachedSelector,
 						L7Parser: ParserTypeNone,
 						Ingress:  true,
-						L7RulesPerSelector: L7DataMap{
-							wildcardCachedSelector: &PerSelectorPolicy{CanShortCircuit: true, IsDeny: true},
+						PerSelectorPolicies: L7DataMap{
+							wildcardCachedSelector: &PerSelectorPolicy{IsDeny: true},
 						},
-						DerivedFromRules: labels.LabelArrayList{nil},
+						RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 					},
 				},
 				Egress: L4PolicyMap{},
 			},
 			IngressPolicyEnabled: true,
-			CIDRPolicy:           policy.CIDRPolicy,
 		},
 		PolicyOwner: DummyOwner{},
 		// inherit this from the result as it is outside of the scope
@@ -263,7 +258,7 @@ func (ds *PolicyTestSuite) TestL3WithLocalHostWildcardd(c *C) {
 	// Assign an empty mutex so that checker.Equal does not complain about the
 	// difference of the internal time.Time from the lock_debug.go.
 	policy.selectorPolicy.L4Policy.mutex = lock.RWMutex{}
-	c.Assert(policy, checker.Equals, &expectedEndpointPolicy)
+	c.Assert(policy, checker.DeepEquals, &expectedEndpointPolicy)
 }
 
 func (ds *PolicyTestSuite) TestMapStateWithIngressDenyWildcard(c *C) {
@@ -306,8 +301,8 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDenyWildcard(c *C) {
 	c.Assert(err, IsNil)
 	policy := selPolicy.DistillPolicy(DummyOwner{}, false)
 
-	rule1MapStateEntry := NewMapStateEntry(wildcardCachedSelector, labels.LabelArrayList{ruleLabel}, false, true)
-	allowEgressMapStateEntry := NewMapStateEntry(nil, labels.LabelArrayList{ruleLabelAllowAnyEgress}, false, false)
+	rule1MapStateEntry := NewMapStateEntry(wildcardCachedSelector, labels.LabelArrayList{ruleLabel}, false, true, AuthTypeNone)
+	allowEgressMapStateEntry := NewMapStateEntry(nil, labels.LabelArrayList{ruleLabelAllowAnyEgress}, false, false, AuthTypeNone)
 
 	expectedEndpointPolicy := EndpointPolicy{
 		selectorPolicy: &selectorPolicy{
@@ -323,16 +318,15 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDenyWildcard(c *C) {
 						wildcard: wildcardCachedSelector,
 						L7Parser: ParserTypeNone,
 						Ingress:  true,
-						L7RulesPerSelector: L7DataMap{
-							wildcardCachedSelector: &PerSelectorPolicy{CanShortCircuit: true, IsDeny: true},
+						PerSelectorPolicies: L7DataMap{
+							wildcardCachedSelector: &PerSelectorPolicy{IsDeny: true},
 						},
-						DerivedFromRules: labels.LabelArrayList{ruleLabel},
+						RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {ruleLabel}},
 					},
 				},
 				Egress: L4PolicyMap{},
 			},
 			IngressPolicyEnabled: true,
-			CIDRPolicy:           policy.CIDRPolicy,
 		},
 		PolicyOwner: DummyOwner{},
 		PolicyMapState: MapState{
@@ -358,14 +352,14 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDenyWildcard(c *C) {
 	// Assign an empty mutex so that checker.Equal does not complain about the
 	// difference of the internal time.Time from the lock_debug.go.
 	policy.selectorPolicy.L4Policy.mutex = lock.RWMutex{}
-	c.Assert(policy, checker.Equals, &expectedEndpointPolicy)
+	c.Assert(policy, checker.DeepEquals, &expectedEndpointPolicy)
 }
 
 func (ds *PolicyTestSuite) TestMapStateWithIngressDeny(c *C) {
 	repo := bootstrapRepo(GenerateL3IngressDenyRules, 1000, c)
 
-	ruleLabel := labels.ParseLabelArray("rule-world-allow-port-80")
-	ruleLabelDenyAnyEgress := labels.LabelArray{
+	ruleLabel := labels.ParseLabelArray("rule-deny-port-80-world-and-test")
+	ruleLabelAllowAnyEgress := labels.LabelArray{
 		labels.NewLabel(LabelKeyPolicyDerivedFrom, LabelAllowAnyEgress, labels.LabelSourceReserved),
 	}
 
@@ -445,8 +439,8 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDeny(c *C) {
 	cachedSelectorTest := testSelectorCache.FindCachedIdentitySelector(api.NewESFromLabels(lblTest))
 	c.Assert(cachedSelectorTest, Not(IsNil))
 
-	rule1MapStateEntry := NewMapStateEntry(cachedSelectorTest, labels.LabelArrayList{ruleLabel}, false, true)
-	allowEgressMapStateEntry := NewMapStateEntry(nil, labels.LabelArrayList{ruleLabelDenyAnyEgress}, false, false)
+	rule1MapStateEntry := NewMapStateEntry(cachedSelectorTest, labels.LabelArrayList{ruleLabel}, false, true, AuthTypeNone)
+	allowEgressMapStateEntry := NewMapStateEntry(nil, labels.LabelArrayList{ruleLabelAllowAnyEgress}, false, false, AuthTypeNone)
 
 	expectedEndpointPolicy := EndpointPolicy{
 		selectorPolicy: &selectorPolicy{
@@ -461,17 +455,19 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDeny(c *C) {
 						U8Proto:  0x6,
 						L7Parser: ParserTypeNone,
 						Ingress:  true,
-						L7RulesPerSelector: L7DataMap{
+						PerSelectorPolicies: L7DataMap{
 							cachedSelectorWorld: &PerSelectorPolicy{IsDeny: true},
 							cachedSelectorTest:  &PerSelectorPolicy{IsDeny: true},
 						},
-						DerivedFromRules: labels.LabelArrayList{ruleLabel},
+						RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+							cachedSelectorWorld: {ruleLabel},
+							cachedSelectorTest:  {ruleLabel},
+						},
 					},
 				},
 				Egress: L4PolicyMap{},
 			},
 			IngressPolicyEnabled: true,
-			CIDRPolicy:           policy.CIDRPolicy,
 		},
 		PolicyOwner: DummyOwner{},
 		PolicyMapState: MapState{
@@ -487,12 +483,12 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDeny(c *C) {
 	adds, deletes := policy.ConsumeMapChanges()
 	// maps on the policy got cleared
 
-	c.Assert(adds, checker.Equals, MapState{
-		{Identity: 192, DestPort: 80, Nexthdr: 6}: rule1MapStateEntry.WithoutOwners(),
-		{Identity: 194, DestPort: 80, Nexthdr: 6}: rule1MapStateEntry.WithoutOwners(),
+	c.Assert(adds, checker.Equals, Keys{
+		{Identity: 192, DestPort: 80, Nexthdr: 6}: {},
+		{Identity: 194, DestPort: 80, Nexthdr: 6}: {},
 	})
-	c.Assert(deletes, checker.Equals, MapState{
-		{Identity: 193, DestPort: 80, Nexthdr: 6}: rule1MapStateEntry.WithoutOwners(),
+	c.Assert(deletes, checker.Equals, Keys{
+		{Identity: 193, DestPort: 80, Nexthdr: 6}: {},
 	})
 
 	// Have to remove circular reference before testing for Equality to avoid an infinite loop
@@ -506,5 +502,5 @@ func (ds *PolicyTestSuite) TestMapStateWithIngressDeny(c *C) {
 	// difference of the internal time.Time from the lock_debug.go.
 	policy.selectorPolicy.L4Policy.mutex = lock.RWMutex{}
 	policy.policyMapChanges.mutex = lock.Mutex{}
-	c.Assert(policy, checker.Equals, &expectedEndpointPolicy)
+	c.Assert(policy, checker.DeepEquals, &expectedEndpointPolicy)
 }

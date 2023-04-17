@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
-	"github.com/cilium/cilium/pkg/command"
-	"github.com/cilium/cilium/pkg/common"
+	"github.com/spf13/cobra"
 	"github.com/vishvananda/netlink"
 
-	"github.com/spf13/cobra"
+	"github.com/cilium/cilium/pkg/command"
+	"github.com/cilium/cilium/pkg/common"
 )
 
 var encryptFlushCmd = &cobra.Command{
@@ -24,5 +24,5 @@ var encryptFlushCmd = &cobra.Command{
 
 func init() {
 	encryptCmd.AddCommand(encryptFlushCmd)
-	command.AddJSONOutput(encryptFlushCmd)
+	command.AddOutputOption(encryptFlushCmd)
 }

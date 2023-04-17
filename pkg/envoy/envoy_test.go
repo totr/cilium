@@ -1,30 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package envoy
 
 import (
 	"context"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	. "gopkg.in/check.v1"
+
+	"github.com/spf13/viper"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/completion"
 	"github.com/cilium/cilium/pkg/envoy/xds"
 	"github.com/cilium/cilium/pkg/flowdebug"
-	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
-	"github.com/cilium/cilium/pkg/proxy/accesslog"
-
-	. "gopkg.in/check.v1"
+	testipcache "github.com/cilium/cilium/pkg/testutils/ipcache"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -44,18 +41,8 @@ func (s *EnvoySuite) waitForProxyCompletion() error {
 	return err
 }
 
-type dummyEndpointInfoRegistry struct{}
-
-func (r *dummyEndpointInfoRegistry) FillEndpointIdentityByID(id identity.NumericIdentity, info *accesslog.EndpointInfo) bool {
-	return false
-}
-
-func (r *dummyEndpointInfoRegistry) FillEndpointIdentityByIP(ip net.IP, info *accesslog.EndpointInfo) bool {
-	return false
-}
-
 func (s *EnvoySuite) TestEnvoy(c *C) {
-	option.Config.Populate()
+	option.Config.Populate(viper.GetViper())
 	option.Config.ProxyConnectTimeout = 1
 	c.Assert(option.Config.ProxyConnectTimeout, Not(Equals), 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -75,9 +62,9 @@ func (s *EnvoySuite) TestEnvoy(c *C) {
 
 	log.Debugf("state log directory: %s", stateLogDir)
 
-	xdsServer := StartXDSServer(stateLogDir)
+	xdsServer := StartXDSServer(testipcache.NewMockIPCache(), stateLogDir)
 	defer xdsServer.stop()
-	StartAccessLogServer(stateLogDir, xdsServer, &dummyEndpointInfoRegistry{})
+	StartAccessLogServer(stateLogDir, xdsServer)
 
 	// launch debug variant of the Envoy proxy
 	envoyProxy := StartEnvoy(stateLogDir, filepath.Join(stateLogDir, "cilium-envoy.log"), 0)
@@ -85,7 +72,7 @@ func (s *EnvoySuite) TestEnvoy(c *C) {
 	log.Debug("started Envoy")
 
 	log.Debug("adding metrics listener")
-	xdsServer.AddMetricsListener(9095, s.waitGroup)
+	xdsServer.AddMetricsListener(9964, s.waitGroup)
 
 	err = s.waitForProxyCompletion()
 	c.Assert(err, IsNil)
@@ -155,9 +142,9 @@ func (s *EnvoySuite) TestEnvoyNACK(c *C) {
 
 	log.Debugf("state log directory: %s", stateLogDir)
 
-	xdsServer := StartXDSServer(stateLogDir)
+	xdsServer := StartXDSServer(testipcache.NewMockIPCache(), stateLogDir)
 	defer xdsServer.stop()
-	StartAccessLogServer(stateLogDir, xdsServer, &dummyEndpointInfoRegistry{})
+	StartAccessLogServer(stateLogDir, xdsServer)
 
 	// launch debug variant of the Envoy proxy
 	envoyProxy := StartEnvoy(stateLogDir, filepath.Join(stateLogDir, "cilium-envoy.log"), 42)

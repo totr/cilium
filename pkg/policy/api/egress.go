@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package api
 
@@ -69,7 +69,8 @@ type EgressCommonRule struct {
 
 	// ToEntities is a list of special entities to which the endpoint subject
 	// to the rule is allowed to initiate connections. Supported entities are
-	// `world`, `cluster` and `host`
+	// `world`, `cluster`,`host`,`remote-node`,`kube-apiserver`, `init`,
+	// `health`,`unmanaged` and `all`.
 	//
 	// +kubebuilder:validation:Optional
 	ToEntities EntitySlice `json:"toEntities,omitempty"`
@@ -108,17 +109,17 @@ type EgressCommonRule struct {
 // network traffic that originates inside the endpoint and exits the endpoint
 // selected by the endpointSelector.
 //
-// - All members of this structure are optional. If omitted or empty, the
-//   member will have no effect on the rule.
+//   - All members of this structure are optional. If omitted or empty, the
+//     member will have no effect on the rule.
 //
-// - If multiple members of the structure are specified, then all members
-//   must match in order for the rule to take effect. The exception to this
-//   rule is the ToRequires member; the effects of any Requires field in any
-//   rule will apply to all other rules as well.
+//   - If multiple members of the structure are specified, then all members
+//     must match in order for the rule to take effect. The exception to this
+//     rule is the ToRequires member; the effects of any Requires field in any
+//     rule will apply to all other rules as well.
 //
-// - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and ToGroups are
-//   mutually exclusive. Only one of these members may be present within an
-//   individual rule.
+//   - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and ToGroups are
+//     mutually exclusive. Only one of these members may be present within an
+//     individual rule.
 type EgressRule struct {
 	EgressCommonRule `json:",inline"`
 
@@ -168,23 +169,28 @@ type EgressRule struct {
 	//
 	// +kubebuilder:validation:Optional
 	ICMPs ICMPRules `json:"icmps,omitempty"`
+
+	// Auth is the required authentication type for the allowed traffic, if any.
+	//
+	// +kubebuilder:validation:Optional
+	Auth *Auth `json:"auth,omitempty"`
 }
 
 // EgressDenyRule contains all rule types which can be applied at egress, i.e.
 // network traffic that originates inside the endpoint and exits the endpoint
 // selected by the endpointSelector.
 //
-// - All members of this structure are optional. If omitted or empty, the
-//   member will have no effect on the rule.
+//   - All members of this structure are optional. If omitted or empty, the
+//     member will have no effect on the rule.
 //
-// - If multiple members of the structure are specified, then all members
-//   must match in order for the rule to take effect. The exception to this
-//   rule is the ToRequires member; the effects of any Requires field in any
-//   rule will apply to all other rules as well.
+//   - If multiple members of the structure are specified, then all members
+//     must match in order for the rule to take effect. The exception to this
+//     rule is the ToRequires member; the effects of any Requires field in any
+//     rule will apply to all other rules as well.
 //
-// - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and ToGroups are
-//   mutually exclusive. Only one of these members may be present within an
-//   individual rule.
+//   - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and ToGroups are
+//     mutually exclusive. Only one of these members may be present within an
+//     individual rule.
 type EgressDenyRule struct {
 	EgressCommonRule `json:",inline"`
 

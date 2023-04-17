@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,10 +8,10 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/mountinfo"
-
-	"github.com/spf13/cobra"
 )
 
 // bpfmountfsShowCmd represents the bpf file system show command
@@ -26,7 +26,7 @@ var bpfmountfsShowCmd = &cobra.Command{
 
 func init() {
 	bpfmountFSCmd.AddCommand(bpfmountfsShowCmd)
-	command.AddJSONOutput(bpfmountfsShowCmd)
+	command.AddOutputOption(bpfmountfsShowCmd)
 }
 
 func getbpfmountFS(cmd *cobra.Command, args []string) {
@@ -43,7 +43,10 @@ func getbpfmountFS(cmd *cobra.Command, args []string) {
 			break
 		}
 	}
-	if command.OutputJSON() {
+	if bpfmountDetail == nil {
+		Fatalf("No BPF filesystems are mounted")
+	}
+	if command.OutputOption() {
 		if err := command.PrintOutput(bpfmountDetail); err != nil {
 			os.Exit(1)
 		}

@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2021 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __LIB_MAPS_H_
 #define __LIB_MAPS_H_
@@ -41,6 +41,18 @@ struct bpf_elf_map __section_maps POLICY_CALL_MAP = {
 };
 #endif /* SKIP_POLICY_MAP */
 
+#ifdef ENABLE_L7_LB
+/* Global map to jump into policy enforcement of sending endpoint */
+struct bpf_elf_map __section_maps POLICY_EGRESSCALL_MAP = {
+	.type		= BPF_MAP_TYPE_PROG_ARRAY,
+	.id		= CILIUM_MAP_EGRESSPOLICY,
+	.size_key	= sizeof(__u32),
+	.size_value	= sizeof(__u32),
+	.pinning	= PIN_GLOBAL_NS,
+	.max_elem	= POLICY_PROG_MAP_SIZE,
+};
+#endif
+
 #ifdef ENABLE_BANDWIDTH_MANAGER
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -52,17 +64,6 @@ struct {
 } THROTTLE_MAP __section_maps_btf;
 #endif /* ENABLE_BANDWIDTH_MANAGER */
 
-/* Map to link endpoint id to per endpoint cilium_policy map */
-#ifdef SOCKMAP
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
-	__type(key, struct endpoint_key);
-	__type(value, int);
-	__uint(pinning, LIBBPF_PIN_BY_NAME);
-	__uint(max_entries, ENDPOINTS_MAP_SIZE);
-} EP_POLICY_MAP __section_maps_btf;
-#endif
-
 #ifdef POLICY_MAP
 /* Per-endpoint policy enforcement map */
 struct {
@@ -73,6 +74,33 @@ struct {
 	__uint(max_entries, POLICY_MAP_SIZE);
 	__uint(map_flags, CONDITIONAL_PREALLOC);
 } POLICY_MAP __section_maps_btf;
+#endif
+
+#ifdef AUTH_MAP
+/* Global auth map for enforcing authentication policy */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, struct auth_key);
+	__type(value, struct auth_info);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(max_entries, AUTH_MAP_SIZE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} AUTH_MAP __section_maps_btf;
+#endif
+
+#ifdef CONFIG_MAP
+/*
+ * CONFIG_MAP is an array containing runtime configuration information to the
+ * bpf datapath.  Each element in the array is a 64-bit integer, meaning of
+ * which is defined by the source of that index.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, __u32);
+	__type(value, __u64);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(max_entries, CONFIG_MAP_SIZE);
+} CONFIG_MAP __section_maps_btf;
 #endif
 
 #ifndef SKIP_CALLS_MAP
@@ -87,12 +115,12 @@ struct bpf_elf_map __section_maps CALLS_MAP = {
 };
 #endif /* SKIP_CALLS_MAP */
 
-#ifdef ENCAP_IFINDEX
+#ifdef HAVE_ENCAP
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__type(key, struct endpoint_key);
-	__type(value, struct endpoint_key);
+	__type(key, struct tunnel_key);
+	__type(value, struct tunnel_value);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(max_entries, TUNNEL_ENDPOINT_MAP_SIZE);
 	__uint(map_flags, CONDITIONAL_PREALLOC);
@@ -121,42 +149,10 @@ struct bpf_elf_map __section_maps CUSTOM_CALLS_MAP = {
 #define CUSTOM_CALLS_IDX_IPV6_EGRESS	3
 #endif /* ENABLE_CUSTOM_CALLS && CUSTOM_CALLS_MAP */
 
-#ifdef HAVE_LPM_TRIE_MAP_TYPE
-#define LPM_MAP_TYPE BPF_MAP_TYPE_LPM_TRIE
-#else
-#define LPM_MAP_TYPE BPF_MAP_TYPE_HASH
-#endif
-
-#ifndef HAVE_LPM_TRIE_MAP_TYPE
-/* Define a function with the following NAME which iterates through PREFIXES
- * (a list of integers ordered from high to low representing prefix length),
- * performing a lookup in MAP using LOOKUP_FN to find a provided IP of type
- * IPTYPE.
- */
-#define LPM_LOOKUP_FN(NAME, IPTYPE, PREFIXES, MAP, LOOKUP_FN)		\
-static __always_inline int __##NAME(IPTYPE addr)			\
-{									\
-	int prefixes[] = { PREFIXES };					\
-	const int size = ARRAY_SIZE(prefixes);				\
-	int i;								\
-									\
-_Pragma("unroll")							\
-	for (i = 0; i < size; i++)					\
-		if (LOOKUP_FN(&MAP, addr, prefixes[i]))			\
-			return 1;					\
-									\
-	return 0;							\
-}
-#endif /* HAVE_LPM_TRIE_MAP_TYPE */
-
-#ifndef SKIP_UNDEF_LPM_LOOKUP_FN
-#undef LPM_LOOKUP_FN
-#endif
-
 struct ipcache_key {
 	struct bpf_lpm_trie_key lpm_key;
 	__u16 pad1;
-	__u8 pad2;
+	__u8 cluster_id;
 	__u8 family;
 	union {
 		struct {
@@ -171,7 +167,7 @@ struct ipcache_key {
 
 /* Global IP -> Identity map for applying egress label-based policy */
 struct {
-	__uint(type, LPM_MAP_TYPE);
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__type(key, struct ipcache_key);
 	__type(value, struct remote_endpoint_info);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -187,9 +183,33 @@ struct {
 	__uint(max_entries, 1);
 } ENCRYPT_MAP __section_maps_btf;
 
+struct node_key {
+	__u16 pad1;
+	__u8 pad2;
+	__u8 family;
+	union {
+		struct {
+			__u32 ip4;
+			__u32 pad4;
+			__u32 pad5;
+			__u32 pad6;
+		};
+		union v6addr    ip6;
+	};
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, struct node_key);
+	__type(value, __u16);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(max_entries, NODE_MAP_SIZE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} NODE_MAP __section_maps_btf;
+
 #ifdef ENABLE_EGRESS_GATEWAY
 struct {
-	__uint(type, LPM_MAP_TYPE);
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__type(key, struct egress_gw_policy_key);
 	__type(value, struct egress_gw_policy_entry);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
@@ -198,6 +218,67 @@ struct {
 } EGRESS_POLICY_MAP __section_maps_btf;
 
 #endif /* ENABLE_EGRESS_GATEWAY */
+
+#ifdef ENABLE_SRV6
+# define SRV6_VRF_MAP(IP_FAMILY)				\
+struct {						\
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);		\
+	__type(key, struct srv6_vrf_key ## IP_FAMILY);	\
+	__type(value, __u32);				\
+	__uint(pinning, LIBBPF_PIN_BY_NAME);		\
+	__uint(max_entries, SRV6_VRF_MAP_SIZE);		\
+	__uint(map_flags, BPF_F_NO_PREALLOC);		\
+} SRV6_VRF_MAP ## IP_FAMILY __section_maps_btf;
+
+# define SRV6_POLICY_MAP(IP_FAMILY)				\
+struct {							\
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);			\
+	__type(key, struct srv6_policy_key ## IP_FAMILY);	\
+	__type(value, union v6addr);				\
+	__uint(pinning, LIBBPF_PIN_BY_NAME);			\
+	__uint(max_entries, SRV6_POLICY_MAP_SIZE);		\
+	__uint(map_flags, BPF_F_NO_PREALLOC);			\
+} SRV6_POLICY_MAP ## IP_FAMILY __section_maps_btf;
+
+# define SRV6_STATE_MAP(IP_FAMILY)							\
+struct {										\
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);						\
+	__type(key, struct srv6_ipv ## IP_FAMILY ## _2tuple); /* inner header */	\
+	__type(value, struct srv6_ipv6_2tuple);               /* outer header */	\
+	__uint(pinning, LIBBPF_PIN_BY_NAME);						\
+	__uint(max_entries, SRV6_STATE_MAP_SIZE);					\
+} SRV6_STATE_MAP ## IP_FAMILY __section_maps_btf;
+
+# ifdef ENABLE_IPV4
+SRV6_VRF_MAP(4)
+SRV6_POLICY_MAP(4)
+SRV6_STATE_MAP(4)
+# endif /* ENABLE_IPV4 */
+
+SRV6_VRF_MAP(6)
+SRV6_POLICY_MAP(6)
+SRV6_STATE_MAP(6)
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, union v6addr); /* SID */
+    __type(value, __u32);      /* VRF ID */
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+    __uint(max_entries, SRV6_SID_MAP_SIZE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} SRV6_SID_MAP __section_maps_btf;
+#endif /* ENABLE_SRV6 */
+
+#ifdef ENABLE_VTEP
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, struct vtep_key);
+	__type(value, struct vtep_value);
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(max_entries, VTEP_MAP_SIZE);
+	__uint(map_flags, CONDITIONAL_PREALLOC);
+} VTEP_MAP __section_maps_btf;
+#endif /* ENABLE_VTEP */
 
 #ifndef SKIP_CALLS_MAP
 static __always_inline void ep_tail_call(struct __ctx_buff *ctx __maybe_unused,

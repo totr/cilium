@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package limits
 
 import (
 	"testing"
 
-	"github.com/cilium/cilium/operator/option"
-
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/operator/option"
 )
 
 func Test(t *testing.T) {
@@ -32,6 +29,7 @@ func (e *ENILimitsSuite) TestGet(c *check.C) {
 	c.Assert(ok, check.Equals, true)
 	c.Assert(l.Adapters, check.Not(check.Equals), 0)
 	c.Assert(l.IPv4, check.Not(check.Equals), 0)
+	c.Assert(l.HypervisorType, check.Equals, "xen")
 
 	UpdateFromUserDefinedMappings(option.Config.AWSInstanceLimitMapping)
 	l, ok = Get("a2.custom2")

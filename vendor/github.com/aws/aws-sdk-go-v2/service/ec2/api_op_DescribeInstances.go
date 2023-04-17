@@ -85,45 +85,48 @@ type DescribeInstancesInput struct {
 	// block-device-mapping.volume-id - The volume ID of the EBS volume.
 	//
 	// *
-	// client-token - The idempotency token you provided when you launched the
-	// instance.
+	// capacity-reservation-id - The ID of the Capacity Reservation into which the
+	// instance was launched.
+	//
+	// * client-token - The idempotency token you provided when
+	// you launched the instance.
 	//
 	// * dns-name - The public DNS name of the instance.
 	//
-	// * group-id - The
-	// ID of the security group for the instance. EC2-Classic only.
-	//
-	// * group-name - The
-	// name of the security group for the instance. EC2-Classic only.
+	// *
+	// group-id - The ID of the security group for the instance. EC2-Classic only.
 	//
 	// *
-	// hibernation-options.configured - A Boolean that indicates whether the instance
-	// is enabled for hibernation. A value of true means that the instance is enabled
-	// for hibernation.
+	// group-name - The name of the security group for the instance. EC2-Classic
+	// only.
 	//
-	// * host-id - The ID of the Dedicated Host on which the instance
-	// is running, if applicable.
+	// * hibernation-options.configured - A Boolean that indicates whether the
+	// instance is enabled for hibernation. A value of true means that the instance is
+	// enabled for hibernation.
 	//
-	// * hypervisor - The hypervisor type of the instance
-	// (ovm | xen). The value xen is used for both Xen and Nitro hypervisors.
+	// * host-id - The ID of the Dedicated Host on which the
+	// instance is running, if applicable.
 	//
-	// *
-	// iam-instance-profile.arn - The instance profile associated with the instance.
-	// Specified as an ARN.
+	// * hypervisor - The hypervisor type of the
+	// instance (ovm | xen). The value xen is used for both Xen and Nitro
+	// hypervisors.
 	//
-	// * image-id - The ID of the image used to launch the
-	// instance.
+	// * iam-instance-profile.arn - The instance profile associated with
+	// the instance. Specified as an ARN.
+	//
+	// * image-id - The ID of the image used to
+	// launch the instance.
 	//
 	// * instance-id - The ID of the instance.
 	//
-	// * instance-lifecycle -
-	// Indicates whether this is a Spot Instance or a Scheduled Instance (spot |
-	// scheduled).
+	// *
+	// instance-lifecycle - Indicates whether this is a Spot Instance or a Scheduled
+	// Instance (spot | scheduled).
 	//
-	// * instance-state-code - The state of the instance, as a 16-bit
-	// unsigned integer. The high byte is used for internal purposes and should be
-	// ignored. The low byte is set based on the state represented. The valid values
-	// are: 0 (pending), 16 (running), 32 (shutting-down), 48 (terminated), 64
+	// * instance-state-code - The state of the instance,
+	// as a 16-bit unsigned integer. The high byte is used for internal purposes and
+	// should be ignored. The low byte is set based on the state represented. The valid
+	// values are: 0 (pending), 16 (running), 32 (shutting-down), 48 (terminated), 64
 	// (stopping), and 80 (stopped).
 	//
 	// * instance-state-name - The state of the instance
@@ -507,12 +510,13 @@ func NewDescribeInstancesPaginator(client DescribeInstancesAPIClient, params *De
 		client:    client,
 		params:    params,
 		firstPage: true,
+		nextToken: params.NextToken,
 	}
 }
 
 // HasMorePages returns a boolean indicating whether more pages are available
 func (p *DescribeInstancesPaginator) HasMorePages() bool {
-	return p.firstPage || p.nextToken != nil
+	return p.firstPage || (p.nextToken != nil && len(*p.nextToken) != 0)
 }
 
 // NextPage retrieves the next DescribeInstances page.
@@ -539,7 +543,10 @@ func (p *DescribeInstancesPaginator) NextPage(ctx context.Context, optFns ...fun
 	prevToken := p.nextToken
 	p.nextToken = result.NextToken
 
-	if p.options.StopOnDuplicateToken && prevToken != nil && p.nextToken != nil && *prevToken == *p.nextToken {
+	if p.options.StopOnDuplicateToken &&
+		prevToken != nil &&
+		p.nextToken != nil &&
+		*prevToken == *p.nextToken {
 		p.nextToken = nil
 	}
 

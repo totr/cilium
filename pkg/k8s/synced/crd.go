@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 // Package synced provides tools for tracking if k8s resources have
 // been initially sychronized with the k8s apiserver.
@@ -10,15 +10,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/cilium/cilium/pkg/k8s"
-	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
-	"github.com/cilium/cilium/pkg/k8s/informer"
-	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
-	k8sversion "github.com/cilium/cilium/pkg/k8s/version"
-	"github.com/cilium/cilium/pkg/lock"
-	"github.com/cilium/cilium/pkg/option"
-
 	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -26,6 +17,16 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/cilium/cilium/pkg/k8s"
+	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	"github.com/cilium/cilium/pkg/k8s/client"
+	"github.com/cilium/cilium/pkg/k8s/informer"
+	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
+	k8sversion "github.com/cilium/cilium/pkg/k8s/version"
+	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/cilium/pkg/option"
 )
 
 const (
@@ -42,6 +43,8 @@ func agentCRDResourceNames() []string {
 		CRDResourceName(v2.CCNPName),
 		CRDResourceName(v2.CNName),
 		CRDResourceName(v2.CIDName),
+		CRDResourceName(v2alpha1.CNCName),
+		CRDResourceName(v2alpha1.CCGName),
 	}
 
 	if !option.Config.DisableCiliumEndpointCRD {
@@ -52,11 +55,20 @@ func agentCRDResourceNames() []string {
 	}
 
 	if option.Config.EnableIPv4EgressGateway {
-		result = append(result, CRDResourceName(v2alpha1.CENPName))
+		result = append(result, CRDResourceName(v2.CEGPName))
 	}
 	if option.Config.EnableLocalRedirectPolicy {
 		result = append(result, CRDResourceName(v2.CLRPName))
 	}
+	if option.Config.EnableEnvoyConfig {
+		result = append(result, CRDResourceName(v2.CCECName))
+		result = append(result, CRDResourceName(v2.CECName))
+	}
+	if option.Config.EnableBGPControlPlane {
+		result = append(result, CRDResourceName(v2alpha1.BGPPName))
+	}
+
+	result = append(result, CRDResourceName(v2alpha1.LBIPPoolName))
 
 	return result
 }
@@ -67,21 +79,24 @@ func AgentCRDResourceNames() []string {
 	return agentCRDResourceNames()
 }
 
-// AllCRDResourceNames returns a list of all CRD resource names that the
-// clustermesh-apiserver or testsuite may register.
-func AllCRDResourceNames() []string {
-	return append(agentCRDResourceNames(), CRDResourceName(v2.CEWName))
+// AllCiliumCRDResourceNames returns a list of all Cilium CRD resource names
+// that the clustermesh-apiserver or testsuite may register.
+func AllCiliumCRDResourceNames() []string {
+	return append(
+		AgentCRDResourceNames(),
+		CRDResourceName(v2.CEWName),
+	)
 }
 
 // SyncCRDs will sync Cilium CRDs to ensure that they have all been
 // installed inside the K8s cluster. These CRDs are added by the
 // Cilium Operator. This function will block until it finds all the
 // CRDs or if a timeout occurs.
-func SyncCRDs(ctx context.Context, crdNames []string, rs *Resources, ag *APIGroups) error {
+func SyncCRDs(ctx context.Context, clientset client.Clientset, crdNames []string, rs *Resources, ag *APIGroups) error {
 	crds := newCRDState(crdNames)
 
 	listerWatcher := newListWatchFromClient(
-		newCRDGetter(k8s.WatcherAPIExtClient()),
+		newCRDGetter(clientset),
 		fields.Everything(),
 	)
 	_, crdController := informer.NewInformer(

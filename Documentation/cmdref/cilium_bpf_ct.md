@@ -13,14 +13,14 @@ Connection tracking tables
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf ct flush](../cilium_bpf_ct_flush)	 - Flush all connection tracking entries
-* [cilium bpf ct list](../cilium_bpf_ct_list)	 - List connection tracking entries
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf ct flush](cilium_bpf_ct_flush.md)	 - Flush all connection tracking entries
+* [cilium bpf ct list](cilium_bpf_ct_list.md)	 - List connection tracking entries
 

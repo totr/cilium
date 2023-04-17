@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package clustermesh
 
@@ -13,6 +13,8 @@ var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "clustermesh")
 const (
 	fieldClusterName   = "clusterName"
 	fieldConfig        = "config"
+	fieldConfigDir     = "configDir"
+	fieldEvent         = "event"
 	fieldKVStoreStatus = "kvstoreStatus"
 	fieldKVStoreErr    = "kvstoreErr"
 )

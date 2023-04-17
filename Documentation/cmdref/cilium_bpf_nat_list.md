@@ -5,25 +5,25 @@
 List all NAT mapping entries
 
 ```
-cilium bpf nat list [flags]
+cilium bpf nat list [cluster <cluster id>] [flags]
 ```
 
 ### Options
 
 ```
   -h, --help            help for list
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf nat](../cilium_bpf_nat)	 - NAT mapping tables
+* [cilium bpf nat](cilium_bpf_nat.md)	 - NAT mapping tables
 

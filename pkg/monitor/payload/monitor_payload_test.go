@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package payload
 
@@ -11,9 +8,9 @@ import (
 	"encoding/gob"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 func Test(t *testing.T) { TestingT(t) }

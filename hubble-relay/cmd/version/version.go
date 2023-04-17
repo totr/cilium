@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package version
 
@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/cilium/cilium/pkg/version"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/pkg/version"
 )
 
 // New creates a new version command.

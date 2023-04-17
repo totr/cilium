@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package npds
 
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	cilium "github.com/cilium/proxy/go/cilium/api"
+	envoy_service_discovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
+	"github.com/sirupsen/logrus"
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/completion"
 	"github.com/cilium/cilium/pkg/envoy"
+	testipcache "github.com/cilium/cilium/pkg/testutils/ipcache"
 	"github.com/cilium/cilium/proxylib/test"
-
-	"github.com/cilium/proxy/go/cilium/api"
-	envoy_service_disacovery "github.com/cilium/proxy/go/envoy/service/discovery/v3"
-	log "github.com/sirupsen/logrus"
-	. "gopkg.in/check.v1"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -41,9 +40,9 @@ const (
 )
 
 var resources = []*cilium.NetworkPolicy{
-	{Name: "resource0"},
-	{Name: "resource1"},
-	{Name: "resource2"},
+	{EndpointIps: []string{"1.1.1.1"}},
+	{EndpointIps: []string{"2.2.2.2"}},
+	{EndpointIps: []string{"3.3.3.3", "face::1"}},
 }
 
 // UpsertNetworkPolicy must only be used for testing!
@@ -54,21 +53,21 @@ func (cs *ClientSuite) UpsertNetworkPolicy(c *C, s *envoy.XDSServer, p *cilium.N
 
 	callback := func(err error) {
 		if err == nil {
-			log.Debug("ACK Callback called")
+			logrus.Debug("ACK Callback called")
 			atomic.AddUint64(&cs.acks, 1)
 		} else {
-			log.Debug("NACK Callback called")
+			logrus.Debug("NACK Callback called")
 			atomic.AddUint64(&cs.nacks, 1)
 		}
 	}
-
-	s.NetworkPolicyMutator.Upsert(envoy.NetworkPolicyTypeURL, p.Name, p, []string{"127.0.0.1"}, wg, callback)
+	resourceName := strconv.FormatUint(p.EndpointId, 10)
+	s.NetworkPolicyMutator.Upsert(envoy.NetworkPolicyTypeURL, resourceName, p, []string{"127.0.0.1"}, wg, callback)
 }
 
 type updater struct{}
 
-func (u *updater) PolicyUpdate(resp *envoy_service_disacovery.DiscoveryResponse) error {
-	log.Debugf("Received policy update: %s", resp.String())
+func (u *updater) PolicyUpdate(resp *envoy_service_discovery.DiscoveryResponse) error {
+	logrus.Debugf("Received policy update: %s", resp.String())
 	return nil
 }
 
@@ -89,7 +88,7 @@ func (s *ClientSuite) TestRequestAllResources(c *C) {
 
 	// Some wait before server is made available
 	time.Sleep(500 * time.Millisecond)
-	xdsServer := envoy.StartXDSServer(test.Tmpdir)
+	xdsServer := envoy.StartXDSServer(testipcache.NewMockIPCache(), test.Tmpdir)
 	time.Sleep(500 * time.Millisecond)
 
 	// Create version 1 with resource 0.

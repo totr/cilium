@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package loadbalancer
 
 import (
-	"net"
 	"testing"
 
 	"gopkg.in/check.v1"
+
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -103,7 +101,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 						Protocol: NONE,
 						Port:     1,
 					},
-					IP: net.IPv4(1, 1, 1, 1),
+					AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 				},
 				ID: 1,
 			},
@@ -114,7 +112,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 							Protocol: NONE,
 							Port:     1,
 						},
-						IP: net.IPv4(1, 1, 1, 1),
+						AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 					},
 					ID: 1,
 				},
@@ -129,7 +127,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 						Protocol: NONE,
 						Port:     1,
 					},
-					IP: net.IPv4(1, 1, 1, 1),
+					AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 				},
 				ID: 1,
 			},
@@ -140,7 +138,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 							Protocol: NONE,
 							Port:     1,
 						},
-						IP: net.IPv4(1, 1, 1, 1),
+						AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 					},
 					ID: 2,
 				},
@@ -155,7 +153,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 						Protocol: NONE,
 						Port:     1,
 					},
-					IP: net.IPv4(2, 2, 2, 2),
+					AddrCluster: cmtypes.MustParseAddrCluster("2.2.2.2"),
 				},
 				ID: 1,
 			},
@@ -166,7 +164,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 							Protocol: NONE,
 							Port:     1,
 						},
-						IP: net.IPv4(1, 1, 1, 1),
+						AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 					},
 					ID: 1,
 				},
@@ -181,7 +179,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 						Protocol: NONE,
 						Port:     2,
 					},
-					IP: net.IPv4(1, 1, 1, 1),
+					AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 				},
 				ID: 1,
 			},
@@ -192,7 +190,7 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 							Protocol: NONE,
 							Port:     1,
 						},
-						IP: net.IPv4(1, 1, 1, 1),
+						AddrCluster: cmtypes.MustParseAddrCluster("1.1.1.1"),
 					},
 					ID: 1,
 				},
@@ -218,8 +216,10 @@ func TestL3n4AddrID_Equals(t *testing.T) {
 func TestNewSvcFlag(t *testing.T) {
 	type args struct {
 		svcType     SVCType
-		svcLocal    bool
+		svcExtLocal bool
+		svcIntLocal bool
 		svcRoutable bool
+		svcL7LB     bool
 	}
 	tests := []struct {
 		name string
@@ -229,7 +229,8 @@ func TestNewSvcFlag(t *testing.T) {
 		{
 			args: args{
 				svcType:     SVCTypeClusterIP,
-				svcLocal:    false,
+				svcExtLocal: false,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
 			want: serviceFlagNone | serviceFlagRoutable,
@@ -237,7 +238,8 @@ func TestNewSvcFlag(t *testing.T) {
 		{
 			args: args{
 				svcType:     SVCTypeNodePort,
-				svcLocal:    false,
+				svcExtLocal: false,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
 			want: serviceFlagNodePort | serviceFlagRoutable,
@@ -245,59 +247,148 @@ func TestNewSvcFlag(t *testing.T) {
 		{
 			args: args{
 				svcType:     SVCTypeExternalIPs,
-				svcLocal:    false,
+				svcExtLocal: false,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
 			want: serviceFlagExternalIPs | serviceFlagRoutable,
 		},
 		{
+			// Impossible combination, ClusterIP can't have externalTrafficPolicy=Local.
 			args: args{
 				svcType:     SVCTypeClusterIP,
-				svcLocal:    true,
+				svcExtLocal: true,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
-			want: serviceFlagNone | serviceFlagLocalScope | serviceFlagRoutable,
+			want: serviceFlagNone | serviceFlagExtLocalScope | serviceFlagRoutable,
 		},
 		{
 			args: args{
 				svcType:     SVCTypeNodePort,
-				svcLocal:    true,
+				svcExtLocal: true,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
-			want: serviceFlagNodePort | serviceFlagLocalScope | serviceFlagRoutable,
+			want: serviceFlagNodePort | serviceFlagExtLocalScope | serviceFlagTwoScopes | serviceFlagRoutable,
 		},
 		{
 			args: args{
 				svcType:     SVCTypeExternalIPs,
-				svcLocal:    true,
+				svcExtLocal: true,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
-			want: serviceFlagExternalIPs | serviceFlagLocalScope | serviceFlagRoutable,
+			want: serviceFlagExternalIPs | serviceFlagExtLocalScope | serviceFlagTwoScopes | serviceFlagRoutable,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeClusterIP,
+				svcExtLocal: false,
+				svcIntLocal: true,
+				svcRoutable: true,
+			},
+			want: serviceFlagNone | serviceFlagIntLocalScope | serviceFlagRoutable,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeNodePort,
+				svcExtLocal: false,
+				svcIntLocal: true,
+				svcRoutable: true,
+			},
+			want: serviceFlagNodePort | serviceFlagIntLocalScope | serviceFlagTwoScopes | serviceFlagRoutable,
 		},
 		{
 			args: args{
 				svcType:     SVCTypeExternalIPs,
-				svcLocal:    true,
+				svcExtLocal: false,
+				svcIntLocal: true,
+				svcRoutable: true,
+			},
+			want: serviceFlagExternalIPs | serviceFlagIntLocalScope | serviceFlagTwoScopes | serviceFlagRoutable,
+		},
+		{
+			// Impossible combination, ClusterIP can't have externalTrafficPolicy=Local.
+			args: args{
+				svcType:     SVCTypeClusterIP,
+				svcExtLocal: true,
+				svcIntLocal: true,
+				svcRoutable: true,
+			},
+			want: serviceFlagNone | serviceFlagExtLocalScope | serviceFlagIntLocalScope | serviceFlagRoutable,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeNodePort,
+				svcExtLocal: true,
+				svcIntLocal: true,
+				svcRoutable: true,
+			},
+			want: serviceFlagNodePort | serviceFlagExtLocalScope | serviceFlagIntLocalScope | serviceFlagRoutable,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeExternalIPs,
+				svcExtLocal: true,
+				svcIntLocal: true,
+				svcRoutable: true,
+			},
+			want: serviceFlagExternalIPs | serviceFlagExtLocalScope | serviceFlagIntLocalScope | serviceFlagRoutable,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeExternalIPs,
+				svcExtLocal: true,
+				svcIntLocal: false,
 				svcRoutable: false,
 			},
-			want: serviceFlagExternalIPs | serviceFlagLocalScope,
+			want: serviceFlagExternalIPs | serviceFlagExtLocalScope | serviceFlagTwoScopes,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeExternalIPs,
+				svcExtLocal: false,
+				svcIntLocal: true,
+				svcRoutable: false,
+			},
+			want: serviceFlagExternalIPs | serviceFlagIntLocalScope | serviceFlagTwoScopes,
+		},
+		{
+			args: args{
+				svcType:     SVCTypeExternalIPs,
+				svcExtLocal: true,
+				svcIntLocal: true,
+				svcRoutable: false,
+			},
+			want: serviceFlagExternalIPs | serviceFlagExtLocalScope | serviceFlagIntLocalScope,
 		},
 		{
 			args: args{
 				svcType:     SVCTypeLocalRedirect,
-				svcLocal:    false,
+				svcExtLocal: false,
+				svcIntLocal: false,
 				svcRoutable: true,
 			},
 			want: serviceFlagLocalRedirect | serviceFlagRoutable,
+		},
+		{
+			args: args{
+				svcType: SVCTypeClusterIP,
+				svcL7LB: true,
+			},
+			want: serviceFlagL7LoadBalancer,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &SvcFlagParam{
-				SvcLocal:        tt.args.svcLocal,
+				SvcExtLocal:     tt.args.svcExtLocal,
+				SvcIntLocal:     tt.args.svcIntLocal,
 				SessionAffinity: false,
 				IsRoutable:      tt.args.svcRoutable,
 				SvcType:         tt.args.svcType,
+				L7LoadBalancer:  tt.args.svcL7LB,
 			}
 			if got := NewSvcFlag(p); got != tt.want {
 				t.Errorf("NewSvcFlag() = %v, want %v", got, tt.want)
@@ -324,12 +415,12 @@ func TestServiceFlags_String(t *testing.T) {
 		},
 		{
 			name: "Test-3",
-			s:    serviceFlagNodePort | serviceFlagLocalScope | serviceFlagRoutable,
+			s:    serviceFlagNodePort | serviceFlagExtLocalScope | serviceFlagRoutable,
 			want: "NodePort, Local",
 		},
 		{
 			name: "Test-4",
-			s:    serviceFlagExternalIPs | serviceFlagLocalScope | serviceFlagRoutable,
+			s:    serviceFlagExternalIPs | serviceFlagExtLocalScope | serviceFlagRoutable,
 			want: "ExternalIPs, Local",
 		},
 		{
@@ -341,6 +432,26 @@ func TestServiceFlags_String(t *testing.T) {
 			name: "Test-6",
 			s:    serviceFlagLoadBalancer,
 			want: "LoadBalancer, non-routable",
+		},
+		{
+			name: "Test-7",
+			s:    serviceFlagNodePort | serviceFlagIntLocalScope | serviceFlagRoutable,
+			want: "NodePort, InternalLocal",
+		},
+		{
+			name: "Test-8",
+			s:    serviceFlagExternalIPs | serviceFlagIntLocalScope | serviceFlagRoutable,
+			want: "ExternalIPs, InternalLocal",
+		},
+		{
+			name: "Test-9",
+			s:    serviceFlagNodePort | serviceFlagExtLocalScope | serviceFlagIntLocalScope | serviceFlagRoutable,
+			want: "NodePort, Local, InternalLocal",
+		},
+		{
+			name: "Test-10",
+			s:    serviceFlagExternalIPs | serviceFlagExtLocalScope | serviceFlagIntLocalScope | serviceFlagRoutable,
+			want: "ExternalIPs, Local, InternalLocal",
 		},
 	}
 	for _, tt := range tests {
@@ -360,26 +471,21 @@ func benchmarkHash(b *testing.B, addr *L3n4Addr) {
 }
 
 func BenchmarkL3n4Addr_Hash_IPv4(b *testing.B) {
-	addr := NewL3n4Addr(TCP, net.IPv4(1, 2, 3, 4), 8080, ScopeInternal)
-	benchmarkHash(b, addr)
-}
-
-func BenchmarkL3n4Addr_Hash_IPv4_4bytes(b *testing.B) {
-	addr := NewL3n4Addr(TCP, net.IPv4(1, 2, 3, 4).To4(), 8080, ScopeInternal)
+	addr := NewL3n4Addr(TCP, cmtypes.MustParseAddrCluster("1.2.3.4"), 8080, ScopeInternal)
 	benchmarkHash(b, addr)
 }
 
 func BenchmarkL3n4Addr_Hash_IPv6_Short(b *testing.B) {
-	addr := NewL3n4Addr(TCP, net.ParseIP("fd00::1:36c6"), 8080, ScopeInternal)
+	addr := NewL3n4Addr(TCP, cmtypes.MustParseAddrCluster("fd00::1:36c6"), 8080, ScopeInternal)
 	benchmarkHash(b, addr)
 }
 
 func BenchmarkL3n4Addr_Hash_IPv6_Long(b *testing.B) {
-	addr := NewL3n4Addr(TCP, net.ParseIP("2001:0db8:85a3::8a2e:0370:7334"), 8080, ScopeInternal)
+	addr := NewL3n4Addr(TCP, cmtypes.MustParseAddrCluster("2001:0db8:85a3::8a2e:0370:7334"), 8080, ScopeInternal)
 	benchmarkHash(b, addr)
 }
 
 func BenchmarkL3n4Addr_Hash_IPv6_Max(b *testing.B) {
-	addr := NewL3n4Addr(TCP, net.ParseIP("1020:3040:5060:7080:90a0:b0c0:d0e0:f000"), 30303, 100)
+	addr := NewL3n4Addr(TCP, cmtypes.MustParseAddrCluster("1020:3040:5060:7080:90a0:b0c0:d0e0:f000"), 30303, 100)
 	benchmarkHash(b, addr)
 }

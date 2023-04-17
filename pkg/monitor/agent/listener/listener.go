@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package listener
 
@@ -7,18 +7,18 @@ import (
 	"net"
 	"os"
 
-	"github.com/cilium/cilium/pkg/monitor/payload"
-
 	"golang.org/x/sys/unix"
+
+	"github.com/cilium/cilium/pkg/monitor/payload"
 )
 
 // Version is the version of a node-monitor listener client. There are
 // two API versions:
-// - 1.0 which encodes the gob type information with each payload sent, and
-//   adds a meta object before it.
-// - 1.2 which maintains a gob session per listener, thus only encoding the
-//   type information on the first payload sent. It does NOT prepend the a meta
-//   object.
+//   - 1.0 which encodes the gob type information with each payload sent, and
+//     adds a meta object before it.
+//   - 1.2 which maintains a gob session per listener, thus only encoding the
+//     type information on the first payload sent. It does NOT prepend the a meta
+//     object.
 type Version string
 
 const (

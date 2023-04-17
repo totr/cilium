@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package k8s
 
@@ -7,9 +7,10 @@ import (
 	"path"
 	"time"
 
-	"github.com/cilium/cilium/pkg/kvstore"
-
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/cilium/cilium/pkg/k8s/client"
+	"github.com/cilium/cilium/pkg/kvstore"
 )
 
 // CCNPStatusesPath is the KVStore key prefix for CCNP status
@@ -27,8 +28,8 @@ type CCNPStatusEventHandler struct {
 
 // NewCCNPStatusEventHandler returns a new CCNPStatusEventHandler.
 // which is more or less a wrapper around the CNPStatusEventHandler itself.
-func NewCCNPStatusEventHandler(k8sStore cache.Store, updateInterval time.Duration) *CCNPStatusEventHandler {
+func NewCCNPStatusEventHandler(clientset client.Clientset, k8sStore cache.Store, updateInterval time.Duration) *CCNPStatusEventHandler {
 	return &CCNPStatusEventHandler{
-		CNPStatusEventHandler: NewCNPStatusEventHandler(k8sStore, updateInterval),
+		CNPStatusEventHandler: NewCNPStatusEventHandler(clientset, k8sStore, updateInterval),
 	}
 }

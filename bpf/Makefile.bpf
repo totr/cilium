@@ -1,5 +1,5 @@
-# Copyright 2017-2020 Authors of Cilium
-# SPDX-License-Identifier: Apache-2.0
+# Copyright Authors of Cilium
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 
 FLAGS := -I$(ROOT_DIR)/bpf/include -I$(ROOT_DIR)/bpf -D__NR_CPUS__=$(shell nproc --all) -O2 -g
 
@@ -11,11 +11,10 @@ CLANG_FLAGS += -Wno-address-of-packed-member
 CLANG_FLAGS += -Wno-unknown-warning-option
 CLANG_FLAGS += -Wno-gnu-variable-sized-type-not-at-end
 CLANG_FLAGS += -Wdeclaration-after-statement
-LLC_FLAGS := -march=bpf -mattr=dwarfris
+CLANG_FLAGS += -Wimplicit-int-conversion -Wenum-conversion
+LLC_FLAGS := -march=bpf
 # Mimics the mcpu values set by cilium-agent. See GetBPFCPU().
-ifeq ("$(KERNEL)","49")
-LLC_FLAGS += -mcpu=v1
-else ifeq ("$(KERNEL)","netnext")
+ifeq ("$(KERNEL)","netnext")
 LLC_FLAGS += -mcpu=v3
 else
 LLC_FLAGS += -mcpu=v2
@@ -34,9 +33,12 @@ LLC   ?= llc
 HOST_CC    ?= gcc
 HOST_STRIP ?= strip
 
-ifeq ($(IMAGE_CROSS_TARGET_PLATFORM),linux/arm64)
+ifeq ($(CROSS_ARCH),arm64)
   HOST_CC = aarch64-linux-gnu-gcc
   HOST_STRIP = aarch64-linux-gnu-strip
+else ifeq ($(CROSS_ARCH),amd64)
+  HOST_CC = x86_64-linux-gnu-gcc
+  HOST_STRIP = x86_64-linux-gnu-strip
 endif
 
 # Define all at the top here so that Makefiles which include this one will hit
@@ -57,13 +59,23 @@ force:
 	@$(ECHO_CC)
 	$(QUIET) ${LLC} $(LLC_FLAGS) -filetype=asm -o $@ $(patsubst %.s,%.ll,$@)
 
+CHECKPATCH_IMAGE := quay.io/cilium/cilium-checkpatch:a8f73eced11c29d8c5003ba75071fb9ff91251e4@sha256:9fba31c924b0e675ee45dada3788ded045cd63c979fae3cddcb08636ed2e00da
+ifneq ($(CHECKPATCH_DEBUG),)
+  # Run script with "bash -x"
+  CHECKPATCH_IMAGE_AND_ENTRY := \
+	--entrypoint /bin/bash $(CHECKPATCH_IMAGE) -x /checkpatch/checkpatch.sh
+else
+  # Use default entrypoint
+  CHECKPATCH_IMAGE_AND_ENTRY := $(CHECKPATCH_IMAGE)
+endif
 checkpatch:
 	@$(ECHO_CHECK) "(checkpatch)"
 	$(QUIET) $(CONTAINER_ENGINE) container run --rm \
 		--workdir /workspace \
 		--volume $(CURDIR)/..:/workspace \
 		--user "$(shell id -u):$(shell id -g)" \
-		cilium/cilium-checkpatch:e6a6843cef50a43c38819badb55a21061967ce64
+		-e GITHUB_REF=$(GITHUB_REF) -e GITHUB_REPOSITORY=$(GITHUB_REPOSITORY) \
+		$(CHECKPATCH_IMAGE_AND_ENTRY) $(CHECKPATCH_ARGS)
 
 coccicheck:
 	$(QUIET) $(foreach TARGET,$(shell find $(ROOT_DIR)/contrib/coccinelle/ -name '*.cocci'), \

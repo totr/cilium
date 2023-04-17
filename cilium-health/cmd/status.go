@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,11 +7,11 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/health/models"
 	"github.com/cilium/cilium/pkg/command"
 	clientPkg "github.com/cilium/cilium/pkg/health/client"
-
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -46,7 +46,7 @@ var statusGetCmd = &cobra.Command{
 			sr = result.Payload
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(sr); err != nil {
 				os.Exit(1)
 			}
@@ -66,5 +66,5 @@ func init() {
 		"Print the result succinctly (one node per line)")
 	statusGetCmd.Flags().BoolVarP(&verbose, "verbose", "", false,
 		"Print more information in results")
-	command.AddJSONOutput(statusGetCmd)
+	command.AddOutputOption(statusGetCmd)
 }

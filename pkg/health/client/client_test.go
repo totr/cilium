@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package client
 
@@ -10,9 +7,10 @@ import (
 	"io"
 	"testing"
 
-	"github.com/cilium/cilium/api/v1/health/models"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/api/v1/health/models"
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -205,18 +203,30 @@ func (s *ClientTestSuite) TestFormatNodeStatus(c *C) {
 		possibleHostStatuses = append(possibleHostStatuses, hostStatus)
 	}
 
+	// Assemble possible health-endpoint statuses.
+	possibleEndpointStatuses := []*models.EndpointStatus{
+		nil,
+	}
+	for _, possiblePrimaryAddress := range possiblePathStatuses {
+		hostStatus := &models.EndpointStatus{
+			PrimaryAddress:     possiblePrimaryAddress,
+			SecondaryAddresses: possibleSecondaryAddresses,
+		}
+		possibleEndpointStatuses = append(possibleEndpointStatuses, hostStatus)
+	}
+
 	printAllOptions := []bool{true, false}
 	succinctOptions := []bool{true, false}
 	verboseOptions := []bool{true, false}
 	localhostOptions := []bool{true, false}
 
-	for _, possibleEndpointStatus := range possiblePathStatuses {
+	for _, possibleEndpointStatus := range possibleEndpointStatuses {
 		for _, hostStatus := range possibleHostStatuses {
 			for _, name := range possibleNames {
 				ns := &models.NodeStatus{
-					Endpoint: possibleEndpointStatus,
-					Host:     hostStatus,
-					Name:     name,
+					HealthEndpoint: possibleEndpointStatus,
+					Host:           hostStatus,
+					Name:           name,
 				}
 				for _, printAllOpt := range printAllOptions {
 					for _, succintOpt := range succinctOptions {
@@ -284,4 +294,40 @@ func (s *ClientTestSuite) TestGetPrimaryAddressIP(c *C) {
 
 	pathStatus = getPrimaryAddressIP(primaryAddressNS)
 	c.Assert(pathStatus, Equals, "")
+}
+
+func (s *ClientTestSuite) TestGetAllEndpointAddresses(c *C) {
+	var (
+		primary    = models.PathStatus{IP: "1.1.1.1"}
+		secondary1 = models.PathStatus{IP: "2.2.2.2"}
+		secondary2 = models.PathStatus{IP: "3.3.3.3"}
+	)
+
+	tests := []struct {
+		node     *models.NodeStatus
+		expected []*models.PathStatus
+	}{
+		{
+			node:     &models.NodeStatus{},
+			expected: nil,
+		},
+		{
+			node: &models.NodeStatus{
+				HealthEndpoint: &models.EndpointStatus{
+					PrimaryAddress: &primary,
+				}},
+			expected: []*models.PathStatus{&primary},
+		},
+		{
+			node: &models.NodeStatus{
+				HealthEndpoint: &models.EndpointStatus{
+					PrimaryAddress:     &primary,
+					SecondaryAddresses: []*models.PathStatus{&secondary1, &secondary2},
+				}},
+			expected: []*models.PathStatus{&primary, &secondary1, &secondary2},
+		},
+	}
+	for _, tc := range tests {
+		c.Assert(GetAllEndpointAddresses(tc.node), checker.DeepEquals, tc.expected)
+	}
 }

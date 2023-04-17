@@ -13,14 +13,14 @@ Manage transparent encryption
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium](../cilium)	 - CLI
-* [cilium encrypt flush](../cilium_encrypt_flush)	 - Flushes the current IPsec state
-* [cilium encrypt status](../cilium_encrypt_status)	 - Display the current encryption state
+* [cilium](cilium.md)	 - CLI
+* [cilium encrypt flush](cilium_encrypt_flush.md)	 - Flushes the current IPsec state
+* [cilium encrypt status](cilium_encrypt_status.md)	 - Display the current encryption state
 

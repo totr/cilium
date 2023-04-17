@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package policy
 
@@ -10,11 +7,11 @@ import (
 	"bytes"
 	stdlog "log"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	. "gopkg.in/check.v1"
 )
 
 // Tests in this file:
@@ -85,11 +82,11 @@ func (ds *PolicyTestSuite) TestMergeDenyAllL3(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: "",
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{IsDeny: true},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress:    true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 	}}
 
 	c.Assert(l4IngressDenyPolicy, checker.DeepEquals, expected)
@@ -103,7 +100,7 @@ func (ds *PolicyTestSuite) TestMergeDenyAllL3(c *C) {
 	c.Assert(filter.SelectsAllEndpoints(), Equals, true)
 
 	c.Assert(filter.L7Parser, Equals, ParserTypeNone)
-	c.Assert(len(filter.L7RulesPerSelector), Equals, 1)
+	c.Assert(len(filter.PerSelectorPolicies), Equals, 1)
 	l4IngressDenyPolicy.Detach(repo.GetSelectorCache())
 
 	// Case1B: implicitly deny all endpoints.
@@ -149,10 +146,10 @@ func (ds *PolicyTestSuite) TestMergeDenyAllL3(c *C) {
 
 	c.Assert(filter.SelectsAllEndpoints(), Equals, true)
 	c.Assert(filter.wildcard, Not(IsNil))
-	c.Assert(filter.L7RulesPerSelector[filter.wildcard].IsDeny, Equals, true)
+	c.Assert(filter.PerSelectorPolicies[filter.wildcard].IsDeny, Equals, true)
 
 	c.Assert(filter.L7Parser, Equals, ParserTypeNone)
-	c.Assert(len(filter.L7RulesPerSelector), Equals, 1)
+	c.Assert(len(filter.PerSelectorPolicies), Equals, 1)
 	l4IngressDenyPolicy.Detach(repo.GetSelectorCache())
 }
 
@@ -199,12 +196,15 @@ func (ds *PolicyTestSuite) TestL3DenyRuleShadowedByL3DenyAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA:        &PerSelectorPolicy{IsDeny: true},
 			wildcardCachedSelector: &PerSelectorPolicy{IsDeny: true},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state := traceState{}
@@ -265,12 +265,15 @@ func (ds *PolicyTestSuite) TestL3DenyRuleShadowedByL3DenyAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{IsDeny: true},
 			cachedSelectorA:        &PerSelectorPolicy{IsDeny: true},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state = traceState{}
@@ -334,12 +337,15 @@ func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointSelectedDenyAllL7(c *
 		U8Proto:  6,
 		wildcard: nil,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA: &PerSelectorPolicy{IsDeny: true},
 			cachedSelectorC: &PerSelectorPolicy{IsDeny: true},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
 	}}
 
 	state := traceState{}
@@ -412,12 +418,15 @@ func (ds *PolicyTestSuite) TestL3AllowRuleShadowedByL3DenyAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA:        &PerSelectorPolicy{IsDeny: true},
 			wildcardCachedSelector: nil,
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state := traceState{}
@@ -480,12 +489,15 @@ func (ds *PolicyTestSuite) TestL3AllowRuleShadowedByL3DenyAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA:        &PerSelectorPolicy{IsDeny: true},
 			wildcardCachedSelector: nil,
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state = traceState{}
@@ -558,16 +570,20 @@ func (ds *PolicyTestSuite) TestL3L4AllowRuleWithByL3DenyAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA: &PerSelectorPolicy{IsDeny: true},
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state := traceState{}
@@ -635,16 +651,20 @@ func (ds *PolicyTestSuite) TestL3L4AllowRuleWithByL3DenyAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA: &PerSelectorPolicy{IsDeny: true},
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state = traceState{}

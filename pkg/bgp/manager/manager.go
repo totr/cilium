@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 // Package manager provides functionality relating to the integration between
 // Cilium and MetalLB, namely providing abstractions that help manage MetalLB
@@ -11,14 +11,16 @@ import (
 
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/cilium/cilium/pkg/k8s/client"
 )
 
 // New creates a new BGP MetalLB manager. It contains the MetalLB service IP
 // controller, which contains the allocator.
 //
 // New requires access to a cache.Store associated with the service watcher.
-func New(ctx context.Context, indexer cache.Store) (*Manager, error) {
-	ctrl, err := newMetalLBController(ctx)
+func New(ctx context.Context, clientset client.Clientset, indexer cache.Store) (*Manager, error) {
+	ctrl, err := newMetalLBController(ctx, clientset)
 	if err != nil {
 		return nil, err
 	}

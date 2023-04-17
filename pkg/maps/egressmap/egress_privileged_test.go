@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
-
-//go:build privileged_tests
-// +build privileged_tests
+// Copyright Authors of Cilium
 
 package egressmap
 
@@ -11,10 +8,13 @@ import (
 	"net"
 	"testing"
 
+	. "gopkg.in/check.v1"
+
+	"github.com/cilium/ebpf/rlimit"
+
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/ebpf"
-
-	. "gopkg.in/check.v1"
+	"github.com/cilium/cilium/pkg/testutils"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -27,13 +27,15 @@ func Test(t *testing.T) {
 }
 
 func (k *EgressMapTestSuite) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
+
 	bpf.CheckOrMountFS("")
-	err := bpf.ConfigureResourceLimits()
+	err := rlimit.RemoveMemlock()
 	c.Assert(err, IsNil)
 }
 
 func (k *EgressMapTestSuite) TestEgressMap(c *C) {
-	err := initEgressPolicyMap(PolicyMapName, true)
+	err := initEgressPolicyMap(PolicyMapName, MaxPolicyEntries, true)
 	c.Assert(err, IsNil)
 	defer EgressPolicyMap.Unpin()
 
@@ -75,6 +77,6 @@ func (k *EgressMapTestSuite) TestEgressMap(c *C) {
 	c.Assert(val.EgressIP.IP().Equal(egressIP1), Equals, true)
 	c.Assert(val.GatewayIP.IP().Equal(egressIP1), Equals, true)
 
-	val, err = EgressPolicyMap.Lookup(sourceIP2, *destCIDR2)
+	_, err = EgressPolicyMap.Lookup(sourceIP2, *destCIDR2)
 	c.Assert(errors.Is(err, ebpf.ErrKeyNotExist), Equals, true)
 }

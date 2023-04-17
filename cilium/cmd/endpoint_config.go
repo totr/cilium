@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	endpointid "github.com/cilium/cilium/pkg/endpoint/id"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/spf13/cobra"
 )
 
 var listOptions bool
@@ -35,7 +35,7 @@ var endpointConfigCmd = &cobra.Command{
 func init() {
 	endpointCmd.AddCommand(endpointConfigCmd)
 	endpointConfigCmd.Flags().BoolVarP(&listOptions, "list-options", "", false, "List available options")
-	command.AddJSONOutput(endpointConfigCmd)
+	command.AddOutputOption(endpointConfigCmd)
 }
 
 var endpointMutableOptionLibrary = option.GetEndpointMutableOptionLibrary()
@@ -55,7 +55,7 @@ func configEndpoint(cmd *cobra.Command, args []string) {
 
 	opts := args[1:]
 	if len(opts) == 0 {
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(cfg); err != nil {
 				os.Exit(1)
 			}

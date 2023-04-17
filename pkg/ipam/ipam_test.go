@@ -1,23 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package ipam
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/addressing"
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/datapath"
 	"github.com/cilium/cilium/pkg/datapath/fake"
+	"github.com/cilium/cilium/pkg/datapath/types"
 	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
-
-	. "gopkg.in/check.v1"
 )
 
 func Test(t *testing.T) {
@@ -28,14 +25,12 @@ type IPAMSuite struct{}
 
 var _ = Suite(&IPAMSuite{})
 
-func fakeIPv4AllocCIDRIP(fakeAddressing datapath.NodeAddressing) net.IP {
-	// force copy so net.IP can be modified
-	return net.ParseIP(fakeAddressing.IPv4().AllocationCIDR().IP.String())
+func fakeIPv4AllocCIDRIP(fakeAddressing types.NodeAddressing) netip.Addr {
+	return netip.MustParseAddr(fakeAddressing.IPv4().AllocationCIDR().IP.String())
 }
 
-func fakeIPv6AllocCIDRIP(fakeAddressing datapath.NodeAddressing) net.IP {
-	// force copy so net.IP can be modified
-	return net.ParseIP(fakeAddressing.IPv6().AllocationCIDR().IP.String())
+func fakeIPv6AllocCIDRIP(fakeAddressing types.NodeAddressing) netip.Addr {
+	return netip.MustParseAddr(fakeAddressing.IPv6().AllocationCIDR().IP.String())
 }
 
 type testConfiguration struct{}
@@ -43,61 +38,62 @@ type testConfiguration struct{}
 func (t *testConfiguration) IPv4Enabled() bool                        { return true }
 func (t *testConfiguration) IPv6Enabled() bool                        { return true }
 func (t *testConfiguration) HealthCheckingEnabled() bool              { return true }
+func (t *testConfiguration) UnreachableRoutesEnabled() bool           { return false }
 func (t *testConfiguration) IPAMMode() string                         { return ipamOption.IPAMClusterPool }
 func (t *testConfiguration) SetIPv4NativeRoutingCIDR(cidr *cidr.CIDR) {}
 func (t *testConfiguration) GetIPv4NativeRoutingCIDR() *cidr.CIDR     { return nil }
 
 func (s *IPAMSuite) TestLock(c *C) {
 	fakeAddressing := fake.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock, nil)
 
 	// Since the IPs we have allocated to the endpoints might or might not
 	// be in the allocrange specified in cilium, we need to specify them
 	// manually on the endpoint based on the alloc range.
 	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
-	nextIP(ipv4)
-	epipv4, err := addressing.NewCiliumIPv4(ipv4.String())
-	c.Assert(err, IsNil)
-
+	ipv4 = ipv4.Next()
 	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
-	nextIP(ipv6)
-	epipv6, err := addressing.NewCiliumIPv6(ipv6.String())
-	c.Assert(err, IsNil)
+	ipv6 = ipv6.Next()
 
 	// Forcefully release possible allocated IPs
-	err = ipam.IPv4Allocator.Release(epipv4.IP())
+	err := ipam.IPv4Allocator.Release(ipv4.AsSlice(), PoolDefault)
 	c.Assert(err, IsNil)
-	err = ipam.IPv6Allocator.Release(epipv6.IP())
+	err = ipam.IPv6Allocator.Release(ipv6.AsSlice(), PoolDefault)
 	c.Assert(err, IsNil)
 
 	// Let's allocate the IP first so we can see the tests failing
-	result, err := ipam.IPv4Allocator.Allocate(epipv4.IP(), "test")
+	result, err := ipam.IPv4Allocator.Allocate(ipv4.AsSlice(), "test", PoolDefault)
 	c.Assert(err, IsNil)
-	c.Assert(result.IP, checker.DeepEquals, epipv4.IP())
+	c.Assert(result.IP, checker.DeepEquals, net.IP(ipv4.AsSlice()))
 
-	err = ipam.IPv4Allocator.Release(epipv4.IP())
+	err = ipam.IPv4Allocator.Release(ipv4.AsSlice(), PoolDefault)
 	c.Assert(err, IsNil)
 }
 
-func (s *IPAMSuite) TestBlackList(c *C) {
+func (s *IPAMSuite) TestExcludeIP(c *C) {
 	fakeAddressing := fake.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock, nil)
 
 	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
-	nextIP(ipv4)
+	ipv4 = ipv4.Next()
 
-	ipam.BlacklistIP(ipv4, "test")
-	err := ipam.AllocateIP(ipv4, "test")
+	ipam.ExcludeIP(ipv4.AsSlice(), "test-foo", PoolDefault)
+	err := ipam.AllocateIP(ipv4.AsSlice(), "test-bar", PoolDefault)
 	c.Assert(err, Not(IsNil))
-	ipam.ReleaseIP(ipv4)
+	c.Assert(err, ErrorMatches, ".* owned by test-foo")
+	err = ipam.ReleaseIP(ipv4.AsSlice(), PoolDefault)
+	c.Assert(err, IsNil)
 
 	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
-	nextIP(ipv6)
+	ipv6 = ipv6.Next()
 
-	ipam.BlacklistIP(ipv6, "test")
-	err = ipam.AllocateIP(ipv6, "test")
+	ipam.ExcludeIP(ipv6.AsSlice(), "test-foo", PoolDefault)
+	err = ipam.AllocateIP(ipv6.AsSlice(), "test-bar", PoolDefault)
 	c.Assert(err, Not(IsNil))
-	ipam.ReleaseIP(ipv6)
+	c.Assert(err, ErrorMatches, ".* owned by test-foo")
+	ipam.ReleaseIP(ipv6.AsSlice(), PoolDefault)
+	err = ipam.ReleaseIP(ipv4.AsSlice(), PoolDefault)
+	c.Assert(err, IsNil)
 }
 
 func (s *IPAMSuite) TestDeriveFamily(c *C) {
@@ -107,25 +103,25 @@ func (s *IPAMSuite) TestDeriveFamily(c *C) {
 
 func (s *IPAMSuite) TestOwnerRelease(c *C) {
 	fakeAddressing := fake.NewNodeAddressing()
-	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock)
+	ipam := NewIPAM(fakeAddressing, &testConfiguration{}, &ownerMock{}, &ownerMock{}, &mtuMock, nil)
 
 	ipv4 := fakeIPv4AllocCIDRIP(fakeAddressing)
-	nextIP(ipv4)
-	err := ipam.AllocateIP(ipv4, "default/test")
+	ipv4 = ipv4.Next()
+	err := ipam.AllocateIP(ipv4.AsSlice(), "default/test", PoolDefault)
 	c.Assert(err, IsNil)
 
 	ipv6 := fakeIPv6AllocCIDRIP(fakeAddressing)
-	nextIP(ipv6)
-	err = ipam.AllocateIP(ipv6, "default/test")
+	ipv6 = ipv6.Next()
+	err = ipam.AllocateIP(ipv6.AsSlice(), "default/test", PoolDefault)
 	c.Assert(err, IsNil)
 
 	// unknown owner, must fail
-	err = ipam.ReleaseIPString("default/test2")
+	err = ipam.ReleaseIPString("default/test2", PoolDefault)
 	c.Assert(err, Not(IsNil))
 	// 1st release by correct owner, must succeed
-	err = ipam.ReleaseIPString("default/test")
+	err = ipam.ReleaseIPString("default/test", PoolDefault)
 	c.Assert(err, IsNil)
 	// 2nd release by owner, must now fail
-	err = ipam.ReleaseIPString("default/test")
+	err = ipam.ReleaseIPString("default/test", PoolDefault)
 	c.Assert(err, Not(IsNil))
 }

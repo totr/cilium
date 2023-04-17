@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
 import (
-	"net"
+	"net/netip"
 	"time"
 )
 
@@ -18,9 +18,9 @@ const logSubsys = "fqdn"
 // function.
 // Internally, the lookupTime is used to checkpoint this update so that
 // dns-garbage-collector-job can correctly clear older connection data.
-func (e *Endpoint) MarkDNSCTEntry(dstIP net.IP, now time.Time) {
-	if dstIP == nil {
-		e.Logger(logSubsys).Error("MarkDNSCTEntry called with nil IP")
+func (e *Endpoint) MarkDNSCTEntry(dstIP netip.Addr, now time.Time) {
+	if !dstIP.IsValid() {
+		e.Logger(logSubsys).Error("MarkDNSCTEntry called with invalid IP")
 		return
 	}
 

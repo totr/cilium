@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package certloader
 
@@ -367,19 +364,21 @@ func k8sDataDirName() string {
 
 // k8sDirectories works like directories above, but simulates what Kubernetes
 // would create for the following volume definition:
-//  - name: hubble-tls
-//    projected:
-//      sources:
-//      - secret:
-//          items:
-//          - key: ca.crt
-//            path: client-ca.crt
-//          - key: tls.crt
-//            path: server.crt
-//          - key: tls.key
-//            path: server.key
-//          name: hubble-server-certs
-//          optional: true
+//
+//	---
+//	- name: hubble-tls
+//	  projected:
+//	    sources:
+//	    - secret:
+//	        items:
+//	        - key: ca.crt
+//	          path: client-ca.crt
+//	        - key: tls.crt
+//	          path: server.crt
+//	        - key: tls.key
+//	          path: server.key
+//	        name: hubble-server-certs
+//	        optional: true
 func k8sDirectories(t *testing.T) (dir string, hubble tlsConfigFiles) {
 	dir = t.TempDir()
 

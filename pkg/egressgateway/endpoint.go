@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package egressgateway
 
@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"net"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	k8sTypes "github.com/cilium/cilium/pkg/k8s/types"
 	"github.com/cilium/cilium/pkg/labels"
-
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // endpointMetadata stores relevant metadata associated with a endpoint that's updated during endpoint
@@ -27,7 +27,7 @@ type endpointMetadata struct {
 // endpointID includes endpoint name and namespace
 type endpointID = types.NamespacedName
 
-func getEndpointMetadata(endpoint *k8sTypes.CiliumEndpoint) (*endpointMetadata, error) {
+func getEndpointMetadata(endpoint *k8sTypes.CiliumEndpoint, identityLabels labels.Labels) (*endpointMetadata, error) {
 	var ipv4s []net.IP
 	id := types.NamespacedName{
 		Name:      endpoint.GetName(),
@@ -50,7 +50,7 @@ func getEndpointMetadata(endpoint *k8sTypes.CiliumEndpoint) (*endpointMetadata, 
 
 	data := &endpointMetadata{
 		ips:    ipv4s,
-		labels: labels.NewLabelsFromModel(endpoint.Identity.Labels).K8sStringMap(),
+		labels: identityLabels.K8sStringMap(),
 		id:     id,
 	}
 

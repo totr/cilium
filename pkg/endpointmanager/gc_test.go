@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package endpointmanager
 
@@ -11,10 +8,11 @@ import (
 	"fmt"
 	"time"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/endpoint"
 	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
-
-	. "gopkg.in/check.v1"
+	testipcache "github.com/cilium/cilium/pkg/testutils/ipcache"
 )
 
 // fakeCheck detects endpoints as unhealthy if they have an even EndpointID.
@@ -27,7 +25,7 @@ func fakeCheck(ep *endpoint.Endpoint) error {
 
 func (s *EndpointManagerSuite) TestmarkAndSweep(c *C) {
 	// Open-code WithPeriodicGC() to avoid running the controller
-	mgr := NewEndpointManager(&dummyEpSyncher{})
+	mgr := New(&dummyEpSyncher{})
 	mgr.checkHealth = fakeCheck
 	mgr.deleteEndpoint = endpointDeleteFunc(mgr.waitEndpointRemoved)
 
@@ -39,7 +37,7 @@ func (s *EndpointManagerSuite) TestmarkAndSweep(c *C) {
 	healthyEndpointIDs := []uint16{1, 3, 5, 7}
 	allEndpointIDs := append(healthyEndpointIDs, endpointIDToDelete)
 	for _, id := range allEndpointIDs {
-		ep := endpoint.NewEndpointWithState(s, s, &endpoint.FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), id, endpoint.StateReady)
+		ep := endpoint.NewEndpointWithState(s, s, testipcache.NewMockIPCache(), &endpoint.FakeEndpointProxy{}, testidentity.NewMockIdentityAllocator(nil), id, endpoint.StateReady)
 		mgr.expose(ep)
 	}
 	c.Assert(len(mgr.GetEndpoints()), Equals, len(allEndpointIDs))

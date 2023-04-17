@@ -12,6 +12,8 @@ Tuning Guide
 
 This guide helps you optimize a Cilium installation for optimal performance.
 
+.. _eBPF_Host_Routing:
+
 eBPF Host-Routing
 =================
 
@@ -37,6 +39,58 @@ in any of the Cilium pods and look for the line reporting the status for
 * eBPF-based kube-proxy replacement
 * eBPF-based masquerading
 
+.. _ipv6_big_tcp:
+
+IPv6 BIG TCP
+============
+
+IPv6 BIG TCP allows the network stack to prepare larger GSO (transmit) and GRO
+(receive) packets to reduce the number of times the stack is traversed which
+improves performance and latency. It reduces the CPU load and helps achieve
+higher speeds (i.e. 100Gbit/s and beyond). To pass such packets through the stack
+BIG TCP adds a temporary Hop-By-Hop header after the IPv6 one which is stripped
+before transmitting the packet over the wire. BIG TCP can operate in a DualStack
+setup, IPv4 packets will use the old lower limits (64k) and IPv6 packets will
+use the new larger ones (192k). Note that Cilium assumes the default kernel values
+for GSO and GRO maximum sizes are 64k and adjusts them only when necessary, i.e. if
+BIG TCP is enabled and the current GSO/GRO maximum sizes are less than 192k it
+will try to increase them, respectively when BIG TCP is disabled and the current
+maximum values are more than 64k it will try to decrease them. BIG TCP doesn't
+require network interface MTU changes.
+
+**Requirements:**
+
+* Kernel >= 5.19
+* eBPF Host-Routing
+* eBPF-based kube-proxy replacement
+* eBPF-based masquerading
+* Tunneling and encryption disabled
+* Supported NICs: mlx4, mlx5
+
+To enable IPv6 BIG TCP:
+
+.. tabs::
+
+    .. group-tab:: Helm
+
+       .. parsed-literal::
+
+           helm install cilium |CHART_RELEASE| \\
+             --namespace kube-system \\
+             --set routingMode=native \\
+             --set bpf.masquerade=true \\
+             --set ipv6.enabled=true \\
+             --set enableIPv6Masquerade=false \\
+             --set enableIPv6BIGTCP=true \\
+             --set kubeProxyReplacement=strict
+
+Note that after toggling the IPv6 BIG TCP option the Kubernetes Pods must be
+restarted for the changes to take effect.
+
+To validate whether your installation is running with IPv6 BIG TCP,
+run ``cilium status`` in any of the Cilium pods and look for the line
+reporting the status for "IPv6 BIG TCP" which should state "enabled".
+
 Bypass iptables Connection Tracking
 ===================================
 
@@ -51,7 +105,7 @@ bypassing the iptables connection tracker.
 * Kernel >= 4.19.57, >= 5.1.16, >= 5.2
 * Direct-routing configuration
 * eBPF-based kube-proxy replacement
-* eBPF masquerading
+* eBPF-based masquerading or no masquerading
 
 To enable the iptables connection-tracking bypass:
 
@@ -137,12 +191,61 @@ To enable the Bandwidth Manager:
 
            helm install cilium |CHART_RELEASE| \\
              --namespace kube-system \\
-             --set bandwidthManager=true \\
+             --set bandwidthManager.enabled=true \\
              --set kubeProxyReplacement=strict
 
 To validate whether your installation is running with Bandwidth Manager,
 run ``cilium status`` in any of the Cilium pods and look for the line
 reporting the status for "BandwidthManager" which should state "EDT with BPF".
+
+BBR congestion control for Pods
+===============================
+
+The base infrastructure around MQ/FQ setup provided by Cilium's Bandwidth Manager
+also allows for use of TCP `BBR congestion control <https://queue.acm.org/detail.cfm?id=3022184>`_
+for Pods. BBR is in particular suitable when Pods are exposed behind Kubernetes
+Services which face external clients from the Internet. BBR achieves higher
+bandwidths and lower latencies for Internet traffic, for example, it has been
+`shown <https://cloud.google.com/blog/products/networking/tcp-bbr-congestion-control-comes-to-gcp-your-internet-just-got-faster>`_
+that BBR's throughput can reach as much as 2,700x higher than today's best
+loss-based congestion control and queueing delays can be 25x lower.
+
+In order for BBR to work reliably for Pods, it requires a 5.18 or higher kernel.
+As outlined in our `Linux Plumbers 2021 talk <https://lpc.events/event/11/contributions/953/>`_,
+this is needed since older kernels do not retain timestamps of network packets
+when switching from Pod to host network namespace. Due to the latter, the kernel's
+pacing infrastructure does not function properly in general (not specific to Cilium).
+We helped fixing this issue for recent kernels to retain timestamps and therefore to
+get BBR for Pods working.
+
+BBR also needs eBPF Host-Routing in order to retain the network packet's socket
+association all the way until the packet hits the FQ queueing discipline on the
+physical device in the host namespace.
+
+**Requirements:**
+
+* Kernel >= 5.18
+* Bandwidth Manager
+* eBPF Host-Routing
+
+To enable the Bandwidth Manager with BBR for Pods:
+
+.. tabs::
+
+    .. group-tab:: Helm
+
+       .. parsed-literal::
+
+           helm install cilium |CHART_RELEASE| \\
+             --namespace kube-system \\
+             --set bandwidthManager.enabled=true \\
+             --set bandwidthManager.bbr=true \\
+             --set kubeProxyReplacement=strict
+
+To validate whether your installation is running with BBR for Pods,
+run ``cilium status`` in any of the Cilium pods and look for the line
+reporting the status for "BandwidthManager" which should then state
+``EDT with BPF`` as well as ``[BBR]``.
 
 XDP Acceleration
 ================
@@ -257,6 +360,6 @@ queues can potentially vary in setup between different drivers.
 
 We generally also recommend to check various documentation and performance tuning
 guides from NIC vendors on this matter such as from
-`Mellanox <https://community.mellanox.com/s/article/performance-tuning-for-mellanox-adapters>`_,
+`Mellanox <https://enterprise-support.nvidia.com/s/article/performance-tuning-for-mellanox-adapters>`_,
 `Intel <https://www.intel.com/content/www/us/en/support/articles/000005811/network-and-i-o/ethernet-products.html>`_
 or others for more information.

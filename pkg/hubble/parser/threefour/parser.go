@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package threefour
 
@@ -7,25 +7,23 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"net"
-	"sort"
+	"net/netip"
 	"strings"
-
-	pb "github.com/cilium/cilium/api/v1/flow"
-	"github.com/cilium/cilium/pkg/byteorder"
-	"github.com/cilium/cilium/pkg/datapath/link"
-	"github.com/cilium/cilium/pkg/hubble/parser/errors"
-	"github.com/cilium/cilium/pkg/hubble/parser/getters"
-	"github.com/cilium/cilium/pkg/identity"
-	"github.com/cilium/cilium/pkg/lock"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-	"github.com/cilium/cilium/pkg/monitor"
-	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	pb "github.com/cilium/cilium/api/v1/flow"
+	"github.com/cilium/cilium/pkg/byteorder"
+	"github.com/cilium/cilium/pkg/hubble/parser/common"
+	"github.com/cilium/cilium/pkg/hubble/parser/errors"
+	"github.com/cilium/cilium/pkg/hubble/parser/getters"
+	ippkg "github.com/cilium/cilium/pkg/ip"
+	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/cilium/pkg/monitor"
+	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 )
 
 // Parser is a parser for L3/L4 payloads
@@ -36,6 +34,9 @@ type Parser struct {
 	dnsGetter      getters.DNSGetter
 	ipGetter       getters.IPGetter
 	serviceGetter  getters.ServiceGetter
+	linkGetter     getters.LinkGetter
+
+	epResolver *common.EndpointResolver
 
 	// TODO: consider using a pool of these
 	packet *packet
@@ -53,6 +54,7 @@ type packet struct {
 	layers.ICMPv6
 	layers.TCP
 	layers.UDP
+	layers.SCTP
 }
 
 // New returns a new L3/L4 parser
@@ -63,12 +65,14 @@ func New(
 	dnsGetter getters.DNSGetter,
 	ipGetter getters.IPGetter,
 	serviceGetter getters.ServiceGetter,
+	linkGetter getters.LinkGetter,
 ) (*Parser, error) {
 	packet := &packet{}
 	packet.decLayer = gopacket.NewDecodingLayerParser(
 		layers.LayerTypeEthernet, &packet.Ethernet,
 		&packet.IPv4, &packet.IPv6,
-		&packet.ICMPv4, &packet.ICMPv6, &packet.TCP, &packet.UDP)
+		&packet.ICMPv4, &packet.ICMPv6,
+		&packet.TCP, &packet.UDP, &packet.SCTP)
 	// Let packet.decLayer.DecodeLayers return a nil error when it
 	// encounters a layer it doesn't have a parser for, instead of returning
 	// an UnsupportedLayerType error.
@@ -81,6 +85,8 @@ func New(
 		identityGetter: identityGetter,
 		ipGetter:       ipGetter,
 		serviceGetter:  serviceGetter,
+		linkGetter:     linkGetter,
+		epResolver:     common.NewEndpointResolver(log, endpointGetter, identityGetter, ipGetter),
 		packet:         packet,
 	}, nil
 }
@@ -164,7 +170,8 @@ func (p *Parser) Decode(data []byte, decoded *pb.Flow) error {
 	ether, ip, l4, srcIP, dstIP, srcPort, dstPort, summary := decodeLayers(p.packet)
 	if tn != nil {
 		if !tn.OriginalIP().IsUnspecified() {
-			srcIP = tn.OriginalIP()
+			// Ignore invalid IP - getters will handle invalid value.
+			srcIP, _ = ippkg.AddrFromIP(tn.OriginalIP())
 			if ip != nil {
 				ip.Source = srcIP.String()
 			}
@@ -176,8 +183,8 @@ func (p *Parser) Decode(data []byte, decoded *pb.Flow) error {
 	}
 
 	srcLabelID, dstLabelID := decodeSecurityIdentities(dn, tn, pvn)
-	srcEndpoint := p.resolveEndpoint(srcIP, srcLabelID)
-	dstEndpoint := p.resolveEndpoint(dstIP, dstLabelID)
+	srcEndpoint := p.epResolver.ResolveEndpoint(srcIP, srcLabelID)
+	dstEndpoint := p.epResolver.ResolveEndpoint(dstIP, dstLabelID)
 	var sourceService, destinationService *pb.Service
 	if p.serviceGetter != nil {
 		sourceService = p.serviceGetter.GetServiceByAddr(srcIP, srcPort)
@@ -204,14 +211,14 @@ func (p *Parser) Decode(data []byte, decoded *pb.Flow) error {
 	decoded.DestinationService = destinationService
 	decoded.PolicyMatchType = decodePolicyMatchType(pvn)
 	decoded.DebugCapturePoint = decodeDebugCapturePoint(dbg)
-	decoded.Interface = decodeNetworkInterface(tn, dbg)
-	decoded.ProxyPort = decodeProxyPort(dbg)
+	decoded.Interface = p.decodeNetworkInterface(tn, dbg)
+	decoded.ProxyPort = decodeProxyPort(dbg, tn)
 	decoded.Summary = summary
 
 	return nil
 }
 
-func (p *Parser) resolveNames(epID uint32, ip net.IP) (names []string) {
+func (p *Parser) resolveNames(epID uint32, ip netip.Addr) (names []string) {
 	if p.dnsGetter != nil {
 		return p.dnsGetter.GetNamesOf(epID, ip)
 	}
@@ -219,139 +226,11 @@ func (p *Parser) resolveNames(epID uint32, ip net.IP) (names []string) {
 	return nil
 }
 
-func filterCIDRLabels(log logrus.FieldLogger, labels []string) []string {
-	// Cilium might return a bunch of cidr labels with different prefix length. Filter out all
-	// but the longest prefix cidr label, which can be useful for troubleshooting. This also
-	// relies on the fact that when a Cilium security identity has multiple CIDR labels, longer
-	// prefix is always a subset of shorter prefix.
-	cidrPrefix := "cidr:"
-	var filteredLabels []string
-	var max *net.IPNet
-	var maxStr string
-	for _, label := range labels {
-		if strings.HasPrefix(label, cidrPrefix) {
-			currLabel := strings.TrimPrefix(label, cidrPrefix)
-			// labels for IPv6 addresses are represented with - instead of : as
-			// : cannot be used in labels; make sure to convert it to a valid
-			// IPv6 representation
-			currLabel = strings.Replace(currLabel, "-", ":", -1)
-			_, curr, err := net.ParseCIDR(currLabel)
-			if err != nil {
-				log.WithField("label", label).Warn("got an invalid cidr label")
-				continue
-			}
-			if max == nil {
-				max = curr
-				maxStr = label
-			}
-			currMask, _ := curr.Mask.Size()
-			maxMask, _ := max.Mask.Size()
-			if currMask > maxMask {
-				max = curr
-				maxStr = label
-			}
-		} else {
-			filteredLabels = append(filteredLabels, label)
-		}
-	}
-	if max != nil {
-		filteredLabels = append(filteredLabels, maxStr)
-	}
-	return filteredLabels
-}
-
-func sortAndFilterLabels(log logrus.FieldLogger, labels []string, securityIdentity uint32) []string {
-	if securityIdentity&uint32(identity.LocalIdentityFlag) != 0 {
-		labels = filterCIDRLabels(log, labels)
-	}
-	sort.Strings(labels)
-	return labels
-}
-
-func (p *Parser) resolveEndpoint(ip net.IP, datapathSecurityIdentity uint32) *pb.Endpoint {
-	// The datapathSecurityIdentity parameter is the numeric security identity
-	// obtained from the datapath.
-	// The numeric identity from the datapath can differ from the one we obtain
-	// from user-space (e.g. the endpoint manager or the IP cache), because
-	// the identity could have changed between the time the datapath event was
-	// created and the time the event reaches the Hubble parser.
-	// To aid in troubleshooting, we want to preserve what the datapath observed
-	// when it made the policy decision.
-	resolveIdentityConflict := func(identity identity.NumericIdentity) uint32 {
-		// if the datapath did not provide an identity (e.g. FROM_LXC trace
-		// points), use what we have in the user-space cache
-		userspaceSecurityIdentity := uint32(identity)
-		if datapathSecurityIdentity == 0 {
-			return userspaceSecurityIdentity
-		}
-
-		if datapathSecurityIdentity != userspaceSecurityIdentity {
-			p.log.WithFields(logrus.Fields{
-				logfields.Identity:    datapathSecurityIdentity,
-				logfields.OldIdentity: userspaceSecurityIdentity,
-				logfields.IPAddr:      ip,
-			}).Debugf("stale identity observed")
-		}
-
-		return datapathSecurityIdentity
-	}
-
-	// for local endpoints, use the available endpoint information
-	if p.endpointGetter != nil {
-		if ep, ok := p.endpointGetter.GetEndpointInfo(ip); ok {
-			epIdentity := resolveIdentityConflict(ep.GetIdentity())
-			e := &pb.Endpoint{
-				ID:        uint32(ep.GetID()),
-				Identity:  epIdentity,
-				Namespace: ep.GetK8sNamespace(),
-				Labels:    sortAndFilterLabels(p.log, ep.GetLabels(), epIdentity),
-				PodName:   ep.GetK8sPodName(),
-			}
-			if pod := ep.GetPod(); pod != nil {
-				olen := len(pod.GetOwnerReferences())
-				e.Workloads = make([]*pb.Workload, olen)
-				for index, owner := range pod.GetOwnerReferences() {
-					e.Workloads[index] = &pb.Workload{Kind: owner.Kind, Name: owner.Name}
-				}
-			}
-			return e
-		}
-	}
-
-	// for remote endpoints, assemble the information via ip and identity
-	numericIdentity := datapathSecurityIdentity
-	var namespace, podName string
-	if p.ipGetter != nil {
-		if ipIdentity, ok := p.ipGetter.LookupSecIDByIP(ip); ok {
-			numericIdentity = resolveIdentityConflict(ipIdentity.ID)
-		}
-		if meta := p.ipGetter.GetK8sMetadata(ip); meta != nil {
-			namespace, podName = meta.Namespace, meta.PodName
-		}
-	}
-	var labels []string
-	if p.identityGetter != nil {
-		if id, err := p.identityGetter.GetIdentity(numericIdentity); err != nil {
-			p.log.WithError(err).WithField("identity", numericIdentity).
-				Debug("failed to resolve identity")
-		} else {
-			labels = sortAndFilterLabels(p.log, id.Labels, numericIdentity)
-		}
-	}
-
-	return &pb.Endpoint{
-		Identity:  numericIdentity,
-		Namespace: namespace,
-		Labels:    labels,
-		PodName:   podName,
-	}
-}
-
 func decodeLayers(packet *packet) (
 	ethernet *pb.Ethernet,
 	ip *pb.IP,
 	l4 *pb.Layer4,
-	sourceIP, destinationIP net.IP,
+	sourceIP, destinationIP netip.Addr,
 	sourcePort, destinationPort uint16,
 	summary string) {
 	for _, typ := range packet.Layers {
@@ -368,6 +247,8 @@ func decodeLayers(packet *packet) (
 			summary = "TCP Flags: " + getTCPFlags(packet.TCP)
 		case layers.LayerTypeUDP:
 			l4, sourcePort, destinationPort = decodeUDP(&packet.UDP)
+		case layers.LayerTypeSCTP:
+			l4, sourcePort, destinationPort = decodeSCTP(&packet.SCTP)
 		case layers.LayerTypeICMPv4:
 			l4 = decodeICMPv4(&packet.ICMPv4)
 			summary = "ICMPv4 " + packet.ICMPv4.TypeCode.String()
@@ -427,20 +308,28 @@ func decodeEthernet(ethernet *layers.Ethernet) *pb.Ethernet {
 	}
 }
 
-func decodeIPv4(ipv4 *layers.IPv4) (ip *pb.IP, src, dst net.IP) {
+func decodeIPv4(ipv4 *layers.IPv4) (ip *pb.IP, src, dst netip.Addr) {
+	// Ignore invalid IPs - getters will handle invalid values.
+	// IPs can be empty for Ethernet-only packets.
+	src, _ = ippkg.AddrFromIP(ipv4.SrcIP)
+	dst, _ = ippkg.AddrFromIP(ipv4.DstIP)
 	return &pb.IP{
 		Source:      ipv4.SrcIP.String(),
 		Destination: ipv4.DstIP.String(),
 		IpVersion:   pb.IPVersion_IPv4,
-	}, ipv4.SrcIP, ipv4.DstIP
+	}, src, dst
 }
 
-func decodeIPv6(ipv6 *layers.IPv6) (ip *pb.IP, src, dst net.IP) {
+func decodeIPv6(ipv6 *layers.IPv6) (ip *pb.IP, src, dst netip.Addr) {
+	// Ignore invalid IPs - getters will handle invalid values.
+	// IPs can be empty for Ethernet-only packets.
+	src, _ = ippkg.AddrFromIP(ipv6.SrcIP)
+	dst, _ = ippkg.AddrFromIP(ipv6.DstIP)
 	return &pb.IP{
 		Source:      ipv6.SrcIP.String(),
 		Destination: ipv6.DstIP.String(),
 		IpVersion:   pb.IPVersion_IPv6,
-	}, ipv6.SrcIP, ipv6.DstIP
+	}, src, dst
 }
 
 func decodeTCP(tcp *layers.TCP) (l4 *pb.Layer4, src, dst uint16) {
@@ -457,6 +346,17 @@ func decodeTCP(tcp *layers.TCP) (l4 *pb.Layer4, src, dst uint16) {
 			},
 		},
 	}, uint16(tcp.SrcPort), uint16(tcp.DstPort)
+}
+
+func decodeSCTP(sctp *layers.SCTP) (l4 *pb.Layer4, src, dst uint16) {
+	return &pb.Layer4{
+		Protocol: &pb.Layer4_SCTP{
+			SCTP: &pb.SCTP{
+				SourcePort:      uint32(sctp.SrcPort),
+				DestinationPort: uint32(sctp.DstPort),
+			},
+		},
+	}, uint16(sctp.SrcPort), uint16(sctp.DstPort)
 }
 
 func decodeUDP(udp *layers.UDP) (l4 *pb.Layer4, src, dst uint16) {
@@ -488,14 +388,16 @@ func decodeICMPv6(icmp *layers.ICMPv6) *pb.Layer4 {
 	}
 }
 
+func isReply(reason uint8) bool {
+	return reason & ^monitor.TraceReasonEncryptMask == monitor.TraceReasonCtReply
+}
+
 func decodeIsReply(tn *monitor.TraceNotify, pvn *monitor.PolicyVerdictNotify) *wrapperspb.BoolValue {
 	switch {
-	case tn != nil && monitorAPI.TraceObservationPointHasConnState(tn.ObsPoint):
-		// Unfortunately, not all trace points have the connection
-		// tracking state available. For certain trace point
-		// events, we do not know if it actually was a reply or not.
+	case tn != nil && monitor.TraceReasonIsKnown(tn.Reason):
+		// Reason was specified by the datapath, just reuse it.
 		return &wrapperspb.BoolValue{
-			Value: tn.Reason & ^monitor.TraceReasonEncryptMask == monitor.TraceReasonCtReply,
+			Value: isReply(tn.Reason),
 		}
 	case pvn != nil && pvn.Verdict >= 0:
 		// Forwarded PolicyVerdictEvents are emitted for the first packet of
@@ -553,8 +455,8 @@ func decodeTrafficDirection(srcEP uint32, dn *monitor.DropNotify, tn *monitor.Tr
 		// ongoing connection. Therefore, we want to access the connection
 		// tracking result from the `Reason` field to invert the direction for
 		// reply packets. The datapath currently populates the `Reason` field
-		// with CT information for some observation points
-		if monitorAPI.TraceObservationPointHasConnState(tn.ObsPoint) {
+		// with CT information for some observation points.
+		if monitor.TraceReasonIsKnown(tn.Reason) {
 			// true if the traffic source is the local endpoint, i.e. egress
 			isSourceEP := tn.Source == uint16(srcEP)
 			// true if the packet is a reply, i.e. reverse direction
@@ -640,7 +542,7 @@ func decodeDebugCapturePoint(dbg *monitor.DebugCapture) pb.DebugCapturePoint {
 	return pb.DebugCapturePoint(dbg.SubType)
 }
 
-func decodeNetworkInterface(tn *monitor.TraceNotify, dbg *monitor.DebugCapture) *pb.NetworkInterface {
+func (p *Parser) decodeNetworkInterface(tn *monitor.TraceNotify, dbg *monitor.DebugCapture) *pb.NetworkInterface {
 	ifIndex := uint32(0)
 	if tn != nil {
 		ifIndex = tn.Ifindex
@@ -660,17 +562,22 @@ func decodeNetworkInterface(tn *monitor.TraceNotify, dbg *monitor.DebugCapture) 
 		return nil
 	}
 
-	// if the interface is not found, `name` will be an empty string and thus
-	// omitted in the protobuf message
-	name, _ := link.GetIfNameCached(int(ifIndex))
+	var name string
+	if p.linkGetter != nil {
+		// if the interface is not found, `name` will be an empty string and thus
+		// omitted in the protobuf message
+		name, _ = p.linkGetter.GetIfNameCached(int(ifIndex))
+	}
 	return &pb.NetworkInterface{
 		Index: ifIndex,
 		Name:  name,
 	}
 }
 
-func decodeProxyPort(dbg *monitor.DebugCapture) uint32 {
-	if dbg != nil {
+func decodeProxyPort(dbg *monitor.DebugCapture, tn *monitor.TraceNotify) uint32 {
+	if tn != nil && tn.ObsPoint == monitorAPI.TraceToProxy {
+		return uint32(tn.DstID)
+	} else if dbg != nil {
 		switch dbg.SubType {
 		case monitor.DbgCaptureProxyPre,
 			monitor.DbgCaptureProxyPost:

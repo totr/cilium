@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/defaults"
-
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -41,7 +41,7 @@ var (
 
 func init() {
 	bpfTemplateCmd.AddCommand(bpfTemplateListCmd)
-	command.AddJSONOutput(bpfTemplateListCmd)
+	command.AddOutputOption(bpfTemplateListCmd)
 }
 
 func isEndpointID(name string) bool {
@@ -97,9 +97,9 @@ func dumpShaList() {
 		}
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(bpfTemplateList); err != nil {
-			Fatalf("error getting output of map in JSON: %s\n", err)
+			Fatalf("error getting output of map in %s: %s\n", command.OutputOptionString(), err)
 		}
 		return
 	}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
-//
+// Copyright Authors of Cilium
+
 // Based on code from github.com/miekg/dns which is:
 //
 // Copyright 2009 The Go Authors. All rights reserved.

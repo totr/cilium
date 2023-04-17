@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Hubble
 
 package flow
 
@@ -10,13 +7,13 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/cilium/cilium/api/v1/flow"
-	"github.com/cilium/cilium/pkg/hubble/metrics/api"
-	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	pb "github.com/cilium/cilium/api/v1/flow"
+	"github.com/cilium/cilium/pkg/hubble/metrics/api"
+	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 )
 
 func TestFlowHandler(t *testing.T) {
@@ -131,4 +128,5 @@ func TestFlowHandler(t *testing.T) {
 		assert.Equal(t, "verdict", *metric.Label[5].Name)
 		assert.Equal(t, "DROPPED", *metric.Label[5].Value)
 	})
+
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package peer
 
@@ -8,11 +8,11 @@ import (
 	"errors"
 	"io"
 
+	"golang.org/x/sync/errgroup"
+
 	peerpb "github.com/cilium/cilium/api/v1/peer"
 	"github.com/cilium/cilium/pkg/hubble/peer/serviceoption"
 	"github.com/cilium/cilium/pkg/node/manager"
-
-	"golang.org/x/sync/errgroup"
 )
 
 // ErrStreamSendBlocked is returned by Notify when the send operation is
@@ -53,7 +53,7 @@ func (s *Service) Notify(_ *peerpb.NotifyRequest, stream peerpb.Peer_NotifyServe
 	g, ctx := errgroup.WithContext(ctx)
 
 	// monitor for global stop signal to tear down all routines
-	h := newHandler(s.opts.WithoutTLSInfo)
+	h := newHandler(s.opts.WithoutTLSInfo, s.opts.AddressFamilyPreference)
 	g.Go(func() error {
 		defer h.Close()
 		select {

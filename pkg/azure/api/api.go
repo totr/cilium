@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package api
 
@@ -7,8 +7,17 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-03-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2020-11-01/network"
+	"github.com/Azure/go-autorest/autorest"
+	"github.com/Azure/go-autorest/autorest/adal"
+	"github.com/Azure/go-autorest/autorest/azure"
+	"github.com/Azure/go-autorest/autorest/azure/auth"
+	"github.com/Azure/go-autorest/autorest/to"
 
 	"github.com/cilium/cilium/pkg/api/helpers"
 	"github.com/cilium/cilium/pkg/azure/types"
@@ -19,14 +28,6 @@ import (
 	"github.com/cilium/cilium/pkg/rand"
 	"github.com/cilium/cilium/pkg/spanstat"
 	"github.com/cilium/cilium/pkg/version"
-
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-03-01/compute"
-	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2020-11-01/network"
-	"github.com/Azure/go-autorest/autorest"
-	"github.com/Azure/go-autorest/autorest/adal"
-	"github.com/Azure/go-autorest/autorest/azure"
-	"github.com/Azure/go-autorest/autorest/azure/auth"
-	"github.com/Azure/go-autorest/autorest/to"
 )
 
 var (
@@ -41,7 +42,7 @@ type Client struct {
 	virtualnetworks network.VirtualNetworksClient
 	vmss            compute.VirtualMachineScaleSetVMsClient
 	vmscalesets     compute.VirtualMachineScaleSetsClient
-	limiter         *helpers.ApiLimiter
+	limiter         *helpers.APILimiter
 	metricsAPI      MetricsAPI
 	usePrimary      bool
 }
@@ -86,7 +87,7 @@ func NewClient(cloudName, subscriptionID, resourceGroup, userAssignedIdentityID 
 		vmss:            compute.NewVirtualMachineScaleSetVMsClientWithBaseURI(azureEnv.ResourceManagerEndpoint, subscriptionID),
 		vmscalesets:     compute.NewVirtualMachineScaleSetsClientWithBaseURI(azureEnv.ResourceManagerEndpoint, subscriptionID),
 		metricsAPI:      metrics,
-		limiter:         helpers.NewApiLimiter(metrics, rateLimit, burst),
+		limiter:         helpers.NewAPILimiter(metrics, rateLimit, burst),
 		usePrimary:      usePrimary,
 	}
 
@@ -189,6 +190,10 @@ func (c *Client) vmssNetworkInterfaces(ctx context.Context) ([]network.Interface
 		result2, err2 := c.interfaces.ListVirtualMachineScaleSetNetworkInterfacesComplete(ctx, c.resourceGroup, *scaleset.Name)
 		c.metricsAPI.ObserveAPICall("Interfaces.ListVirtualMachineScaleSetNetworkInterfacesComplete", deriveStatus(err2), sinceStart.Seconds())
 		if err2 != nil {
+			// For scale set created by AKS node group (otherwise it will return an empty list) without any instances API will return not found. Then it can be skipped.
+			if v, ok := err2.(autorest.DetailedError); ok && v.StatusCode == http.StatusNotFound {
+				continue
+			}
 			return nil, err2
 		}
 
@@ -377,6 +382,7 @@ func generateIpConfigName() string {
 func (c *Client) AssignPrivateIpAddressesVMSS(ctx context.Context, instanceID, vmssName, subnetID, interfaceName string, addresses int) error {
 	var netIfConfig *compute.VirtualMachineScaleSetNetworkConfiguration
 
+	c.limiter.Limit(ctx, "VirtualMachineScaleSetVMs.Get")
 	result, err := c.vmss.Get(ctx, c.resourceGroup, vmssName, instanceID, compute.InstanceViewTypesInstanceView)
 	if err != nil {
 		return fmt.Errorf("failed to get VM %s from VMSS %s: %s", instanceID, vmssName, err)
@@ -421,6 +427,17 @@ func (c *Client) AssignPrivateIpAddressesVMSS(ctx context.Context, instanceID, v
 	ipConfigurations = append(*netIfConfig.IPConfigurations, ipConfigurations...)
 	netIfConfig.IPConfigurations = &ipConfigurations
 
+	// Unset imageReference, because if this contains a reference to an image from the
+	// Azure Compute Gallery, including this reference in an update to the VMSS instance
+	// will cause a permissions error, because the reference includes an Azure-managed
+	// subscription ID.
+	// Removing the image reference indicates to the API that we don't want to change it.
+	// See https://github.com/Azure/AKS/issues/1819.
+	if result.StorageProfile != nil {
+		result.StorageProfile.ImageReference = nil
+	}
+
+	c.limiter.Limit(ctx, "VirtualMachineScaleSetVMs.Update")
 	future, err := c.vmss.Update(ctx, c.resourceGroup, vmssName, instanceID, result)
 	if err != nil {
 		return fmt.Errorf("unable to update virtualmachinescaleset: %s", err)
@@ -435,6 +452,7 @@ func (c *Client) AssignPrivateIpAddressesVMSS(ctx context.Context, instanceID, v
 
 // AssignPrivateIpAddressesVM assign a private IP to an interface attached to a standalone instance
 func (c *Client) AssignPrivateIpAddressesVM(ctx context.Context, subnetID, interfaceName string, addresses int) error {
+	c.limiter.Limit(ctx, "Interfaces.Get")
 	iface, err := c.interfaces.Get(ctx, c.resourceGroup, interfaceName, "")
 	if err != nil {
 		return fmt.Errorf("failed to get standalone instance's interface %s: %s", interfaceName, err)
@@ -465,6 +483,7 @@ func (c *Client) AssignPrivateIpAddressesVM(ctx context.Context, subnetID, inter
 	ipConfigurations = append(*iface.IPConfigurations, ipConfigurations...)
 	iface.IPConfigurations = &ipConfigurations
 
+	c.limiter.Limit(ctx, "Interfaces.CreateOrUpdate")
 	future, err := c.interfaces.CreateOrUpdate(ctx, c.resourceGroup, interfaceName, iface)
 	if err != nil {
 		return fmt.Errorf("unable to update interface %s: %s", interfaceName, err)

@@ -1,26 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package loader
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/fsnotify/fsnotify"
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/controller"
-	"github.com/cilium/cilium/pkg/datapath"
 	"github.com/cilium/cilium/pkg/datapath/loader/metrics"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/serializer"
-
-	"github.com/fsnotify/fsnotify"
-	"github.com/sirupsen/logrus"
 )
 
 const templateWatcherQueueSize = 10
@@ -31,7 +32,9 @@ var ignoredELFPrefixes = []string{
 	"IPV6_NODEPORT",              // Global
 	"ROUTER_IP",                  // Global
 	"SNAT_IPV6_EXTERNAL",         // Global
+	"cilium_auth_map",            // Global
 	"cilium_call_policy",         // Global
+	"cilium_egresscall_policy",   // Global
 	"cilium_capture",             // Global
 	"cilium_ct",                  // All CT maps, including local
 	"cilium_encrypt_state",       // Global
@@ -42,15 +45,27 @@ var ignoredELFPrefixes = []string{
 	"cilium_lxc",                 // Global
 	"cilium_metrics",             // Global
 	"cilium_nodeport_neigh",      // All nodeport neigh maps
+	"cilium_node_map",            // Global
 	"cilium_policy",              // All policy maps
 	"cilium_proxy",               // Global
+	"cilium_runtime_config",      // Global
 	"cilium_signals",             // Global
 	"cilium_snat",                // All SNAT maps
+	"cilium_tail_call_buffer",    // Global
 	"cilium_tunnel",              // Global
 	"cilium_ipv4_frag_datagrams", // Global
 	"cilium_ipmasq",              // Global
 	"cilium_throttle",            // Global
 	"cilium_egress_gw_policy_v4", // Global
+	"cilium_srv6_policy_v4",      // Global
+	"cilium_srv6_policy_v6",      // Global
+	"cilium_srv6_vrf_v4",         // Global
+	"cilium_srv6_vrf_v6",         // Global
+	"cilium_srv6_state_v4",       // Global
+	"cilium_srv6_state_v6",       // Global
+	"cilium_srv6_sid",            // Global
+	"cilium_vtep_map",            // Global
+	"cilium_per_cluster_ct",      // Global
 	"from-container",             // Prog name
 	"to-container",               // Prog name
 	"from-netdev",                // Prog name
@@ -155,7 +170,7 @@ func (o *objectCache) serialize(hash string) (fq *serializer.FunctionQueue, foun
 
 	fq, compiled := o.compileQueue[hash]
 	if !compiled {
-		fq = serializer.NewFunctionQueue(1)
+		fq = serializer.NewFunctionQueue()
 		o.compileQueue[hash] = fq
 	}
 	return fq, compiled
@@ -222,7 +237,7 @@ func (o *objectCache) build(ctx context.Context, cfg *templateCfg, hash string) 
 			Err:  err,
 		}
 	}
-
+	defer f.Close()
 	if err = o.ConfigWriter.WriteEndpointConfig(f, cfg); err != nil {
 		return &os.PathError{
 			Op:   "failed to write template header",
@@ -278,32 +293,36 @@ func (o *objectCache) fetchOrCompile(ctx context.Context, cfg datapath.EndpointC
 	scopedLog := log.WithField(logfields.BPFHeaderfileHash, hash)
 
 	// Serializes attempts to compile this cfg.
+	// TODO(tb): replace with sync.Once.
 	fq, compiled := o.serialize(hash)
 	if !compiled {
 		fq.Enqueue(func() error {
-			defer fq.Stop()
 			templateCfg := wrap(cfg, stats)
-			err := o.build(ctx, templateCfg, hash)
-			if err != nil {
-				scopedLog.WithError(err).Error("BPF template object creation failed")
+			if err := o.build(ctx, templateCfg, hash); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					scopedLog.WithError(err).Error("BPF template object creation failed")
+				}
+
 				o.Lock()
 				delete(o.compileQueue, hash)
 				o.Unlock()
+
+				return err
 			}
-			return err
-		}, serializer.NoRetry)
+
+			return nil
+		})
 	}
 
 	// Wait until the build completes.
-	if err = fq.Wait(ctx); err != nil {
-		scopedLog.WithError(err).Warning("Error while waiting for BPF template compilation")
-		return "", false, fmt.Errorf("BPF template compilation failed: %s", err)
+	if err := fq.Wait(); err != nil {
+		return "", false, fmt.Errorf("BPF template compilation failed: %w", err)
 	}
 
 	// Fetch the result of the compilation.
 	path, ok := o.lookup(hash)
 	if !ok {
-		err := fmt.Errorf("Could not locate previously compiled BPF template")
+		err := errors.New("Could not locate previously compiled BPF template")
 		scopedLog.WithError(err).Warning("BPF template compilation unsuccessful")
 		return "", false, err
 	}
@@ -339,7 +358,7 @@ func (o *objectCache) watchTemplatesDirectory(ctx context.Context) error {
 			if !open {
 				break
 			}
-			if event.Op&fsnotify.Remove == fsnotify.Remove {
+			if event.Has(fsnotify.Remove) {
 				log.WithField(logfields.Path, event.Name).Debug("Detected template removal")
 				templateHash := filepath.Base(filepath.Dir(event.Name))
 				o.delete(templateHash)

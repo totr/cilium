@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Hubble
+// Copyright Authors of Hubble
 
 package debug
 
@@ -8,21 +8,22 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	"github.com/cilium/cilium/pkg/byteorder"
 	"github.com/cilium/cilium/pkg/hubble/parser/errors"
 	"github.com/cilium/cilium/pkg/hubble/parser/getters"
 	"github.com/cilium/cilium/pkg/monitor"
 	"github.com/cilium/cilium/pkg/monitor/api"
-
-	"github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // Parser is a parser for debug payloads
 type Parser struct {
 	log            logrus.FieldLogger
 	endpointGetter getters.EndpointGetter
+	linkMonitor    getters.LinkGetter
 }
 
 // New creates a new parser
@@ -58,7 +59,7 @@ func (p *Parser) Decode(data []byte, cpu int) (*flowpb.DebugEvent, error) {
 		Arg2:    wrapperspb.UInt32(dbg.Arg2),
 		Arg3:    wrapperspb.UInt32(dbg.Arg3),
 		Cpu:     wrapperspb.Int32(int32(cpu)),
-		Message: dbg.Message(),
+		Message: dbg.Message(p.linkMonitor),
 	}
 
 	return decoded, nil

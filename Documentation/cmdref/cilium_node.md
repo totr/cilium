@@ -13,13 +13,13 @@ Manage cluster nodes
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium](../cilium)	 - CLI
-* [cilium node list](../cilium_node_list)	 - List nodes
+* [cilium](cilium.md)	 - CLI
+* [cilium node list](cilium_node_list.md)	 - List nodes
 

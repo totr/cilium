@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package command
 
@@ -39,4 +36,19 @@ func (s *CMDHelpersSuite) TestDumpJSON(c *C) {
 	if err == nil {
 		c.Fatalf("Dumpjson jsonpath no error with invalid path '%s'", err)
 	}
+}
+
+func (s *CMDHelpersSuite) TestDumpYAML(c *C) {
+	type sampleData struct {
+		ID   int
+		Name string
+	}
+
+	tt := sampleData{
+		ID:   1,
+		Name: "test",
+	}
+
+	err := dumpYAML(tt)
+	c.Assert(err, IsNil)
 }

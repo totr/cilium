@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package testidentity
 
 import (
 	"context"
 	"net"
+	"net/netip"
 
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
@@ -26,7 +27,6 @@ type MockIdentityAllocator struct {
 
 	currentID        int // Regular identities
 	localID          int // CIDR identities
-	idRefCount       map[int]int
 	ipToIdentity     map[string]int
 	idToIdentity     map[int]*identity.Identity
 	labelsToIdentity map[string]int // labels are sorted as a key
@@ -45,7 +45,6 @@ func NewMockIdentityAllocator(c cache.IdentityCache) *MockIdentityAllocator {
 		currentID:        1000,
 		localID:          int(identity.LocalIdentityFlag),
 		ipToIdentity:     make(map[string]int),
-		idRefCount:       make(map[int]int),
 		idToIdentity:     make(map[int]*identity.Identity),
 		labelsToIdentity: make(map[string]int),
 	}
@@ -56,11 +55,6 @@ func (f *MockIdentityAllocator) WaitForInitialGlobalIdentities(context.Context) 
 	return nil
 }
 
-// IsLocalIdentityAllocatorInitialized returns true.
-func (f *MockIdentityAllocator) IsLocalIdentityAllocatorInitialized() bool {
-	return true
-}
-
 // GetIdentities returns the identities from the identity cache.
 func (f *MockIdentityAllocator) GetIdentities() cache.IdentitiesModel {
 	result := cache.IdentitiesModel{}
@@ -69,13 +63,21 @@ func (f *MockIdentityAllocator) GetIdentities() cache.IdentitiesModel {
 
 // AllocateIdentity allocates a fake identity. It is meant to generally mock
 // the canonical identity allocator logic.
-func (f *MockIdentityAllocator) AllocateIdentity(_ context.Context, lbls labels.Labels, _ bool) (*identity.Identity, bool, error) {
+func (f *MockIdentityAllocator) AllocateIdentity(_ context.Context, lbls labels.Labels, _ bool, _ identity.NumericIdentity) (*identity.Identity, bool, error) {
 	if reservedIdentity := identity.LookupReservedIdentityByLabels(lbls); reservedIdentity != nil {
 		return reservedIdentity, false, nil
 	}
 
+	requiresGlobal := identity.RequiresGlobalIdentity(lbls)
+
+	if numID, ok := f.labelsToIdentity[lbls.String()]; ok {
+		id := f.idToIdentity[numID]
+		id.ReferenceCount++
+		return id, false, nil
+	}
+
 	var id int
-	if identity.RequiresGlobalIdentity(lbls) {
+	if requiresGlobal {
 		id = f.currentID
 		f.currentID++
 	} else {
@@ -87,11 +89,11 @@ func (f *MockIdentityAllocator) AllocateIdentity(_ context.Context, lbls labels.
 	f.labelsToIdentity[lbls.String()] = id
 
 	realID := &identity.Identity{
-		ID:     identity.NumericIdentity(id),
-		Labels: lbls,
+		ID:             identity.NumericIdentity(id),
+		Labels:         lbls,
+		ReferenceCount: 1,
 	}
 	f.idToIdentity[id] = realID
-	f.idRefCount[id]++
 
 	return realID, true, nil
 }
@@ -99,24 +101,27 @@ func (f *MockIdentityAllocator) AllocateIdentity(_ context.Context, lbls labels.
 // Release releases a fake identity. It is meant to generally mock the
 // canonical identity release logic.
 func (f *MockIdentityAllocator) Release(_ context.Context, id *identity.Identity, _ bool) (released bool, err error) {
-	count, ok := f.idRefCount[int(id.ID)]
+	realID, ok := f.idToIdentity[int(id.ID)]
 	if !ok {
 		return false, nil
 	}
-	if count == 1 {
-		delete(f.idRefCount, int(id.ID))
+	if realID.ReferenceCount == 1 {
+		delete(f.idToIdentity, int(id.ID))
+		delete(f.IdentityCache, id.ID)
+		for key, lblID := range f.labelsToIdentity {
+			if lblID == int(id.ID) {
+				delete(f.labelsToIdentity, key)
+			}
+		}
 	} else {
-		count--
-		f.idRefCount[int(id.ID)] = count
+		realID.ReferenceCount--
 		return false, nil
 	}
-	delete(f.idToIdentity, int(id.ID))
-	delete(f.IdentityCache, id.ID)
 	return true, nil
 }
 
 // ReleaseSlice wraps Release for slices.
-func (f *MockIdentityAllocator) ReleaseSlice(ctx context.Context, _ cache.IdentityAllocatorOwner, identities []*identity.Identity) error {
+func (f *MockIdentityAllocator) ReleaseSlice(ctx context.Context, identities []*identity.Identity) error {
 	for _, id := range identities {
 		if _, err := f.Release(ctx, id, false); err != nil {
 			return err
@@ -144,14 +149,13 @@ func (f *MockIdentityAllocator) LookupIdentityByID(ctx context.Context, id ident
 
 // AllocateCIDRsForIPs allocates CIDR identities for the given IPs. It is meant
 // to generally mock the CIDR identity allocator logic.
-func (f *MockIdentityAllocator) AllocateCIDRsForIPs(IPs []net.IP, _ map[string]*identity.Identity) ([]*identity.Identity, error) {
+func (f *MockIdentityAllocator) AllocateCIDRsForIPs(IPs []net.IP, _ map[netip.Prefix]*identity.Identity) ([]*identity.Identity, error) {
 	result := make([]*identity.Identity, 0, len(IPs))
 	for _, ip := range IPs {
 		id, ok := f.ipToIdentity[ip.String()]
 		if !ok {
 			id = f.localID
 			f.ipToIdentity[ip.String()] = id
-			f.idRefCount[id]++
 			f.localID = id + 1
 		}
 		cidrLabels := append([]string{}, ip.String())

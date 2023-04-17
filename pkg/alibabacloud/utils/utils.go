@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package utils
 
 import (
 	"strconv"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 const eniIndexTagKey = "cilium-eni-index"
@@ -19,7 +19,7 @@ func GetENIIndexFromTags(tags map[string]string) int {
 	}
 	index, err := strconv.Atoi(v)
 	if err != nil {
-		log.WithError(err).Warning("Unable to retrieve index from ENI")
+		logrus.WithError(err).Warning("Unable to retrieve index from ENI")
 	}
 	return index
 }

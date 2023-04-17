@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,13 +11,12 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/resource"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/maps/bwmap"
-
-	"github.com/spf13/cobra"
-
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 var bpfBandwidthListCmd = &cobra.Command{
@@ -27,14 +26,14 @@ var bpfBandwidthListCmd = &cobra.Command{
 		common.RequireRootPrivilege("cilium bpf bandwidth list")
 
 		bpfBandwidthList := make(map[string][]string)
-		if err := bwmap.ThrottleMap.Dump(bpfBandwidthList); err != nil {
+		if err := bwmap.ThrottleMap().Dump(bpfBandwidthList); err != nil {
 			fmt.Fprintf(os.Stderr, "error dumping contents of map: %s\n", err)
 			os.Exit(1)
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(bpfBandwidthList); err != nil {
-				fmt.Fprintf(os.Stderr, "error getting output of map in JSON: %s\n", err)
+				fmt.Fprintf(os.Stderr, "error getting output of map in %s: %s\n", command.OutputOptionString(), err)
 				os.Exit(1)
 			}
 			return
@@ -89,5 +88,5 @@ func listBandwidth(bpfBandwidthList map[string][]string) {
 
 func init() {
 	bpfBandwidthCmd.AddCommand(bpfBandwidthListCmd)
-	command.AddJSONOutput(bpfBandwidthListCmd)
+	command.AddOutputOption(bpfBandwidthListCmd)
 }

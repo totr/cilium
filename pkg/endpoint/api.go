@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 // This file contains functions related to conversion of information about
 // an Endpoint to its corresponding Cilium API representation.
@@ -9,10 +9,11 @@ package endpoint
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net/netip"
 	"sort"
 
 	"github.com/cilium/cilium/api/v1/models"
-	"github.com/cilium/cilium/pkg/addressing"
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
 	"github.com/cilium/cilium/pkg/identity/cache"
 	identitymodel "github.com/cilium/cilium/pkg/identity/model"
@@ -48,13 +49,21 @@ func (e *Endpoint) GetLabelsModel() (*models.LabelConfiguration, error) {
 	return &cfg, nil
 }
 
+func parsePrefixOrAddr(ip string) (netip.Addr, error) {
+	prefix, err := netip.ParsePrefix(ip)
+	if err != nil {
+		return netip.ParseAddr(ip)
+	}
+	return prefix.Addr(), nil
+}
+
 // NewEndpointFromChangeModel creates a new endpoint from a request
-func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, policyGetter policyRepoGetter, proxy EndpointProxy, allocator cache.IdentityAllocator, base *models.EndpointChangeRequest) (*Endpoint, error) {
+func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, policyGetter policyRepoGetter, namedPortsGetter namedPortsGetter, proxy EndpointProxy, allocator cache.IdentityAllocator, base *models.EndpointChangeRequest) (*Endpoint, error) {
 	if base == nil {
 		return nil, nil
 	}
 
-	ep := createEndpoint(owner, policyGetter, proxy, allocator, uint16(base.ID), base.InterfaceName)
+	ep := createEndpoint(owner, policyGetter, namedPortsGetter, proxy, allocator, uint16(base.ID), base.InterfaceName)
 	ep.ifIndex = int(base.InterfaceIndex)
 	ep.containerName = base.ContainerName
 	ep.containerID = base.ContainerID
@@ -62,7 +71,6 @@ func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, p
 	ep.dockerEndpointID = base.DockerEndpointID
 	ep.K8sPodName = base.K8sPodName
 	ep.K8sNamespace = base.K8sNamespace
-	ep.datapathMapID = int(base.DatapathMapID)
 
 	if base.Mac != "" {
 		m, err := mac.ParseMAC(base.Mac)
@@ -82,17 +90,23 @@ func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, p
 
 	if base.Addressing != nil {
 		if ip := base.Addressing.IPV6; ip != "" {
-			ip6, err := addressing.NewCiliumIPv6(ip)
+			ip6, err := parsePrefixOrAddr(ip)
 			if err != nil {
 				return nil, err
+			}
+			if !ip6.Is6() {
+				return nil, fmt.Errorf("invalid IPv6 address %q", ip)
 			}
 			ep.IPv6 = ip6
 		}
 
 		if ip := base.Addressing.IPV4; ip != "" {
-			ip4, err := addressing.NewCiliumIPv4(ip)
+			ip4, err := parsePrefixOrAddr(ip)
 			if err != nil {
 				return nil, err
+			}
+			if !ip4.Is4() {
+				return nil, fmt.Errorf("invalid IPv4 address %q", ip)
 			}
 			ep.IPv4 = ip4
 		}
@@ -109,7 +123,9 @@ func NewEndpointFromChangeModel(ctx context.Context, owner regeneration.Owner, p
 		ep.OpLabels.OrchestrationInfo = infoLabels
 	}
 
-	ep.setState(State(base.State), "Endpoint creation")
+	if base.State != nil {
+		ep.setState(State(*base.State), "Endpoint creation")
+	}
 
 	return ep, nil
 }
@@ -129,8 +145,8 @@ func (e *Endpoint) getModelEndpointIdentitiersRLocked() *models.EndpointIdentifi
 func (e *Endpoint) getModelNetworkingRLocked() *models.EndpointNetworking {
 	return &models.EndpointNetworking{
 		Addressing: []*models.AddressPair{{
-			IPV4: e.IPv4.String(),
-			IPV6: e.IPv6.String(),
+			IPV4: e.GetIPv4Address(),
+			IPV6: e.GetIPv6Address(),
 		}},
 		InterfaceIndex: int64(e.ifIndex),
 		InterfaceName:  e.ifName,
@@ -142,7 +158,7 @@ func (e *Endpoint) getModelNetworkingRLocked() *models.EndpointNetworking {
 func (e *Endpoint) getModelCurrentStateRLocked() models.EndpointState {
 	currentState := models.EndpointState(e.state)
 	if currentState == models.EndpointStateReady && e.status.CurrentStatus() != OK {
-		return models.EndpointStateNotReady
+		return models.EndpointStateNotDashReady
 	}
 	return currentState
 }
@@ -198,7 +214,7 @@ func (e *Endpoint) GetModelRLocked() *models.Endpoint {
 			Policy:      e.GetPolicyModel(),
 			Log:         statusLog,
 			Controllers: controllerMdl,
-			State:       e.getModelCurrentStateRLocked(), // TODO: Validate
+			State:       e.getModelCurrentStateRLocked().Pointer(), // TODO: Validate
 			Health:      e.getHealthModel(),
 			NamedPorts:  e.getNamedPortsModel(),
 		},
@@ -214,7 +230,7 @@ func (e *Endpoint) getHealthModel() *models.EndpointHealth {
 	// Duplicated from GetModelRLocked.
 	currentState := models.EndpointState(e.state)
 	if currentState == models.EndpointStateReady && e.status.CurrentStatus() != OK {
-		currentState = models.EndpointStateNotReady
+		currentState = models.EndpointStateNotDashReady
 	}
 
 	h := models.EndpointHealth{
@@ -224,21 +240,21 @@ func (e *Endpoint) getHealthModel() *models.EndpointHealth {
 		OverallHealth: models.EndpointHealthStatusDisabled,
 	}
 	switch currentState {
-	case models.EndpointStateRegenerating, models.EndpointStateWaitingToRegenerate, models.EndpointStateDisconnecting:
+	case models.EndpointStateRegenerating, models.EndpointStateWaitingDashToDashRegenerate, models.EndpointStateDisconnecting:
 		h = models.EndpointHealth{
 			Bpf:           models.EndpointHealthStatusPending,
 			Policy:        models.EndpointHealthStatusPending,
 			Connected:     true,
 			OverallHealth: models.EndpointHealthStatusPending,
 		}
-	case models.EndpointStateWaitingForIdentity:
+	case models.EndpointStateWaitingDashForDashIdentity:
 		h = models.EndpointHealth{
 			Bpf:           models.EndpointHealthStatusDisabled,
 			Policy:        models.EndpointHealthStatusBootstrap,
 			Connected:     true,
 			OverallHealth: models.EndpointHealthStatusDisabled,
 		}
-	case models.EndpointStateNotReady:
+	case models.EndpointStateNotDashReady:
 		h = models.EndpointHealth{
 			Bpf:           models.EndpointHealthStatusWarning,
 			Policy:        models.EndpointHealthStatusWarning,
@@ -355,12 +371,10 @@ func (e *Endpoint) GetPolicyModel() *models.EndpointPolicyStatus {
 	sortProxyStats(proxyStats)
 
 	var (
-		realizedCIDRPolicy *policy.CIDRPolicy
-		realizedL4Policy   *policy.L4Policy
+		realizedL4Policy *policy.L4Policy
 	)
 	if e.realizedPolicy != nil {
 		realizedL4Policy = e.realizedPolicy.L4Policy
-		realizedCIDRPolicy = e.realizedPolicy.CIDRPolicy
 	}
 
 	mdl := &models.EndpointPolicy{
@@ -372,17 +386,14 @@ func (e *Endpoint) GetPolicyModel() *models.EndpointPolicyStatus {
 		AllowedEgressIdentities:  realizedEgressIdentities,
 		DeniedIngressIdentities:  realizedDenyIngressIdentities,
 		DeniedEgressIdentities:   realizedDenyEgressIdentities,
-		CidrPolicy:               realizedCIDRPolicy.GetModel(),
 		L4:                       realizedL4Policy.GetModel(),
 		PolicyEnabled:            policyEnabled,
 	}
 
 	var (
-		desiredCIDRPolicy *policy.CIDRPolicy
-		desiredL4Policy   *policy.L4Policy
+		desiredL4Policy *policy.L4Policy
 	)
 	if e.desiredPolicy != nil {
-		desiredCIDRPolicy = e.desiredPolicy.CIDRPolicy
 		desiredL4Policy = e.desiredPolicy.L4Policy
 	}
 
@@ -395,7 +406,6 @@ func (e *Endpoint) GetPolicyModel() *models.EndpointPolicyStatus {
 		AllowedEgressIdentities:  desiredEgressIdentities,
 		DeniedIngressIdentities:  desiredDenyIngressIdentities,
 		DeniedEgressIdentities:   desiredDenyEgressIdentities,
-		CidrPolicy:               desiredCIDRPolicy.GetModel(),
 		L4:                       desiredL4Policy.GetModel(),
 		PolicyEnabled:            policyEnabled,
 	}
@@ -426,11 +436,11 @@ func (e *Endpoint) policyStatus() models.EndpointPolicyEnabled {
 	if e.Options.IsEnabled(option.PolicyAuditMode) {
 		switch policyEnabled {
 		case models.EndpointPolicyEnabledIngress:
-			return models.EndpointPolicyEnabledAuditIngress
+			return models.EndpointPolicyEnabledAuditDashIngress
 		case models.EndpointPolicyEnabledEgress:
-			return models.EndpointPolicyEnabledAuditEgress
+			return models.EndpointPolicyEnabledAuditDashEgress
 		case models.EndpointPolicyEnabledBoth:
-			return models.EndpointPolicyEnabledAuditBoth
+			return models.EndpointPolicyEnabledAuditDashBoth
 		}
 	}
 
@@ -487,12 +497,12 @@ func (e *Endpoint) ProcessChangeRequest(newEp *Endpoint, validPatchTransitionSta
 		changed = true
 	}
 
-	if ip := newEp.IPv6; len(ip) != 0 && bytes.Compare(e.IPv6, newEp.IPv6) != 0 {
+	if newEp.IPv6.IsValid() && e.IPv6 != newEp.IPv6 {
 		e.IPv6 = newEp.IPv6
 		changed = true
 	}
 
-	if ip := newEp.IPv4; len(ip) != 0 && bytes.Compare(e.IPv4, newEp.IPv4) != 0 {
+	if newEp.IPv4.IsValid() && e.IPv4 != newEp.IPv4 {
 		e.IPv4 = newEp.IPv4
 		changed = true
 	}
@@ -508,7 +518,7 @@ func (e *Endpoint) ProcessChangeRequest(newEp *Endpoint, validPatchTransitionSta
 	e.replaceInformationLabels(newEp.OpLabels.OrchestrationInfo)
 	rev := e.replaceIdentityLabels(newEp.OpLabels.IdentityLabels())
 	if rev != 0 {
-		// Run as a go routine since the runIdentityResolver needs to get the lock
+		// Run as a goroutine since the runIdentityResolver needs to get the lock
 		go e.runIdentityResolver(e.aliveCtx, rev, false)
 	}
 

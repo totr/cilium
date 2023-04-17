@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package egressmap
 
@@ -14,11 +14,11 @@ var (
 )
 
 // InitEgressMaps initializes the egress policy map.
-func InitEgressMaps() error {
-	return initEgressPolicyMap(PolicyMapName, true)
+func InitEgressMaps(maxPolicyEntries int) error {
+	return initEgressPolicyMap(PolicyMapName, maxPolicyEntries, true)
 }
 
 // OpenEgressMaps initializes the egress policy map.
 func OpenEgressMaps() error {
-	return initEgressPolicyMap(PolicyMapName, false)
+	return initEgressPolicyMap(PolicyMapName, 0, false)
 }

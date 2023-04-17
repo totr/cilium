@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package regeneration
 
 import (
 	"context"
 
-	"github.com/cilium/cilium/pkg/datapath"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/fqdn/restore"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/lock"
@@ -35,6 +35,7 @@ type Owner interface {
 
 	// GetDNSRules creates a fresh copy of DNS rules that can be used when
 	// endpoint is restored on a restart.
+	// The endpoint lock must not be held while calling this function.
 	GetDNSRules(epID uint16) restore.DNSRules
 
 	// RemoveRestoredDNSRules removes any restored DNS rules for
@@ -50,11 +51,9 @@ type EndpointInfoSource interface {
 	GetIPv6Address() string
 	GetIdentity() identity.NumericIdentity
 	GetLabels() []string
-	GetLabelsSHA() string
 	HasSidecarProxy() bool
 	ConntrackName() string
 	ConntrackNameLocked() string
-	GetProxyInfoByFields() (uint64, string, string, []string, string, uint64, error)
 }
 
 // EndpointUpdater returns information about an endpoint being proxied and

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
-	"github.com/cilium/cilium/pkg/common"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/pkg/common"
 )
 
 // bpfPolicyDeleteCmd represents the bpf_policy_delete command

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package portdistribution
 
@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	"github.com/cilium/cilium/pkg/hubble/metrics/api"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type portDistributionHandler struct {
@@ -42,32 +42,51 @@ func (h *portDistributionHandler) Status() string {
 	return h.context.Status()
 }
 
-func (h *portDistributionHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
+func (h *portDistributionHandler) Context() *api.ContextOptions {
+	return h.context
+}
+
+func (h *portDistributionHandler) ListMetricVec() []*prometheus.MetricVec {
+	return []*prometheus.MetricVec{h.portDistribution.MetricVec}
+}
+
+func (h *portDistributionHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) error {
 	// if we are not certain if a flow is a reply (i.e. flow.GetIsReply() == nil)
 	// we do not want to consider its destination port for the metric
 	skipReply := flow.GetIsReply() == nil || flow.GetIsReply().GetValue()
 	if (flow.GetVerdict() != flowpb.Verdict_FORWARDED && flow.GetVerdict() != flowpb.Verdict_REDIRECTED) ||
 		flow.GetL4() == nil || skipReply {
-		return
+		return nil
+	}
+
+	labelValues, err := h.context.GetLabelValues(flow)
+	if err != nil {
+		return err
 	}
 
 	if tcp := flow.GetL4().GetTCP(); tcp != nil {
-		labels := append([]string{"TCP", fmt.Sprintf("%d", tcp.DestinationPort)}, h.context.GetLabelValues(flow)...)
+		labels := append([]string{"TCP", fmt.Sprintf("%d", tcp.DestinationPort)}, labelValues...)
 		h.portDistribution.WithLabelValues(labels...).Inc()
 	}
 
 	if udp := flow.GetL4().GetUDP(); udp != nil {
-		labels := append([]string{"UDP", fmt.Sprintf("%d", udp.DestinationPort)}, h.context.GetLabelValues(flow)...)
+		labels := append([]string{"UDP", fmt.Sprintf("%d", udp.DestinationPort)}, labelValues...)
+		h.portDistribution.WithLabelValues(labels...).Inc()
+	}
+
+	if sctp := flow.GetL4().GetSCTP(); sctp != nil {
+		labels := append([]string{"SCTP", fmt.Sprintf("%d", sctp.DestinationPort)}, labelValues...)
 		h.portDistribution.WithLabelValues(labels...).Inc()
 	}
 
 	if flow.GetL4().GetICMPv4() != nil {
-		labels := append([]string{"ICMPv4", "0"}, h.context.GetLabelValues(flow)...)
+		labels := append([]string{"ICMPv4", "0"}, labelValues...)
 		h.portDistribution.WithLabelValues(labels...).Inc()
 	}
 
 	if flow.GetL4().GetICMPv6() != nil {
-		labels := append([]string{"ICMPv6", "0"}, h.context.GetLabelValues(flow)...)
+		labels := append([]string{"ICMPv6", "0"}, labelValues...)
 		h.portDistribution.WithLabelValues(labels...).Inc()
 	}
+	return nil
 }

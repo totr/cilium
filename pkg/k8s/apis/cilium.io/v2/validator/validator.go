@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package validator
 
@@ -8,17 +8,17 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/client"
-	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-	"github.com/cilium/cilium/pkg/policy/api"
-
 	"github.com/sirupsen/logrus"
 	apiextensionsinternal "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/kube-openapi/pkg/validation/validate"
+
+	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/client"
+	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/policy/api"
 )
 
 // NPValidator is a validator structure used to validate CNP and CCNP.
@@ -107,7 +107,7 @@ func (n *NPValidator) ValidateCNP(cnp *unstructured.Unstructured) error {
 
 var (
 	// We can remove the check for this warning once 1.9 is the oldest supported Cilium version.
-	warnWildcardToFromEndpointMessage = "It seems you have a CiliumClusterwideNetworkPolicy " +
+	errWildcardToFromEndpointMessage = "It seems you have a CiliumClusterwideNetworkPolicy " +
 		"with a wildcard to/from endpoint selector. The behavior of this selector has been " +
 		"changed. The selector now only allows traffic to/from Cilium managed K8s endpoints, " +
 		"instead of acting as a truly empty endpoint selector allowing all traffic. To " +
@@ -159,9 +159,9 @@ func checkWildCardToFromEndpoint(ccnp *unstructured.Unstructured) error {
 	if resCCNP.Spec != nil {
 		if containsWildcardToFromEndpoint(resCCNP.Spec) {
 			logOnce.Do(func() {
-				logger.Warning(warnWildcardToFromEndpointMessage)
+				logger.Error(errWildcardToFromEndpointMessage)
 			})
-			return nil
+			return fmt.Errorf("use of empty toEndpoints/fromEndpoints selector")
 		}
 	}
 
@@ -169,9 +169,9 @@ func checkWildCardToFromEndpoint(ccnp *unstructured.Unstructured) error {
 		for _, rule := range resCCNP.Specs {
 			if containsWildcardToFromEndpoint(rule) {
 				logOnce.Do(func() {
-					logger.Warning(warnWildcardToFromEndpointMessage)
+					logger.Error(errWildcardToFromEndpointMessage)
 				})
-				return nil
+				return fmt.Errorf("use of empty toEndpoints/fromEndpoints selector")
 			}
 		}
 	}

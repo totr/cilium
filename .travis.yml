@@ -3,32 +3,13 @@ language: go
 dist: focal
 sudo: required
 
-go: "1.17.4"
+go: "1.20.1"
 
 jobs:
   include:
-    - arch: amd64
     - arch: arm64-graviton2
       virt: vm
       group: edge
-    - arch: amd64
-      name: "amd64-race"
-      if: type != pull_request
-      env:
-        - RACE=1
-        - BASE_IMAGE=quay.io/cilium/cilium-runtime:e6c79547ddb491d2d92d3a82b2d84d5ca6ca0db5@sha256:415af38f8caeac5cd5fafe5d5b645b42744ee032c7b85c768cd57f28ffe86df9
-        - LOCKDEBUG=1
-
-# Disabled due to a compilation issue: https://github.com/cilium/cilium/issues/13252
-#    - arch: arm64-graviton2
-#      name: "arm64-graviton2-race"
-#      if: type != pull_request
-#      env:
-#        - RACE=1
-#        - BASE_IMAGE=quay.io/cilium/cilium-runtime:e6c79547ddb491d2d92d3a82b2d84d5ca6ca0db5@sha256:415af38f8caeac5cd5fafe5d5b645b42744ee032c7b85c768cd57f28ffe86df9
-#        - LOCKDEBUG=1
-#      virt: vm
-#      group: edge
 
 if: branch = master OR type = pull_request
 
@@ -42,7 +23,9 @@ addons:
 before_install: ./.travis/prepare.sh
 
 before_script:
+  - export DOCKER_BUILD_FLAGS=--quiet
   - export PATH=/usr/local/clang/bin:$PATH
+  - export V=0
 
 script: ./.travis/build.sh
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package client
 
@@ -116,7 +116,6 @@ func (c *Client) EndpointLabelsGet(id string) (*models.LabelConfiguration, error
 // label, then it will be deleted from the orchestration list and
 // added to the disabled list. Otherwise it will be removed from the
 // custom list.
-//
 func (c *Client) EndpointLabelsPatch(id string, toAdd, toDelete models.Labels) error {
 	currentCfg, err := c.EndpointLabelsGet(id)
 	if err != nil {

@@ -1,19 +1,7 @@
-/*
- * Copyright 2018-2019 Authors of Cilium
- * Copyright 2017 Mirantis
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
+
+// Copyright 2017 Mirantis
 
 package ginkgoext
 
@@ -28,11 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cilium/cilium/pkg/lock"
-	ciliumTestConfig "github.com/cilium/cilium/test/config"
-
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/ginkgo/config"
+
+	"github.com/cilium/cilium/pkg/lock"
+	ciliumTestConfig "github.com/cilium/cilium/test/config"
 )
 
 type scope struct {
@@ -229,8 +217,8 @@ func AfterAll(body func()) bool {
 	return true
 }
 
-//JustAfterEach runs the function just after each test, before all AfterEeach,
-//AfterFailed and AfterAll
+// JustAfterEach runs the function just after each test, before all AfterEeach,
+// AfterFailed and AfterAll
 func JustAfterEach(body func()) bool {
 	if currentScope != nil {
 		if body == nil {
@@ -555,12 +543,29 @@ func wrapMeasureFunc(fn func(text string, body interface{}, samples int) bool, f
 // isTestFocused checks the value of FocusString and return true if the given
 // text name is focussed, returns false if the test is not focused.
 func isTestFocused(text string) bool {
-	if len(config.GinkgoConfig.FocusStrings) == 0 {
+	if len(config.GinkgoConfig.FocusStrings) == 0 && len(config.GinkgoConfig.SkipStrings) == 0 {
 		return false
 	}
 
-	focusFilter := regexp.MustCompile(config.GinkgoConfig.FocusStrings[0])
-	return focusFilter.MatchString(text)
+	var focusFilter, skipFilter *regexp.Regexp
+	if len(config.GinkgoConfig.FocusStrings) != 0 {
+		focusFilter = regexp.MustCompile(config.GinkgoConfig.FocusStrings[0])
+	}
+	if len(config.GinkgoConfig.SkipStrings) != 0 {
+		skipFilter = regexp.MustCompile(config.GinkgoConfig.SkipStrings[0])
+	}
+
+	switch {
+	case focusFilter != nil && skipFilter != nil:
+		return focusFilter.MatchString(text) && !skipFilter.MatchString(text)
+	case focusFilter != nil && skipFilter == nil:
+		return focusFilter.MatchString(text)
+	case focusFilter == nil && skipFilter != nil:
+		return !skipFilter.MatchString(text)
+	case focusFilter == nil && skipFilter == nil:
+		return false
+	}
+	return false
 }
 
 func applyAdvice(f interface{}, before, after func()) interface{} {

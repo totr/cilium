@@ -3,7 +3,7 @@
 /// results in low for now, but the compiler should catch any incorrect const
 /// qualifier.
 // Confidence: Low
-// Copyright (C) 2020 Authors of Cilium.
+// Copyright Authors of Cilium.
 // Comments:
 // Options: --include-headers
 
@@ -45,9 +45,7 @@ position p;
       when != WRITE_ONCE(x->z, ...)
       when != WRITE_ONCE(x->z[...], ...)
       when != f(..., x, ...)
-      // Special case for the addr field since it's an array in several
-      // structures.
-      when != f(..., x->addr, ...)
+      when != f(..., x->z, ...)
   }
 )
 
@@ -66,7 +64,9 @@ cnt += 1
 
 if cnt > 0:
   print("""Use the following command to fix the above issues:
-docker run --rm --user 1000 --workdir /workspace -v `pwd`:/workspace                \\
-    -it docker.io/cilium/coccicheck spatch --sp-file contrib/coccinelle/const.cocci \\
-    --include-headers --very-quiet --in-place bpf/\n
+docker run --rm --user 1000 --workdir /workspace -v `pwd`:/workspace \\
+    -e COCCINELLE_HOME=/usr/local/lib/coccinelle \\
+    -it docker.io/cilium/coccicheck:2.4@sha256:24abe3fbb8e829fa41a68a3b76cb4df84fd5a87a7d1d6254c1c1fe5effb5bd1b \\
+    spatch --include-headers --very-quiet --in-place bpf/ \\
+    --sp-file contrib/coccinelle/const.cocci\n
 """)

@@ -1,23 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package groups
 
 import (
 	"context"
 	"fmt"
-	"net"
+	"net/netip"
+
+	. "gopkg.in/check.v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/pkg/checker"
 	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	. "gopkg.in/check.v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 func getSamplePolicy(name, ns string) *cilium_v2.CiliumNetworkPolicy {
@@ -96,8 +93,8 @@ func (s *GroupsTestSuite) TestDerivativePoliciesAreDeletedIfNoToGroups(c *C) {
 }
 
 func (s *GroupsTestSuite) TestDerivativePoliciesAreInheritCorrectly(c *C) {
-	cb := func(ctx context.Context, group *api.ToGroups) ([]net.IP, error) {
-		return []net.IP{net.ParseIP("192.168.1.1")}, nil
+	cb := func(ctx context.Context, group *api.ToGroups) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("192.168.1.1")}, nil
 	}
 
 	egressRule := []api.EgressRule{

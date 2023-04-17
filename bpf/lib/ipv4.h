@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2021 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __LIB_IPV4__
 #define __LIB_IPV4__
@@ -32,6 +32,21 @@ struct {
 } IPV4_FRAG_DATAGRAMS_MAP __section_maps_btf;
 #endif
 
+static __always_inline int
+ipv4_csum_update_by_value(struct __ctx_buff *ctx, int l3_off, __u64 old_val,
+			  __u64 new_val, __u32 len)
+{
+	return l3_csum_replace(ctx, l3_off + offsetof(struct iphdr, check),
+			       old_val, new_val, len);
+}
+
+static __always_inline int
+ipv4_csum_update_by_diff(struct __ctx_buff *ctx, int l3_off, __u64 diff)
+{
+	return l3_csum_replace(ctx, l3_off + offsetof(struct iphdr, check),
+			       0, diff, 0);
+}
+
 static __always_inline int ipv4_load_daddr(struct __ctx_buff *ctx, int off,
 					   __u32 *dst)
 {
@@ -48,7 +63,7 @@ static __always_inline int ipv4_dec_ttl(struct __ctx_buff *ctx, int off,
 
 	new_ttl = ttl - 1;
 	/* l3_csum_replace() takes at min 2 bytes, zero extended. */
-	l3_csum_replace(ctx, off + offsetof(struct iphdr, check), ttl, new_ttl, 2);
+	ipv4_csum_update_by_value(ctx, off, ttl, new_ttl, 2);
 	ctx_store_bytes(ctx, off + offsetof(struct iphdr, ttl), &new_ttl, sizeof(new_ttl), 0);
 
 	return 0;
@@ -109,12 +124,14 @@ ipv4_frag_get_l4ports(const struct ipv4_frag_id *frag_id,
 
 static __always_inline int
 ipv4_handle_fragmentation(struct __ctx_buff *ctx,
-			  const struct iphdr *ip4, int l4_off, int ct_dir,
+			  const struct iphdr *ip4, int l4_off,
+			  enum ct_dir ct_dir,
 			  struct ipv4_frag_l4ports *ports,
 			  bool *has_l4_header)
 {
-	int ret, dir;
 	bool is_fragment, not_first_fragment;
+	enum metric_dir dir;
+	int ret;
 
 	struct ipv4_frag_id frag_id = {
 		.daddr = ip4->daddr,

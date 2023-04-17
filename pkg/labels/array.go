@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package labels
 
@@ -171,7 +171,7 @@ func (ls LabelArray) DeepCopy() LabelArray {
 // GetModel returns the LabelArray as a string array with fully-qualified labels.
 // The output is parseable by ParseLabelArrayFromArray
 func (ls LabelArray) GetModel() []string {
-	res := []string{}
+	res := make([]string, 0, len(ls))
 	for l := range ls {
 		res = append(res, ls[l].String())
 	}
@@ -179,15 +179,16 @@ func (ls LabelArray) GetModel() []string {
 }
 
 func (ls LabelArray) String() string {
-	res := "["
+	var sb strings.Builder
+	sb.WriteString("[")
 	for l := range ls {
 		if l > 0 {
-			res += " "
+			sb.WriteString(" ")
 		}
-		res += ls[l].String()
+		sb.WriteString(ls[l].String())
 	}
-	res += "]"
-	return res
+	sb.WriteString("]")
+	return sb.String()
 }
 
 // StringMap converts LabelArray into map[string]string

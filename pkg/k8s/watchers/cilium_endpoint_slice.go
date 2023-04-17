@@ -1,31 +1,23 @@
-//  Copyright 2021 Authors of Cilium
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package watchers
 
 import (
+	"fmt"
 	"sync"
 
+	"k8s.io/client-go/tools/cache"
+
 	"github.com/cilium/cilium/pkg/k8s"
+	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	cilium_v2a1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	"github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/k8s/informer"
+	"github.com/cilium/cilium/pkg/k8s/utils"
 	"github.com/cilium/cilium/pkg/k8s/watchers/subscriber"
 	"github.com/cilium/cilium/pkg/kvstore"
-
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/client-go/tools/cache"
+	"github.com/cilium/cilium/pkg/node"
 )
 
 var (
@@ -34,7 +26,27 @@ var (
 	cepMap = newCEPToCESMap()
 )
 
-func (k *K8sWatcher) ciliumEndpointSliceInit(client *k8s.K8sCiliumClient, asyncControllers *sync.WaitGroup) {
+// CreateCiliumEndpointSliceLocalPodIndexFunc returns an IndexFunc that indexes CiliumEndpointSlices
+// by their corresponding Pod, which are running locally on this Node.
+func CreateCiliumEndpointSliceLocalPodIndexFunc() cache.IndexFunc {
+	nodeIP := node.GetCiliumEndpointNodeIP()
+	return func(obj interface{}) ([]string, error) {
+		ces, ok := obj.(*v2alpha1.CiliumEndpointSlice)
+		if !ok {
+			return nil, fmt.Errorf("unexpected object type: %T", obj)
+		}
+		indices := []string{}
+		for _, ep := range ces.Endpoints {
+			if ep.Networking.NodeIP == nodeIP {
+				indices = append(indices, ep.Networking.NodeIP)
+				break
+			}
+		}
+		return indices, nil
+	}
+}
+
+func (k *K8sWatcher) ciliumEndpointSliceInit(client client.Clientset, asyncControllers *sync.WaitGroup) {
 	log.Info("Initializing CES controller")
 	var once sync.Once
 
@@ -42,9 +54,9 @@ func (k *K8sWatcher) ciliumEndpointSliceInit(client *k8s.K8sCiliumClient, asyncC
 	cesNotify.Register(newCESSubscriber(k))
 
 	for {
-		_, cesInformer := informer.NewInformer(
-			cache.NewListWatchFromClient(client.CiliumV2alpha1().RESTClient(),
-				cilium_v2a1.CESPluralName, v1.NamespaceAll, fields.Everything()),
+		cesIndexer, cesInformer := informer.NewIndexerInformer(
+			utils.ListerWatcherFromTyped[*cilium_v2a1.CiliumEndpointSliceList](
+				client.CiliumV2alpha1().CiliumEndpointSlices()),
 			&cilium_v2a1.CiliumEndpointSlice{},
 			0,
 			cache.ResourceEventHandlerFuncs{
@@ -70,7 +82,13 @@ func (k *K8sWatcher) ciliumEndpointSliceInit(client *k8s.K8sCiliumClient, asyncC
 				},
 			},
 			nil,
+			cache.Indexers{
+				"localNode": CreateCiliumEndpointSliceLocalPodIndexFunc(),
+			},
 		)
+		k.ciliumEndpointSliceIndexerMU.Lock()
+		k.ciliumEndpointSliceIndexer = cesIndexer
+		k.ciliumEndpointSliceIndexerMU.Unlock()
 		isConnected := make(chan struct{})
 		// once isConnected is closed, it will stop waiting on caches to be
 		// synchronized.

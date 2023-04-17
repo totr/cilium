@@ -2,7 +2,7 @@
 
 ## cilium preflight
 
-cilium upgrade helper
+Cilium upgrade helper
 
 ### Synopsis
 
@@ -17,15 +17,15 @@ CLI to help upgrade cilium
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium](../cilium)	 - CLI
-* [cilium preflight fqdn-poller](../cilium_preflight_fqdn-poller)	 - Prepare for DNS Polling upgrades to cilium 1.4
-* [cilium preflight migrate-identity](../cilium_preflight_migrate-identity)	 - Migrate KVStore-backed identities to kubernetes CRD-backed identities
-* [cilium preflight validate-cnp](../cilium_preflight_validate-cnp)	 - Validate Cilium Network Policies deployed in the cluster
+* [cilium](cilium.md)	 - CLI
+* [cilium preflight fqdn-poller](cilium_preflight_fqdn-poller.md)	 - Prepare for DNS Polling upgrades to cilium 1.4
+* [cilium preflight migrate-identity](cilium_preflight_migrate-identity.md)	 - Migrate KVStore-backed identities to kubernetes CRD-backed identities
+* [cilium preflight validate-cnp](cilium_preflight_validate-cnp.md)	 - Validate Cilium Network Policies deployed in the cluster
 

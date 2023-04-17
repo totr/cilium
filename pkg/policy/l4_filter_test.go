@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package policy
 
@@ -11,16 +8,18 @@ import (
 	"fmt"
 	stdlog "log"
 
+	cilium "github.com/cilium/proxy/go/cilium/api"
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
+	"github.com/cilium/cilium/pkg/defaults"
+	"github.com/cilium/cilium/pkg/fqdn/re"
 	"github.com/cilium/cilium/pkg/identity/cache"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy/api"
 	"github.com/cilium/cilium/pkg/policy/api/kafka"
 	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
-	"github.com/cilium/proxy/go/cilium/api"
-
-	. "gopkg.in/check.v1"
 )
 
 var (
@@ -53,6 +52,11 @@ var (
 
 type testPolicyContextType struct {
 	isDeny bool
+	ns     string
+}
+
+func (p *testPolicyContextType) GetNamespace() string {
+	return p.ns
 }
 
 func (p *testPolicyContextType) GetSelectorCache() *SelectorCache {
@@ -91,6 +95,7 @@ var (
 func (ds *PolicyTestSuite) SetUpSuite(c *C) {
 	cachedRemoteNodeIdentitySetting = option.Config.EnableRemoteNodeIdentity
 	option.Config.EnableRemoteNodeIdentity = true
+	re.InitRegexCompileLRU(defaults.FQDNRegexCompileLRUSize)
 }
 
 func (ds *PolicyTestSuite) TearDownSuite(c *C) {
@@ -176,7 +181,7 @@ func (ds *PolicyTestSuite) TestMergeAllowAllL3AndAllowAllL7(c *C) {
 	c.Assert(filter.SelectsAllEndpoints(), Equals, true)
 
 	c.Assert(filter.L7Parser, Equals, ParserTypeNone)
-	c.Assert(len(filter.L7RulesPerSelector), Equals, 1)
+	c.Assert(len(filter.PerSelectorPolicies), Equals, 1)
 	l4IngressPolicy.Detach(repo.GetSelectorCache())
 
 	// Case1B: implicitly wildcard all endpoints.
@@ -223,7 +228,7 @@ func (ds *PolicyTestSuite) TestMergeAllowAllL3AndAllowAllL7(c *C) {
 	c.Assert(filter.SelectsAllEndpoints(), Equals, true)
 
 	c.Assert(filter.L7Parser, Equals, ParserTypeNone)
-	c.Assert(len(filter.L7RulesPerSelector), Equals, 1)
+	c.Assert(len(filter.PerSelectorPolicies), Equals, 1)
 	l4IngressPolicy.Detach(repo.GetSelectorCache())
 }
 
@@ -281,18 +286,19 @@ func (ds *PolicyTestSuite) TestMergeAllowAllL3AndShadowedL7(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: "http",
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}, {}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress:    true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 	}}
 
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(ingressState.selectedRules, Equals, 1)
 	c.Assert(ingressState.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -348,7 +354,7 @@ func (ds *PolicyTestSuite) TestMergeAllowAllL3AndShadowedL7(c *C) {
 	c.Assert(filter.SelectsAllEndpoints(), Equals, true)
 
 	c.Assert(filter.L7Parser, Equals, ParserTypeHTTP)
-	c.Assert(len(filter.L7RulesPerSelector), Equals, 1)
+	c.Assert(len(filter.PerSelectorPolicies), Equals, 1)
 	l4IngressPolicy.Detach(repo.GetSelectorCache())
 }
 
@@ -398,15 +404,16 @@ func (ds *PolicyTestSuite) TestMergeIdenticalAllowAllL3AndRestrictedL7HTTP(c *C)
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress:    true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 	}}
 
 	buffer := new(bytes.Buffer)
@@ -418,7 +425,7 @@ func (ds *PolicyTestSuite) TestMergeIdenticalAllowAllL3AndRestrictedL7HTTP(c *C)
 	res, err := identicalHTTPRule.resolveIngressPolicy(testPolicyContext, &ctxToA, &state, L4PolicyMap{}, nil, nil)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -483,22 +490,23 @@ func (ds *PolicyTestSuite) TestMergeIdenticalAllowAllL3AndRestrictedL7Kafka(c *C
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeKafka,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					Kafka: []kafka.PortRule{{Topic: "foo"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress:    true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 	}}
 
 	state := traceState{}
 	res, err := identicalKafkaRule.resolveIngressPolicy(testPolicyContext, &ctxToA, &state, L4PolicyMap{}, nil, nil)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -716,7 +724,99 @@ func (ds *PolicyTestSuite) TestMergeIdenticalAllowAllL3AndMismatchingParsers(c *
 }
 
 // TLS policies with and without interception
-func (ds *PolicyTestSuite) TestMergeTLSPolicies(c *C) {
+
+// TLS policy without L7 rules does not inspect L7, uses L7ParserType "tls"
+func (ds *PolicyTestSuite) TestMergeTLSTCPPolicy(c *C) {
+	egressRule := &rule{
+		Rule: api.Rule{
+			EndpointSelector: fooSelector,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorA},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						TerminatingTLS: &api.TLSContext{
+							Secret: &api.Secret{
+								Name: "tls-cert",
+							},
+						},
+						OriginatingTLS: &api.TLSContext{
+							Secret: &api.Secret{
+								Name: "tls-ca-certs",
+							},
+						},
+					}},
+				},
+			},
+		}}
+
+	buffer := new(bytes.Buffer)
+	ctxFromFoo := SearchContext{From: labels.ParseSelectLabelArray("foo"), Trace: TRACE_VERBOSE}
+	ctxFromFoo.Logging = stdlog.New(buffer, "", 0)
+	c.Log(buffer)
+
+	err := egressRule.Sanitize()
+	c.Assert(err, IsNil)
+
+	state := traceState{}
+	res, err := egressRule.resolveEgressPolicy(testPolicyContext, &ctxFromFoo, &state, L4PolicyMap{}, nil, nil)
+	c.Log(buffer)
+	c.Assert(err, IsNil)
+	c.Assert(res, Not(IsNil))
+
+	// Since cachedSelectorA's map entry is 'nil', it will not be redirected to the proxy.
+	expected := L4PolicyMap{"443/TCP": &L4Filter{
+		Port:     443,
+		Protocol: api.ProtoTCP,
+		U8Proto:  6,
+		wildcard: nil,
+		L7Parser: ParserTypeTLS,
+		PerSelectorPolicies: L7DataMap{
+			cachedSelectorA: nil, // no proxy redirect
+			cachedSelectorC: &PerSelectorPolicy{
+				TerminatingTLS: &TLSContext{
+					CertificateChain: "fake public cert",
+					PrivateKey:       "fake private key",
+				},
+				OriginatingTLS: &TLSContext{
+					TrustedCA: "fake CA certs",
+				},
+				EnvoyHTTPRules:  nil,
+				CanShortCircuit: false,
+				L7Rules:         api.L7Rules{},
+				isRedirect:      true,
+			},
+		},
+		Ingress: false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
+	}}
+
+	c.Assert(res, checker.DeepEquals, expected)
+
+	l4Filter := res["443/TCP"]
+	c.Assert(l4Filter, Not(IsNil))
+	c.Assert(l4Filter.L7Parser, Equals, ParserTypeTLS)
+	log.Infof("res: %v", res)
+}
+
+func (ds *PolicyTestSuite) TestMergeTLSHTTPPolicy(c *C) {
 	egressRule := &rule{
 		Rule: api.Rule{
 			EndpointSelector: fooSelector,
@@ -778,7 +878,7 @@ func (ds *PolicyTestSuite) TestMergeTLSPolicies(c *C) {
 		U8Proto:  6,
 		wildcard: nil,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA: nil, // no proxy redirect
 			cachedSelectorC: &PerSelectorPolicy{
 				TerminatingTLS: &TLSContext{
@@ -793,17 +893,434 @@ func (ds *PolicyTestSuite) TestMergeTLSPolicies(c *C) {
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          false,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
 	}}
 
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 
 	l4Filter := res["443/TCP"]
 	c.Assert(l4Filter, Not(IsNil))
 	c.Assert(l4Filter.L7Parser, Equals, ParserTypeHTTP)
+	log.Infof("res: %v", res)
+}
+
+func (ds *PolicyTestSuite) TestMergeTLSSNIPolicy(c *C) {
+	egressRule := &rule{
+		Rule: api.Rule{
+			EndpointSelector: fooSelector,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorA},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						TerminatingTLS: &api.TLSContext{
+							Secret: &api.Secret{
+								Name: "tls-cert",
+							},
+						},
+						OriginatingTLS: &api.TLSContext{
+							Secret: &api.Secret{
+								Name: "tls-ca-certs",
+							},
+						},
+						ServerNames: []string{"www.foo.com"},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						ServerNames: []string{"www.bar.com"},
+					}, {
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						Rules: &api.L7Rules{
+							HTTP: []api.PortRuleHTTP{{}},
+						},
+					}},
+				},
+			},
+		}}
+
+	buffer := new(bytes.Buffer)
+	ctxFromFoo := SearchContext{From: labels.ParseSelectLabelArray("foo"), Trace: TRACE_VERBOSE}
+	ctxFromFoo.Logging = stdlog.New(buffer, "", 0)
+	c.Log(buffer)
+
+	err := egressRule.Sanitize()
+	c.Assert(err, IsNil)
+
+	state := traceState{}
+	res, err := egressRule.resolveEgressPolicy(testPolicyContext, &ctxFromFoo, &state, L4PolicyMap{}, nil, nil)
+	c.Log(buffer)
+	c.Assert(err, IsNil)
+	c.Assert(res, Not(IsNil))
+
+	// Since cachedSelectorA's map entry is 'nil', it will not be redirected to the proxy.
+	expected := L4PolicyMap{"443/TCP": &L4Filter{
+		Port:     443,
+		Protocol: api.ProtoTCP,
+		U8Proto:  6,
+		wildcard: nil,
+		L7Parser: ParserTypeHTTP,
+		PerSelectorPolicies: L7DataMap{
+			cachedSelectorA: nil, // no proxy redirect
+			cachedSelectorC: &PerSelectorPolicy{
+				TerminatingTLS: &TLSContext{
+					CertificateChain: "fake public cert",
+					PrivateKey:       "fake private key",
+				},
+				OriginatingTLS: &TLSContext{
+					TrustedCA: "fake CA certs",
+				},
+				ServerNames:     StringSet{"www.foo.com": {}, "www.bar.com": {}},
+				EnvoyHTTPRules:  nil,
+				CanShortCircuit: false,
+				L7Rules: api.L7Rules{
+					HTTP: []api.PortRuleHTTP{{}},
+				},
+				isRedirect: true,
+			},
+		},
+		Ingress: false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
+	}}
+
+	c.Assert(res, checker.DeepEquals, expected)
+
+	l4Filter := res["443/TCP"]
+	c.Assert(l4Filter, Not(IsNil))
+	c.Assert(l4Filter.L7Parser, Equals, ParserTypeHTTP)
+	log.Infof("res: %v", res)
+}
+
+func (ds *PolicyTestSuite) TestMergeListenerPolicy(c *C) {
+	policyContext := &testPolicyContextType{}
+
+	//
+	// no namespace in policyContext (Clusterwide policy): Can not refer to EnvoyConfig
+	//
+	egressRule := &rule{
+		Rule: api.Rule{
+			EndpointSelector: fooSelector,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorA},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						Listener: &api.Listener{
+							EnvoyConfig: &api.EnvoyConfig{
+								Kind: "CiliumEnvoyConfig",
+								Name: "test-cec",
+							},
+							Name: "test",
+						},
+					}},
+				},
+			},
+		}}
+
+	buffer := new(bytes.Buffer)
+	ctxFromFoo := SearchContext{From: labels.ParseSelectLabelArray("foo"), Trace: TRACE_VERBOSE}
+	ctxFromFoo.Logging = stdlog.New(buffer, "", 0)
+	c.Log(buffer)
+
+	err := egressRule.Sanitize()
+	c.Assert(err, IsNil)
+
+	state := traceState{}
+	res, err := egressRule.resolveEgressPolicy(policyContext, &ctxFromFoo, &state, L4PolicyMap{}, nil, nil)
+	c.Log(buffer)
+	c.Assert(err, ErrorMatches, "Listener \"test\" in CCNP can not use Kind CiliumEnvoyConfig")
+	c.Assert(res, IsNil)
+
+	//
+	// no namespace in policyContext (Clusterwide policy): Must to ClusterwideEnvoyConfig
+	//
+	egressRule = &rule{
+		Rule: api.Rule{
+			EndpointSelector: fooSelector,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorA},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						Listener: &api.Listener{
+							EnvoyConfig: &api.EnvoyConfig{
+								Kind: "CiliumClusterwideEnvoyConfig",
+								Name: "shared-cec",
+							},
+							Name: "test",
+						},
+					}},
+				},
+			},
+		}}
+
+	buffer = new(bytes.Buffer)
+	ctxFromFoo = SearchContext{From: labels.ParseSelectLabelArray("foo"), Trace: TRACE_VERBOSE}
+	ctxFromFoo.Logging = stdlog.New(buffer, "", 0)
+	c.Log(buffer)
+
+	err = egressRule.Sanitize()
+	c.Assert(err, IsNil)
+
+	state = traceState{}
+	res, err = egressRule.resolveEgressPolicy(policyContext, &ctxFromFoo, &state, L4PolicyMap{}, nil, nil)
+	c.Log(buffer)
+	c.Assert(err, IsNil)
+	c.Assert(res, Not(IsNil))
+
+	// Since cachedSelectorA's map entry is 'nil', it will not be redirected to the proxy.
+	expected := L4PolicyMap{"443/TCP": &L4Filter{
+		Port:     443,
+		Protocol: api.ProtoTCP,
+		U8Proto:  6,
+		wildcard: nil,
+		L7Parser: ParserTypeCRD,
+		PerSelectorPolicies: L7DataMap{
+			cachedSelectorA: nil, // no proxy redirect
+			cachedSelectorC: &PerSelectorPolicy{
+				EnvoyHTTPRules:  nil,
+				CanShortCircuit: false,
+				isRedirect:      true,
+			},
+		},
+		Listener: "shared-cec/test",
+		Ingress:  false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
+	}}
+
+	c.Assert(res, checker.DeepEquals, expected)
+
+	l4Filter := res["443/TCP"]
+	c.Assert(l4Filter, Not(IsNil))
+	c.Assert(l4Filter.L7Parser, Equals, ParserTypeCRD)
+	log.Infof("res: %v", res)
+
+	//
+	// namespace in policyContext (Namespaced policy): Can refer to EnvoyConfig
+	//
+	egressRule = &rule{
+		Rule: api.Rule{
+			EndpointSelector: fooSelector,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorA},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						Listener: &api.Listener{
+							EnvoyConfig: &api.EnvoyConfig{
+								Kind: "CiliumEnvoyConfig",
+								Name: "test-cec",
+							},
+							Name: "test",
+						},
+					}},
+				},
+			},
+		}}
+
+	buffer = new(bytes.Buffer)
+	ctxFromFoo = SearchContext{From: labels.ParseSelectLabelArray("foo"), Trace: TRACE_VERBOSE}
+	ctxFromFoo.Logging = stdlog.New(buffer, "", 0)
+	c.Log(buffer)
+
+	err = egressRule.Sanitize()
+	c.Assert(err, IsNil)
+
+	state = traceState{}
+	policyContext.ns = "default"
+	res, err = egressRule.resolveEgressPolicy(policyContext, &ctxFromFoo, &state, L4PolicyMap{}, nil, nil)
+	c.Log(buffer)
+	c.Assert(err, IsNil)
+	c.Assert(res, Not(IsNil))
+
+	// Since cachedSelectorA's map entry is 'nil', it will not be redirected to the proxy.
+	expected = L4PolicyMap{"443/TCP": &L4Filter{
+		Port:     443,
+		Protocol: api.ProtoTCP,
+		U8Proto:  6,
+		wildcard: nil,
+		L7Parser: ParserTypeCRD,
+		PerSelectorPolicies: L7DataMap{
+			cachedSelectorA: nil, // no proxy redirect
+			cachedSelectorC: &PerSelectorPolicy{
+				EnvoyHTTPRules:  nil,
+				CanShortCircuit: false,
+				isRedirect:      true,
+			},
+		},
+		Listener: "default/test-cec/test",
+		Ingress:  false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
+	}}
+
+	c.Assert(res, checker.DeepEquals, expected)
+
+	l4Filter = res["443/TCP"]
+	c.Assert(l4Filter, Not(IsNil))
+	c.Assert(l4Filter.L7Parser, Equals, ParserTypeCRD)
+	log.Infof("res: %v", res)
+
+	//
+	// namespace in policyContext (Namespaced policy): Can refer to Cluster-socoped
+	// CiliumClusterwideEnvoyConfig
+	//
+	egressRule = &rule{
+		Rule: api.Rule{
+			EndpointSelector: fooSelector,
+			Egress: []api.EgressRule{
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorA},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+					}},
+				},
+				{
+					EgressCommonRule: api.EgressCommonRule{
+						ToEndpoints: []api.EndpointSelector{endpointSelectorC},
+					},
+					ToPorts: []api.PortRule{{
+						Ports: []api.PortProtocol{
+							{Port: "443", Protocol: api.ProtoTCP},
+						},
+						Listener: &api.Listener{
+							EnvoyConfig: &api.EnvoyConfig{
+								Kind: "CiliumClusterwideEnvoyConfig",
+								Name: "shared-cec",
+							},
+							Name: "test",
+						},
+					}},
+				},
+			},
+		}}
+
+	buffer = new(bytes.Buffer)
+	ctxFromFoo = SearchContext{From: labels.ParseSelectLabelArray("foo"), Trace: TRACE_VERBOSE}
+	ctxFromFoo.Logging = stdlog.New(buffer, "", 0)
+	c.Log(buffer)
+
+	err = egressRule.Sanitize()
+	c.Assert(err, IsNil)
+
+	state = traceState{}
+	policyContext.ns = "default"
+	res, err = egressRule.resolveEgressPolicy(policyContext, &ctxFromFoo, &state, L4PolicyMap{}, nil, nil)
+	c.Log(buffer)
+	c.Assert(err, IsNil)
+	c.Assert(res, Not(IsNil))
+
+	// Since cachedSelectorA's map entry is 'nil', it will not be redirected to the proxy.
+	expected = L4PolicyMap{"443/TCP": &L4Filter{
+		Port:     443,
+		Protocol: api.ProtoTCP,
+		U8Proto:  6,
+		wildcard: nil,
+		L7Parser: ParserTypeCRD,
+		PerSelectorPolicies: L7DataMap{
+			cachedSelectorA: nil, // no proxy redirect
+			cachedSelectorC: &PerSelectorPolicy{
+				EnvoyHTTPRules:  nil,
+				CanShortCircuit: false,
+				isRedirect:      true,
+			},
+		},
+		Listener: "shared-cec/test",
+		Ingress:  false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
+	}}
+
+	c.Assert(res, checker.DeepEquals, expected)
+
+	l4Filter = res["443/TCP"]
+	c.Assert(l4Filter, Not(IsNil))
+	c.Assert(l4Filter.L7Parser, Equals, ParserTypeCRD)
 	log.Infof("res: %v", res)
 }
 
@@ -850,12 +1367,15 @@ func (ds *PolicyTestSuite) TestL3RuleShadowedByL3AllowAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA:        nil,
 			wildcardCachedSelector: nil,
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state := traceState{}
@@ -914,12 +1434,15 @@ func (ds *PolicyTestSuite) TestL3RuleShadowedByL3AllowAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: nil,
 			cachedSelectorA:        nil,
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state = traceState{}
@@ -991,23 +1514,27 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RulePartiallyShadowedByL3AllowAll(c *
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: nil,
 			cachedSelectorA: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state := traceState{}
 	res, err := shadowRule.resolveIngressPolicy(testPolicyContext, &ctxToA, &state, L4PolicyMap{}, nil, nil)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -1066,23 +1593,27 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RulePartiallyShadowedByL3AllowAll(c *
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: nil,
 			cachedSelectorA: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			wildcardCachedSelector: {nil},
+			cachedSelectorA:        {nil},
+		},
 	}}
 
 	state = traceState{}
 	res, err = shadowRule.resolveIngressPolicy(testPolicyContext, &ctxToA, &state, L4PolicyMap{}, nil, nil)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -1101,10 +1632,9 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RulePartiallyShadowedByL3AllowAll(c *
 // Should resolve to just allowing all on L3, but restricting on L7 for both
 // wildcard and the specified endpoint.
 func (ds *PolicyTestSuite) TestL3RuleWithL7RuleShadowedByL3AllowAll(c *C) {
-
 	// Case 8A: selects specific endpoint with L7 restrictions rule first, then
 	// rule which selects all endpoints and restricts on the same resource on L7.
-	// L7RulesPerSelector contains entries for both endpoints selected in each rule
+	// PerSelectorPolicies contains entries for both endpoints selected in each rule
 	// on L7 restriction.
 	case8Rule := &rule{
 		Rule: api.Rule{
@@ -1154,27 +1684,32 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RuleShadowedByL3AllowAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 			cachedSelectorA: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state := traceState{}
 	res, err := case8Rule.resolveIngressPolicy(testPolicyContext, &ctxToA, &state, L4PolicyMap{}, nil, nil)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -1189,7 +1724,7 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RuleShadowedByL3AllowAll(c *C) {
 
 	// Case 8B: first insert rule which selects all endpoints and restricts on
 	// the same resource on L7. Then, insert rule which  selects specific endpoint
-	// with L7 restrictions rule. L7RulesPerSelector contains entries for both
+	// with L7 restrictions rule. PerSelectorPolicies contains entries for both
 	// endpoints selected in each rule on L7 restriction.
 	case8Rule = &rule{
 		Rule: api.Rule{
@@ -1238,20 +1773,25 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RuleShadowedByL3AllowAll(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 			cachedSelectorA: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA:        {nil},
+			wildcardCachedSelector: {nil},
+		},
 	}}
 
 	state = traceState{}
@@ -1259,7 +1799,7 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RuleShadowedByL3AllowAll(c *C) {
 	c.Log(buffer)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -1277,7 +1817,6 @@ func (ds *PolicyTestSuite) TestL3RuleWithL7RuleShadowedByL3AllowAll(c *C) {
 // select an endpoint which restricts on different L7 protocol.
 // Should fail as cannot have conflicting parsers on same port.
 func (ds *PolicyTestSuite) TestL3SelectingEndpointAndL3AllowAllMergeConflictingL7(c *C) {
-
 	// Case 9A: Kafka first, then HTTP.
 	conflictingL7Rule := &rule{
 		Rule: api.Rule{
@@ -1392,7 +1931,6 @@ func (ds *PolicyTestSuite) TestL3SelectingEndpointAndL3AllowAllMergeConflictingL
 // Case 10: restrict same path / method on L7 in both rules,
 // but select different endpoints in each rule.
 func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointsSelectedAllowSameL7(c *C) {
-
 	selectDifferentEndpointsRestrictL7 := &rule{
 		Rule: api.Rule{
 			EndpointSelector: endpointSelectorA,
@@ -1441,27 +1979,32 @@ func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointsSelectedAllowSameL7(
 		U8Proto:  6,
 		wildcard: nil,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorC: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 			cachedSelectorA: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
 	}}
 
 	state := traceState{}
 	res, err := selectDifferentEndpointsRestrictL7.resolveIngressPolicy(testPolicyContext, &ctxToA, &state, L4PolicyMap{}, nil, nil)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -1482,7 +2025,6 @@ func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointsSelectedAllowSameL7(
 
 // Case 11: allow all on L7 in both rules, but select different endpoints in each rule.
 func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointSelectedAllowAllL7(c *C) {
-
 	selectDifferentEndpointsAllowAllL7 := &rule{
 		Rule: api.Rule{
 			EndpointSelector: endpointSelectorA,
@@ -1521,12 +2063,15 @@ func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointSelectedAllowAllL7(c 
 		U8Proto:  6,
 		wildcard: nil,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			cachedSelectorA: nil,
 			cachedSelectorC: nil,
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress: true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{
+			cachedSelectorA: {nil},
+			cachedSelectorC: {nil},
+		},
 	}}
 
 	state := traceState{}
@@ -1553,10 +2098,9 @@ func (ds *PolicyTestSuite) TestMergingWithDifferentEndpointSelectedAllowAllL7(c 
 }
 
 // Case 12: allow all at L3 in one rule with restrictions at L7. Determine that
-//          the host should always be allowed. From Host should go to proxy
-//          allow all; other L3 should restrict at L7 in a separate filter.
+// the host should always be allowed. From Host should go to proxy allow all;
+// other L3 should restrict at L7 in a separate filter.
 func (ds *PolicyTestSuite) TestAllowingLocalhostShadowsL7(c *C) {
-
 	// This test checks that when the AllowLocalhost=always option is
 	// enabled, we always wildcard the host at L7. That means we need to
 	// set the option in the config, and of course clean up afterwards so
@@ -1598,16 +2142,17 @@ func (ds *PolicyTestSuite) TestAllowingLocalhostShadowsL7(c *C) {
 		U8Proto:  6,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeHTTP,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: &PerSelectorPolicy{
 				L7Rules: api.L7Rules{
 					HTTP: []api.PortRuleHTTP{{Path: "/", Method: "GET"}},
 				},
+				isRedirect: true,
 			},
 			cachedSelectorHost: nil, // no proxy redirect
 		},
-		Ingress:          true,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress:    true,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 	}}
 
 	state := traceState{}
@@ -1615,7 +2160,7 @@ func (ds *PolicyTestSuite) TestAllowingLocalhostShadowsL7(c *C) {
 	c.Log(buffer)
 	c.Assert(err, IsNil)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res, checker.Equals, expected)
+	c.Assert(res, checker.DeepEquals, expected)
 	c.Assert(state.selectedRules, Equals, 1)
 	c.Assert(state.matchedRules, Equals, 1)
 	res.Detach(testSelectorCache)
@@ -1636,7 +2181,6 @@ func (ds *PolicyTestSuite) TestAllowingLocalhostShadowsL7(c *C) {
 }
 
 func (ds *PolicyTestSuite) TestEntitiesL3(c *C) {
-
 	allowWorldRule := &rule{
 		Rule: api.Rule{
 			EndpointSelector: endpointSelectorA,
@@ -1660,11 +2204,11 @@ func (ds *PolicyTestSuite) TestEntitiesL3(c *C) {
 		U8Proto:  0,
 		wildcard: wildcardCachedSelector,
 		L7Parser: ParserTypeNone,
-		L7RulesPerSelector: L7DataMap{
+		PerSelectorPolicies: L7DataMap{
 			wildcardCachedSelector: nil,
 		},
-		Ingress:          false,
-		DerivedFromRules: labels.LabelArrayList{nil},
+		Ingress:    false,
+		RuleOrigin: map[CachedSelector]labels.LabelArrayList{wildcardCachedSelector: {nil}},
 	}}
 
 	state := traceState{}

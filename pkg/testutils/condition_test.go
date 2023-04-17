@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package testutils
 
@@ -28,5 +25,5 @@ func (s *TestUtilsSuite) TestCondition(c *C) {
 	c.Assert(WaitUntil(countTo5, 1*time.Millisecond), Not(IsNil))
 
 	counter = 0
-	c.Assert(WaitUntil(countTo5, 100*time.Millisecond), IsNil)
+	c.Assert(WaitUntil(countTo5, time.Second), IsNil)
 }

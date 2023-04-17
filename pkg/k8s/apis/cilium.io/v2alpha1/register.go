@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package v2alpha1
 
 import (
-	k8sconst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	k8sconst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
 )
 
 const (
@@ -17,30 +17,6 @@ const (
 
 	// CustomResourceDefinitionVersion is the current version of the resource
 	CustomResourceDefinitionVersion = "v2alpha1"
-
-	// CustomResourceDefinitionSchemaVersion is semver-conformant version of CRD schema
-	// Used to determine if CRD needs to be updated in cluster
-	//
-	// Maintainers: Run ./Documentation/check-crd-compat-table.sh for each release
-	// Developers: Bump patch for each change in the CRD schema.
-	CustomResourceDefinitionSchemaVersion = "1.24.2"
-
-	// CustomResourceDefinitionSchemaVersionKey is key to label which holds the CRD schema version
-	CustomResourceDefinitionSchemaVersionKey = "io.cilium.k8s.crd.schema.version"
-
-	// Cilium Egress NAT Policy (CENP)
-
-	// CENPSingularName is the singular name of Cilium Egress NAT Policy
-	CENPSingularName = "ciliumegressnatpolicy"
-
-	// CENPPluralName is the plural name of Cilium Egress NAT Policy
-	CENPPluralName = "ciliumegressnatpolicies"
-
-	// CENPKindDefinition is the kind name of Cilium Egress NAT Policy
-	CENPKindDefinition = "CiliumEgressNATPolicy"
-
-	// CENPName is the full name of Cilium Egress NAT Policy
-	CENPName = CENPPluralName + "." + CustomResourceDefinitionGroup
 
 	// Cilium Endpoint Slice (CES)
 
@@ -55,6 +31,44 @@ const (
 
 	// CESName is the full name of Cilium Endpoint Slice
 	CESName = CESPluralName + "." + CustomResourceDefinitionGroup
+
+	// Cilium BGP Peering Policy (BGPP)
+
+	// BGPPSingularName is the singular name of Cilium BGP Peering Policy
+	BGPPSingularName = "ciliumbgppeeringpolicy"
+
+	// BGPPPluralName is the plural name of Cilium BGP Peering Policy
+	BGPPPluralName = "ciliumbgppeeringpolicies"
+
+	// BGPPKindDefinition is the kind name of Cilium BGP Peering Policy
+	BGPPKindDefinition = "CiliumBGPPeeringPolicy"
+
+	// BGPPName is the full name of Cilium BGP Peering Policy
+	BGPPName = BGPPPluralName + "." + CustomResourceDefinitionGroup
+
+	// Cilium Load Balancer IP Pool (IPPool)
+
+	// PoolSingularName is the singular name of Cilium Load Balancer IP Pool
+	PoolSingularName = "ciliumloadbalancerippool"
+
+	// PoolPluralName is the plural name of Cilium Load Balancer IP Pool
+	PoolPluralName = "ciliumloadbalancerippools"
+
+	// PoolKindDefinition is the kind name of Cilium Peering Policy
+	PoolKindDefinition = "CiliumLoadBalancerIPPool"
+
+	// LBIPPoolName is the full name of Cilium Load Balancer IP Pool
+	LBIPPoolName = PoolPluralName + "." + CustomResourceDefinitionGroup
+
+	// CiliumNodeConfig (CNC)
+	CNCPluralName     = "ciliumnodeconfigs"
+	CNCKindDefinition = "CiliumNodeConfig"
+	CNCName           = CNCPluralName + "." + CustomResourceDefinitionGroup
+
+	// CiliumCIDRGroup (CCG)
+	CCGPluralName     = "ciliumcidrgroups"
+	CCGKindDefinition = "CiliumCIDRGroup"
+	CCGName           = CCGPluralName + "." + CustomResourceDefinitionGroup
 )
 
 // SchemeGroupVersion is group version used to register these objects
@@ -79,7 +93,7 @@ var (
 	//
 	//   import (
 	//     "k8s.io/client-go/kubernetes"
-	//     clientsetscheme "k8s.io/client-go/kuberentes/scheme"
+	//     clientsetscheme "k8s.io/client-go/kubernetes/scheme"
 	//     aggregatorclientsetscheme "k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset/scheme"
 	//   )
 	//
@@ -98,10 +112,16 @@ func init() {
 // Adds the list of known types to api.Scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
-		&CiliumEgressNATPolicy{},
-		&CiliumEgressNATPolicyList{},
 		&CiliumEndpointSlice{},
 		&CiliumEndpointSliceList{},
+		&CiliumBGPPeeringPolicy{},
+		&CiliumBGPPeeringPolicyList{},
+		&CiliumLoadBalancerIPPool{},
+		&CiliumLoadBalancerIPPoolList{},
+		&CiliumNodeConfig{},
+		&CiliumNodeConfigList{},
+		&CiliumCIDRGroup{},
+		&CiliumCIDRGroupList{},
 	)
 
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)

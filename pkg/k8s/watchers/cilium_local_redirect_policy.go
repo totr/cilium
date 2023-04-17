@@ -1,35 +1,25 @@
-//  Copyright 2020 Authors of Cilium
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package watchers
 
 import (
-	"github.com/cilium/cilium/pkg/k8s"
-	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	"github.com/cilium/cilium/pkg/k8s/informer"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-	"github.com/cilium/cilium/pkg/redirectpolicy"
-
 	"github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/cilium/cilium/pkg/k8s"
+	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/k8s/client"
+	"github.com/cilium/cilium/pkg/k8s/informer"
+	"github.com/cilium/cilium/pkg/k8s/watchers/resources"
+	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/redirectpolicy"
 )
 
-func (k *K8sWatcher) ciliumLocalRedirectPolicyInit(ciliumLRPClient *k8s.K8sCiliumClient) {
-
+func (k *K8sWatcher) ciliumLocalRedirectPolicyInit(ciliumLRPClient client.Clientset) {
+	apiGroup := k8sAPIGroupCiliumLocalRedirectPolicyV2
 	_, lrpController := informer.NewInformer(
 		cache.NewListWatchFromClient(ciliumLRPClient.CiliumV2().RESTClient(),
 			"ciliumlocalredirectpolicies", v1.NamespaceAll, fields.Everything()),
@@ -38,11 +28,11 @@ func (k *K8sWatcher) ciliumLocalRedirectPolicyInit(ciliumLRPClient *k8s.K8sCiliu
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				var valid, equal bool
-				defer func() { k.K8sEventReceived(metricCLRP, metricCreate, valid, equal) }()
+				defer func() { k.K8sEventReceived(apiGroup, metricCLRP, resources.MetricCreate, valid, equal) }()
 				if cLRP := k8s.ObjToCLRP(obj); cLRP != nil {
 					valid = true
 					err := k.addCiliumLocalRedirectPolicy(cLRP)
-					k.K8sEventProcessed(metricCLRP, metricCreate, err == nil)
+					k.K8sEventProcessed(metricCLRP, resources.MetricCreate, err == nil)
 				}
 
 			},
@@ -52,27 +42,27 @@ func (k *K8sWatcher) ciliumLocalRedirectPolicyInit(ciliumLRPClient *k8s.K8sCiliu
 			},
 			DeleteFunc: func(obj interface{}) {
 				var valid, equal bool
-				defer func() { k.K8sEventReceived(metricCLRP, metricDelete, valid, equal) }()
+				defer func() { k.K8sEventReceived(apiGroup, metricCLRP, resources.MetricDelete, valid, equal) }()
 				cLRP := k8s.ObjToCLRP(obj)
 				if cLRP == nil {
 					return
 				}
 				valid = true
 				err := k.deleteCiliumLocalRedirectPolicy(cLRP)
-				k.K8sEventProcessed(metricCLRP, metricDelete, err == nil)
+				k.K8sEventProcessed(metricCLRP, resources.MetricDelete, err == nil)
 			},
 		},
 		k8s.ConvertToCiliumLocalRedirectPolicy,
 	)
 
 	k.blockWaitGroupToSyncResources(
-		wait.NeverStop,
+		k.stop,
 		nil,
 		lrpController.HasSynced,
 		k8sAPIGroupCiliumLocalRedirectPolicyV2,
 	)
 
-	go lrpController.Run(wait.NeverStop)
+	go lrpController.Run(k.stop)
 	k.k8sAPIGroups.AddAPI(k8sAPIGroupCiliumLocalRedirectPolicyV2)
 }
 

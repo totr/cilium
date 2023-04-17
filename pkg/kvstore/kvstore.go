@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package kvstore
 
@@ -38,6 +38,9 @@ const (
 	// HeartbeatPath is the path to the key at which the operator updates
 	// the heartbeat
 	HeartbeatPath = BaseKeyPrefix + "/.heartbeat"
+
+	// ClusterConfigPrefix is the kvstore prefix to cluster configuration
+	ClusterConfigPrefix = BaseKeyPrefix + "/cluster-config"
 
 	// HeartbeatWriteInterval is the interval in which the heartbeat key at
 	// HeartbeatPath is updated

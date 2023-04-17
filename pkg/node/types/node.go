@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package types
 
@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net"
 	"path"
+
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/annotation"
@@ -18,8 +20,6 @@ import (
 	"github.com/cilium/cilium/pkg/node/addressing"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/source"
-
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Identity represents the node identity of a node.
@@ -36,6 +36,7 @@ func (nn Identity) String() string {
 // ParseCiliumNode parses a CiliumNode custom resource and returns a Node
 // instance. Invalid IP and CIDRs are silently ignored
 func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
+	wireguardPubKey, _ := annotation.Get(n, annotation.WireguardPubKey, annotation.WireguardPubKeyAlias)
 	node = Node{
 		Name:            n.Name,
 		EncryptionKey:   uint8(n.Spec.Encryption.Key),
@@ -43,28 +44,35 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 		ClusterID:       option.Config.ClusterID,
 		Source:          source.CustomResource,
 		Labels:          n.ObjectMeta.Labels,
+		Annotations:     n.ObjectMeta.Annotations,
 		NodeIdentity:    uint32(n.Spec.NodeIdentity),
-		WireguardPubKey: n.ObjectMeta.Annotations[annotation.WireguardPubKey],
+		WireguardPubKey: wireguardPubKey,
 	}
 
 	for _, cidrString := range n.Spec.IPAM.PodCIDRs {
 		ipnet, err := cidr.ParseCIDR(cidrString)
 		if err == nil {
 			if ipnet.IP.To4() != nil {
-				node.IPv4AllocCIDR = ipnet
+				if node.IPv4AllocCIDR == nil {
+					node.IPv4AllocCIDR = ipnet
+				} else {
+					node.IPv4SecondaryAllocCIDRs = append(node.IPv4SecondaryAllocCIDRs, ipnet)
+				}
 			} else {
-				node.IPv6AllocCIDR = ipnet
+				if node.IPv6AllocCIDR == nil {
+					node.IPv6AllocCIDR = ipnet
+				} else {
+					node.IPv6SecondaryAllocCIDRs = append(node.IPv6SecondaryAllocCIDRs, ipnet)
+				}
 			}
 		}
 	}
 
-	if healthIP := n.Spec.HealthAddressing.IPv4; healthIP != "" {
-		node.IPv4HealthIP = net.ParseIP(healthIP)
-	}
+	node.IPv4HealthIP = net.ParseIP(n.Spec.HealthAddressing.IPv4)
+	node.IPv6HealthIP = net.ParseIP(n.Spec.HealthAddressing.IPv6)
 
-	if healthIP := n.Spec.HealthAddressing.IPv6; healthIP != "" {
-		node.IPv6HealthIP = net.ParseIP(healthIP)
-	}
+	node.IPv4IngressIP = net.ParseIP(n.Spec.IngressAddressing.IPV4)
+	node.IPv6IngressIP = net.ParseIP(n.Spec.IngressAddressing.IPV6)
 
 	for _, address := range n.Spec.Addresses {
 		if ip := net.ParseIP(address.IP); ip != nil {
@@ -78,10 +86,11 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 // ToCiliumNode converts the node to a CiliumNode
 func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 	var (
-		podCIDRs               []string
-		ipAddrs                []ciliumv2.NodeAddress
-		healthIPv4, healthIPv6 string
-		annotations            = map[string]string{}
+		podCIDRs                 []string
+		ipAddrs                  []ciliumv2.NodeAddress
+		healthIPv4, healthIPv6   string
+		ingressIPv4, ingressIPv6 string
+		annotations              = map[string]string{}
 	)
 
 	if n.IPv4AllocCIDR != nil {
@@ -90,11 +99,23 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 	if n.IPv6AllocCIDR != nil {
 		podCIDRs = append(podCIDRs, n.IPv6AllocCIDR.String())
 	}
+	for _, ipv4AllocCIDR := range n.IPv4SecondaryAllocCIDRs {
+		podCIDRs = append(podCIDRs, ipv4AllocCIDR.String())
+	}
+	for _, ipv6AllocCIDR := range n.IPv6SecondaryAllocCIDRs {
+		podCIDRs = append(podCIDRs, ipv6AllocCIDR.String())
+	}
 	if n.IPv4HealthIP != nil {
 		healthIPv4 = n.IPv4HealthIP.String()
 	}
 	if n.IPv6HealthIP != nil {
 		healthIPv6 = n.IPv6HealthIP.String()
+	}
+	if n.IPv4IngressIP != nil {
+		ingressIPv4 = n.IPv4IngressIP.String()
+	}
+	if n.IPv6IngressIP != nil {
+		ingressIPv6 = n.IPv6IngressIP.String()
 	}
 
 	for _, address := range n.IPAddresses {
@@ -119,6 +140,10 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 			HealthAddressing: ciliumv2.HealthAddressingSpec{
 				IPv4: healthIPv4,
 				IPv6: healthIPv6,
+			},
+			IngressAddressing: ciliumv2.AddressPair{
+				IPV4: ingressIPv4,
+				IPV6: ingressIPv6,
 			},
 			Encryption: ciliumv2.EncryptionSpec{
 				Key: int(n.EncryptionKey),
@@ -164,9 +189,17 @@ type Node struct {
 	// allocates IPs for local endpoints from
 	IPv4AllocCIDR *cidr.CIDR
 
+	// IPv4SecondaryAllocCIDRs contains additional IPv4 CIDRs from which this
+	//node allocates IPs for its local endpoints from
+	IPv4SecondaryAllocCIDRs []*cidr.CIDR
+
 	// IPv6AllocCIDR if set, is the IPv6 address pool out of which the node
 	// allocates IPs for local endpoints from
 	IPv6AllocCIDR *cidr.CIDR
+
+	// IPv6SecondaryAllocCIDRs contains additional IPv6 CIDRs from which this
+	// node allocates IPs for its local endpoints from
+	IPv6SecondaryAllocCIDRs []*cidr.CIDR
 
 	// IPv4HealthIP if not nil, this is the IPv4 address of the
 	// cilium-health endpoint located on the node.
@@ -176,8 +209,16 @@ type Node struct {
 	// cilium-health endpoint located on the node.
 	IPv6HealthIP net.IP
 
+	// IPv4IngressIP if not nil, this is the IPv4 address of the
+	// Ingress listener on the node.
+	IPv4IngressIP net.IP
+
+	// IPv6IngressIP if not nil, this is the IPv6 address of the
+	// Ingress listener located on the node.
+	IPv6IngressIP net.IP
+
 	// ClusterID is the unique identifier of the cluster
-	ClusterID int
+	ClusterID uint32
 
 	// Source is the source where the node configuration was generated / created.
 	Source source.Source
@@ -187,6 +228,9 @@ type Node struct {
 
 	// Node labels
 	Labels map[string]string
+
+	// Node annotations
+	Annotations map[string]string
 
 	// NodeIdentity is the numeric identity allocated for the node
 	NodeIdentity uint32
@@ -213,11 +257,13 @@ type Address struct {
 	IP   net.IP
 }
 
-func (n *Node) getNodeIP(ipv6 bool) (net.IP, addressing.AddressType) {
-	var (
-		backupIP net.IP
-		ipType   addressing.AddressType
-	)
+// GetNodeIP returns one of the node's IP addresses available with the
+// following priority:
+// - NodeInternalIP
+// - NodeExternalIP
+// - other IP address type
+func (n *Node) GetNodeIP(ipv6 bool) net.IP {
+	var backupIP net.IP
 	for _, addr := range n.IPAddresses {
 		if (ipv6 && addr.IP.To4() != nil) ||
 			(!ipv6 && addr.IP.To4() == nil) {
@@ -229,22 +275,20 @@ func (n *Node) getNodeIP(ipv6 bool) (net.IP, addressing.AddressType) {
 			continue
 		// Always prefer a cluster internal IP
 		case addressing.NodeInternalIP:
-			return addr.IP, addr.Type
+			return addr.IP
 		case addressing.NodeExternalIP:
 			// Fall back to external Node IP
 			// if no internal IP could be found
 			backupIP = addr.IP
-			ipType = addr.Type
 		default:
 			// As a last resort, if no internal or external
 			// IP was found, use any node address available
 			if backupIP == nil {
 				backupIP = addr.IP
-				ipType = addr.Type
 			}
 		}
 	}
-	return backupIP, ipType
+	return backupIP
 }
 
 // GetExternalIP returns ExternalIP of k8s Node. If not present, then it
@@ -278,16 +322,6 @@ func (n *Node) GetK8sNodeIP() net.IP {
 	return externalIP
 }
 
-// GetNodeIP returns one of the node's IP addresses available with the
-// following priority:
-// - NodeInternalIP
-// - NodeExternalIP
-// - other IP address type
-func (n *Node) GetNodeIP(ipv6 bool) net.IP {
-	result, _ := n.getNodeIP(ipv6)
-	return result
-}
-
 // GetCiliumInternalIP returns the CiliumInternalIP e.g. the IP associated
 // with cilium_host on the node.
 func (n *Node) GetCiliumInternalIP(ipv6 bool) net.IP {
@@ -303,6 +337,57 @@ func (n *Node) GetCiliumInternalIP(ipv6 bool) net.IP {
 	return nil
 }
 
+// SetCiliumInternalIP sets the CiliumInternalIP e.g. the IP associated
+// with cilium_host on the node.
+func (n *Node) SetCiliumInternalIP(newAddr net.IP) {
+	n.setAddress(addressing.NodeCiliumInternalIP, newAddr)
+}
+
+// SetNodeExternalIP sets the NodeExternalIP.
+func (n *Node) SetNodeExternalIP(newAddr net.IP) {
+	n.setAddress(addressing.NodeExternalIP, newAddr)
+}
+
+// SetNodeInternalIP sets the NodeInternalIP.
+func (n *Node) SetNodeInternalIP(newAddr net.IP) {
+	n.setAddress(addressing.NodeInternalIP, newAddr)
+}
+
+func (n *Node) RemoveAddresses(typ addressing.AddressType) {
+	newAddresses := []Address{}
+	for _, addr := range n.IPAddresses {
+		if addr.Type != typ {
+			newAddresses = append(newAddresses, addr)
+		}
+	}
+	n.IPAddresses = newAddresses
+}
+
+func (n *Node) setAddress(typ addressing.AddressType, newIP net.IP) {
+	newAddr := Address{Type: typ, IP: newIP}
+
+	if newIP == nil {
+		n.RemoveAddresses(typ)
+		return
+	}
+
+	ipv6 := newIP.To4() == nil
+	// Try first to replace an existing address with same type
+	for i, addr := range n.IPAddresses {
+		if addr.Type != typ {
+			continue
+		}
+		if ipv6 != (addr.IP.To4() == nil) {
+			// Don't replace if address family is different.
+			continue
+		}
+		n.IPAddresses[i] = newAddr
+		return
+	}
+	n.IPAddresses = append(n.IPAddresses, newAddr)
+
+}
+
 func (n *Node) GetIPByType(addrType addressing.AddressType, ipv6 bool) net.IP {
 	for _, addr := range n.IPAddresses {
 		if addr.Type != addrType {
@@ -316,8 +401,8 @@ func (n *Node) GetIPByType(addrType addressing.AddressType, ipv6 bool) net.IP {
 }
 
 func (n *Node) getPrimaryAddress() *models.NodeAddressing {
-	v4, v4Type := n.getNodeIP(false)
-	v6, v6Type := n.getNodeIP(true)
+	v4 := n.GetNodeIP(false)
+	v6 := n.GetNodeIP(true)
 
 	var ipv4AllocStr, ipv6AllocStr string
 	if n.IPv4AllocCIDR != nil {
@@ -337,16 +422,14 @@ func (n *Node) getPrimaryAddress() *models.NodeAddressing {
 
 	return &models.NodeAddressing{
 		IPV4: &models.NodeAddressingElement{
-			Enabled:     option.Config.EnableIPv4,
-			IP:          v4Str,
-			AllocRange:  ipv4AllocStr,
-			AddressType: string(v4Type),
+			Enabled:    option.Config.EnableIPv4,
+			IP:         v4Str,
+			AllocRange: ipv4AllocStr,
 		},
 		IPV6: &models.NodeAddressingElement{
-			Enabled:     option.Config.EnableIPv6,
-			IP:          v6Str,
-			AllocRange:  ipv6AllocStr,
-			AddressType: string(v6Type),
+			Enabled:    option.Config.EnableIPv6,
+			IP:         v6Str,
+			AllocRange: ipv6AllocStr,
 		},
 	}
 }
@@ -365,8 +448,7 @@ func (n *Node) getSecondaryAddresses() []*models.NodeAddressingElement {
 		}
 		if !n.isPrimaryAddress(addr, ipv4) {
 			result = append(result, &models.NodeAddressingElement{
-				IP:          addr.IP.String(),
-				AddressType: string(addr.Type),
+				IP: addr.IP.String(),
 			})
 		}
 	}
@@ -399,6 +481,31 @@ func (n *Node) getHealthAddresses() *models.NodeAddressing {
 	}
 }
 
+func (n *Node) getIngressAddresses() *models.NodeAddressing {
+	if n.IPv4IngressIP == nil && n.IPv6IngressIP == nil {
+		return nil
+	}
+
+	var v4Str, v6Str string
+	if n.IPv4IngressIP != nil {
+		v4Str = n.IPv4IngressIP.String()
+	}
+	if n.IPv6IngressIP != nil {
+		v6Str = n.IPv6IngressIP.String()
+	}
+
+	return &models.NodeAddressing{
+		IPV4: &models.NodeAddressingElement{
+			Enabled: option.Config.EnableIPv4,
+			IP:      v4Str,
+		},
+		IPV6: &models.NodeAddressingElement{
+			Enabled: option.Config.EnableIPv6,
+			IP:      v6Str,
+		},
+	}
+}
+
 // GetModel returns the API model representation of a node.
 func (n *Node) GetModel() *models.NodeElement {
 	return &models.NodeElement{
@@ -406,6 +513,7 @@ func (n *Node) GetModel() *models.NodeElement {
 		PrimaryAddress:        n.getPrimaryAddress(),
 		SecondaryAddresses:    n.getSecondaryAddresses(),
 		HealthEndpointAddress: n.getHealthAddresses(),
+		IngressAddress:        n.getIngressAddresses(),
 	}
 }
 
@@ -425,6 +533,28 @@ func getCluster() string {
 // running on
 func (n *Node) IsLocal() bool {
 	return n != nil && n.Name == GetName() && n.Cluster == getCluster()
+}
+
+func (n *Node) GetIPv4AllocCIDRs() []*cidr.CIDR {
+	result := make([]*cidr.CIDR, 0, len(n.IPv4SecondaryAllocCIDRs)+1)
+	if n.IPv4AllocCIDR != nil {
+		result = append(result, n.IPv4AllocCIDR)
+	}
+	if len(n.IPv4SecondaryAllocCIDRs) > 0 {
+		result = append(result, n.IPv4SecondaryAllocCIDRs...)
+	}
+	return result
+}
+
+func (n *Node) GetIPv6AllocCIDRs() []*cidr.CIDR {
+	result := make([]*cidr.CIDR, 0, len(n.IPv6SecondaryAllocCIDRs)+1)
+	if n.IPv6AllocCIDR != nil {
+		result = append(result, n.IPv6AllocCIDR)
+	}
+	if len(n.IPv4SecondaryAllocCIDRs) > 0 {
+		result = append(result, n.IPv6SecondaryAllocCIDRs...)
+	}
+	return result
 }
 
 // GetKeyNodeName constructs the API name for the given cluster and node name.

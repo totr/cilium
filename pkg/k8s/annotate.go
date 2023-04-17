@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package k8s
 
@@ -7,83 +7,60 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"reflect"
 	"strconv"
-
-	"github.com/cilium/cilium/pkg/annotation"
-	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/controller"
-	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned"
-	"github.com/cilium/cilium/pkg/logging/logfields"
+	"strings"
 
 	"github.com/sirupsen/logrus"
-	core_v1 "k8s.io/api/core/v1"
-	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	k8sTypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/cilium/cilium/pkg/annotation"
+	"github.com/cilium/cilium/pkg/controller"
+	"github.com/cilium/cilium/pkg/logging/logfields"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 )
 
-// K8sClient is a wrapper around kubernetes.Interface.
-type K8sClient struct {
-	// kubernetes.Interface is the object through which interactions with
-	// Kubernetes are performed.
-	kubernetes.Interface
+type nodeAnnotation = map[string]string
 
-	// ctrlMgr is the manager of controllers for this K8sClient.
-	ctrlMgr *controller.Manager
-}
+func prepareNodeAnnotation(nd nodeTypes.Node, encryptKey uint8) nodeAnnotation {
+	annotationMap := map[string]fmt.Stringer{
+		annotation.V4CIDRName:     nd.IPv4AllocCIDR,
+		annotation.V6CIDRName:     nd.IPv6AllocCIDR,
+		annotation.V4HealthName:   nd.IPv4HealthIP,
+		annotation.V6HealthName:   nd.IPv6HealthIP,
+		annotation.V4IngressName:  nd.IPv4IngressIP,
+		annotation.V6IngressName:  nd.IPv6IngressIP,
+		annotation.CiliumHostIP:   nd.GetCiliumInternalIP(false),
+		annotation.CiliumHostIPv6: nd.GetCiliumInternalIP(true),
+	}
 
-// K8sCiliumClient is a wrapper around clientset.Interface.
-type K8sCiliumClient struct {
-	clientset.Interface
-}
-
-// K8sAPIExtensionsClient is a wrapper around clientset.Interface.
-type K8sAPIExtensionsClient struct {
-	apiextclientset.Interface
-}
-
-func updateNodeAnnotation(c kubernetes.Interface, nodeName string, encryptKey uint8, v4CIDR, v6CIDR *cidr.CIDR, v4HealthIP, v6HealthIP, v4CiliumHostIP, v6CiliumHostIP net.IP) error {
 	annotations := map[string]string{}
-
-	if v4CIDR != nil {
-		annotations[annotation.V4CIDRName] = v4CIDR.String()
+	for k, v := range annotationMap {
+		if !reflect.ValueOf(v).IsNil() {
+			annotations[k] = v.String()
+		}
 	}
-	if v6CIDR != nil {
-		annotations[annotation.V6CIDRName] = v6CIDR.String()
-	}
-
-	if v4HealthIP != nil {
-		annotations[annotation.V4HealthName] = v4HealthIP.String()
-	}
-	if v6HealthIP != nil {
-		annotations[annotation.V6HealthName] = v6HealthIP.String()
-	}
-
-	if v4CiliumHostIP != nil {
-		annotations[annotation.CiliumHostIP] = v4CiliumHostIP.String()
-	}
-
-	if v6CiliumHostIP != nil {
-		annotations[annotation.CiliumHostIPv6] = v6CiliumHostIP.String()
-	}
-
 	if encryptKey != 0 {
 		annotations[annotation.CiliumEncryptionKey] = strconv.FormatUint(uint64(encryptKey), 10)
 	}
+	return annotations
+}
 
-	if len(annotations) == 0 {
+func updateNodeAnnotation(c kubernetes.Interface, nodeName string, annotation nodeAnnotation) error {
+	if len(annotation) == 0 {
 		return nil
 	}
 
-	raw, err := json.Marshal(annotations)
+	raw, err := json.Marshal(annotation)
 	if err != nil {
 		return err
 	}
 	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":%s}}`, raw))
 
-	_, err = c.CoreV1().Nodes().Patch(context.TODO(), nodeName, types.StrategicMergePatchType, patch, v1.PatchOptions{})
+	_, err = c.CoreV1().Nodes().Patch(context.TODO(), nodeName, types.StrategicMergePatchType, patch, metav1.PatchOptions{}, "status")
 
 	return err
 }
@@ -91,23 +68,25 @@ func updateNodeAnnotation(c kubernetes.Interface, nodeName string, encryptKey ui
 // AnnotateNode writes v4 and v6 CIDRs and health IPs in the given k8s node name.
 // In case of failure while updating the node, this function while spawn a go
 // routine to retry the node update indefinitely.
-func (k8sCli K8sClient) AnnotateNode(nodeName string, encryptKey uint8, v4CIDR, v6CIDR *cidr.CIDR, v4HealthIP, v6HealthIP, v4CiliumHostIP, v6CiliumHostIP net.IP) error {
+func AnnotateNode(cs kubernetes.Interface, nodeName string, nd nodeTypes.Node, encryptKey uint8) (nodeAnnotation, error) {
 	scopedLog := log.WithFields(logrus.Fields{
 		logfields.NodeName:       nodeName,
-		logfields.V4Prefix:       v4CIDR,
-		logfields.V6Prefix:       v6CIDR,
-		logfields.V4HealthIP:     v4HealthIP,
-		logfields.V6HealthIP:     v6HealthIP,
-		logfields.V4CiliumHostIP: v4CiliumHostIP,
-		logfields.V6CiliumHostIP: v6CiliumHostIP,
+		logfields.V4Prefix:       nd.IPv4AllocCIDR,
+		logfields.V6Prefix:       nd.IPv6AllocCIDR,
+		logfields.V4HealthIP:     nd.IPv4HealthIP,
+		logfields.V6HealthIP:     nd.IPv6HealthIP,
+		logfields.V4IngressIP:    nd.IPv4IngressIP,
+		logfields.V6IngressIP:    nd.IPv6IngressIP,
+		logfields.V4CiliumHostIP: nd.GetCiliumInternalIP(false),
+		logfields.V6CiliumHostIP: nd.GetCiliumInternalIP(true),
 		logfields.Key:            encryptKey,
 	})
 	scopedLog.Debug("Updating node annotations with node CIDRs")
-
+	annotation := prepareNodeAnnotation(nd, encryptKey)
 	controller.NewManager().UpdateController("update-k8s-node-annotations",
 		controller.ControllerParams{
 			DoFunc: func(_ context.Context) error {
-				err := updateNodeAnnotation(k8sCli, nodeName, encryptKey, v4CIDR, v6CIDR, v4HealthIP, v6HealthIP, v4CiliumHostIP, v6CiliumHostIP)
+				err := updateNodeAnnotation(cs, nodeName, annotation)
 				if err != nil {
 					scopedLog.WithFields(logrus.Fields{}).WithError(err).Warn("Unable to patch node resource with annotation")
 				}
@@ -115,27 +94,31 @@ func (k8sCli K8sClient) AnnotateNode(nodeName string, encryptKey uint8, v4CIDR, 
 			},
 		})
 
-	return nil
+	return annotation, nil
 }
 
-// GetSecrets returns the secrets found in the given namespace and name.
-func (k8sCli K8sClient) GetSecrets(ctx context.Context, ns, name string) (map[string][]byte, error) {
-	if k8sCli.Interface == nil {
-		return nil, fmt.Errorf("GetSecrets: No k8s, cannot access k8s secrets")
+func prepareRemoveNodeAnnotationsPayload(annotation nodeAnnotation) ([]byte, error) {
+	deleteAnnotations := []JSONPatch{}
+
+	for key := range annotation {
+		deleteAnnotations = append(deleteAnnotations, JSONPatch{
+			OP:   "remove",
+			Path: "/metadata/annotations/" + encodeJsonElement(key),
+		})
 	}
 
-	result, err := k8sCli.CoreV1().Secrets(ns).Get(ctx, name, v1.GetOptions{})
+	return json.Marshal(deleteAnnotations)
+}
+
+func RemoveNodeAnnotations(c kubernetes.Interface, nodeName string, annotation nodeAnnotation) error {
+	patch, err := prepareRemoveNodeAnnotationsPayload(annotation)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return result.Data, nil
+	_, err = c.CoreV1().Nodes().Patch(context.TODO(), nodeName, k8sTypes.JSONPatchType, patch, metav1.PatchOptions{}, "status")
+	return err
 }
 
-// GetK8sNode returns the node with the given nodeName.
-func (k8sCli K8sClient) GetK8sNode(ctx context.Context, nodeName string) (*core_v1.Node, error) {
-	if k8sCli.Interface == nil {
-		return nil, fmt.Errorf("GetK8sNode: No k8s, cannot access k8s nodes")
-	}
-
-	return k8sCli.CoreV1().Nodes().Get(ctx, nodeName, v1.GetOptions{})
+func encodeJsonElement(element string) string {
+	return strings.Replace(element, "/", "~1", -1)
 }

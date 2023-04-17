@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
+
 // Copyright 2015 The Kubernetes Authors.
-// Copyright 2020-2021 Authors of Cilium
 
 package v1
 
@@ -36,6 +37,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&PodList{},
 		&Service{},
 		&ServiceList{},
+		&Secret{},
+		&SecretList{},
 		&Endpoints{},
 		&EndpointsList{},
 		&Node{},

@@ -1,22 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package api
 
 import (
 	"testing"
 
-	"github.com/cilium/cilium/pkg/policy/api/kafka"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/defaults"
+	"github.com/cilium/cilium/pkg/fqdn/re"
+	"github.com/cilium/cilium/pkg/policy/api/kafka"
 )
 
 // Hook up gocheck into the "go test" runner.
 func Test(t *testing.T) {
 	TestingT(t)
+}
+
+func (s *PolicyAPITestSuite) SetUpSuite(c *C) {
+	re.InitRegexCompileLRU(defaults.FQDNRegexCompileLRUSize)
 }
 
 type PolicyAPITestSuite struct{}
@@ -107,4 +110,29 @@ func (s *PolicyAPITestSuite) TestParseL4Proto(c *C) {
 
 	_, err = ParseL4Proto("foo2")
 	c.Assert(err, Not(IsNil))
+}
+
+func (s *PolicyAPITestSuite) TestResourceQualifiedName(c *C) {
+	var fullName, namespace, name, resource string
+
+	resource = "test-resource"
+	fullName = ResourceQualifiedName(namespace, name, resource)
+	c.Assert(fullName, Equals, "test-resource")
+
+	name = "test-name"
+	resource = "test-resource"
+	fullName = ResourceQualifiedName(namespace, name, resource)
+	c.Assert(fullName, Equals, "test-name/test-resource")
+
+	namespace = "test-namespace"
+	name = ""
+	resource = "test-resource"
+	fullName = ResourceQualifiedName(namespace, name, resource)
+	c.Assert(fullName, Equals, "test-namespace/test-resource")
+
+	namespace = "test-namespace"
+	name = "test-name"
+	resource = "test-resource"
+	fullName = ResourceQualifiedName(namespace, name, resource)
+	c.Assert(fullName, Equals, "test-namespace/test-name/test-resource")
 }

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package RuntimeTest
 
 import (
-	"github.com/cilium/cilium/pkg/logging"
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/logging"
 )
 
 var log = logging.DefaultLogger

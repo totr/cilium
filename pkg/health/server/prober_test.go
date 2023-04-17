@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package server
 
@@ -13,10 +10,10 @@ import (
 	"sort"
 	"testing"
 
+	"gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/checker"
-
-	"gopkg.in/check.v1"
 )
 
 func Test(t *testing.T) { check.TestingT(t) }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,18 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
+	"github.com/cilium/cilium/pkg/egressgateway"
 	"github.com/cilium/cilium/pkg/maps/egressmap"
-
-	"github.com/spf13/cobra"
 )
 
 const (
-	egressListUsage = "List egress policy entries.\n" + lpmWarningMessage
+	egressListUsage = "List egress policy entries."
 )
 
 type egressPolicy struct {
@@ -51,7 +53,7 @@ var bpfEgressListCmd = &cobra.Command{
 				SourceIP:  key.GetSourceIP().String(),
 				DestCIDR:  key.GetDestCIDR().String(),
 				EgressIP:  val.GetEgressIP().String(),
-				GatewayIP: val.GetGatewayIP().String(),
+				GatewayIP: mapGatewayIP(val.GetGatewayIP()),
 			})
 		}
 
@@ -59,19 +61,31 @@ var bpfEgressListCmd = &cobra.Command{
 			Fatalf("Error dumping contents of egress policy map: %s\n", err)
 		}
 
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(bpfEgressList); err != nil {
-				Fatalf("error getting output of map in JSON: %s\n", err)
+				Fatalf("error getting output of map in %s: %s\n", command.OutputOptionString(), err)
 			}
 			return
 		}
 
 		if len(bpfEgressList) == 0 {
-			fmt.Fprintf(os.Stderr, "No entries found.\n%v\n", lpmWarningMessage)
+			fmt.Fprintf(os.Stderr, "No entries found.\n")
 		} else {
 			printEgressList(bpfEgressList)
 		}
 	},
+}
+
+// This function attempt to translate gatewayIP to special values if they exist
+// or return the IP as a string otherwise.
+func mapGatewayIP(ip net.IP) string {
+	if ip.Equal(egressgateway.GatewayNotFoundIPv4) {
+		return "Not Found"
+	}
+	if ip.Equal(egressgateway.ExcludedCIDRIPv4) {
+		return "Excluded CIDR"
+	}
+	return ip.String()
 }
 
 func printEgressList(egressList []egressPolicy) {
@@ -87,5 +101,5 @@ func printEgressList(egressList []egressPolicy) {
 
 func init() {
 	bpfEgressCmd.AddCommand(bpfEgressListCmd)
-	command.AddJSONOutput(bpfEgressListCmd)
+	command.AddOutputOption(bpfEgressListCmd)
 }

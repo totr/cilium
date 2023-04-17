@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package fake
 
 import (
 	"testing"
 
-	"github.com/cilium/cilium/pkg/datapath"
-	nodeTypes "github.com/cilium/cilium/pkg/node/types"
-
 	"gopkg.in/check.v1"
+
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 )
 
 func Test(t *testing.T) {

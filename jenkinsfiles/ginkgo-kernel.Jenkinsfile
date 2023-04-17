@@ -54,21 +54,21 @@ pipeline {
         }
         stage('Set programmatic env vars') {
             steps {
-                // retrieve k8s and kernel versions from gh comment, then from job parameter, default to 1.23 for k8s, 419 for kernel
+                // retrieve k8s and kernel versions from gh comment, then from job parameter, default to 1.26 for k8s, 419 for kernel
                 script {
                     flags = env.ghprbCommentBody?.replace("\\", "")
                     env.K8S_VERSION = sh script: '''
                         if [ "${ghprbCommentBody}" != "" ]; then
-                            python ${TESTDIR}/get-gh-comment-info.py ''' + flags + ''' --retrieve="k8s_version" | \
-                            sed "s/^$/${JobK8sVersion:-1.23}/" | \
+                            python3 ${TESTDIR}/get-gh-comment-info.py ''' + flags + ''' --retrieve="k8s_version" | \
+                            sed "s/^$/${JobK8sVersion:-1.26}/" | \
                             sed 's/^"//' | sed 's/"$//' | \
                             xargs echo -n
                         else
-                            echo -n ${JobK8sVersion:-1.23}
+                            echo -n ${JobK8sVersion:-1.26}
                         fi''', returnStdout: true
                     env.KERNEL = sh script: '''
                         if [ "${ghprbCommentBody}" != "" ]; then
-                            python ${TESTDIR}/get-gh-comment-info.py ''' + flags + ''' --retrieve="kernel_version" | \
+                            python3 ${TESTDIR}/get-gh-comment-info.py ''' + flags + ''' --retrieve="kernel_version" | \
                             sed "s/^$/${JobKernelVersion:-419}/" | \
                             sed 's/^"//' | sed 's/"$//' | \
                             xargs echo -n
@@ -77,7 +77,7 @@ pipeline {
                         fi''', returnStdout: true
                     env.FOCUS = sh script: '''
                         if [ "${ghprbCommentBody}" != "" ]; then
-                            python ${TESTDIR}/get-gh-comment-info.py ''' + flags + ''' --retrieve="focus" | \
+                            python3 ${TESTDIR}/get-gh-comment-info.py ''' + flags + ''' --retrieve="focus" | \
                             sed "s/^$/K8s/" | \
                             sed "s/Runtime.*/NoTests/" | \
                             sed 's/^"//' | sed 's/"$//' | \
@@ -85,6 +85,8 @@ pipeline {
                         else
                             echo -n "K8s"
                         fi''', returnStdout: true
+
+                    env.IMAGE_REGISTRY = sh script: 'echo -n ${JobImageRegistry:-quay.io/cilium}', returnStdout: true
 
                     if (env.ghprbActualCommit?.trim()) {
                         env.DOCKER_TAG = env.ghprbActualCommit
@@ -95,7 +97,7 @@ pipeline {
                         env.DOCKER_TAG = env.DOCKER_TAG + "-race"
                         env.RACE = 1
                         env.LOCKDEBUG = 1
-                        env.BASE_IMAGE = "quay.io/cilium/cilium-runtime:e6c79547ddb491d2d92d3a82b2d84d5ca6ca0db5@sha256:415af38f8caeac5cd5fafe5d5b645b42744ee032c7b85c768cd57f28ffe86df9"
+                        env.BASE_IMAGE = "quay.io/cilium/cilium-runtime:fe3fe058796057d2a089fac72a6a7afdf6b31435@sha256:d3f15d63ba73529963a3e9b5b2ff737f5638fc7a33819ac5380e72f2af7b4642"
                     }
                 }
             }
@@ -123,7 +125,7 @@ pipeline {
             parallel {
                 stage ("Copy code and boot vms"){
                     options {
-                        timeout(time: 50, unit: 'MINUTES')
+                        timeout(time: 30, unit: 'MINUTES')
                     }
 
                     environment {
@@ -156,10 +158,8 @@ pipeline {
                     }
                     steps {
                         withCredentials([usernamePassword(credentialsId: 'CILIUM_BOT_DUMMY', usernameVariable: 'DOCKER_LOGIN', passwordVariable: 'DOCKER_PASSWORD')]) {
-                            retry(3) {
-                                dir("${TESTDIR}") {
-                                    sh 'CILIUM_REGISTRY="$(./print-node-ip.sh)" timeout 15m ./vagrant-ci-start.sh'
-                                }
+                            dir("${TESTDIR}") {
+                                sh 'CILIUM_REGISTRY="$(./print-node-ip.sh)" timeout 25m ./vagrant-ci-start.sh'
                             }
                         }
                     }
@@ -180,9 +180,9 @@ pipeline {
                     steps {
                         retry(25) {
                             sleep(time: 60)
-                            sh 'curl --silent -f -lSL "https://quay.io/api/v1/repository/cilium/cilium-ci/tag/${DOCKER_TAG}/images"'
-                            sh 'curl --silent -f -lSL "https://quay.io/api/v1/repository/cilium/operator-generic-ci/tag/${DOCKER_TAG}/images"'
-                            sh 'curl --silent -f -lSL "https://quay.io/api/v1/repository/cilium/hubble-relay-ci/tag/${DOCKER_TAG}/images"'
+                            sh 'docker manifest inspect ${IMAGE_REGISTRY}/cilium-ci:${DOCKER_TAG} &> /dev/null'
+                            sh 'docker manifest inspect ${IMAGE_REGISTRY}/operator-generic-ci:${DOCKER_TAG} &> /dev/null'
+                            sh 'docker manifest inspect ${IMAGE_REGISTRY}/hubble-relay-ci:${DOCKER_TAG} &> /dev/null'
                         }
                     }
                     post {
@@ -229,11 +229,11 @@ pipeline {
                     returnStdout: true,
                     script: 'if [ "${KERNEL}" = "net-next" ]; then echo -n "0"; else echo -n ""; fi'
                     )}"""
-                CILIUM_IMAGE = "quay.io/cilium/cilium-ci"
+                CILIUM_IMAGE = "${IMAGE_REGISTRY}/cilium-ci"
                 CILIUM_TAG = "${DOCKER_TAG}"
-                CILIUM_OPERATOR_IMAGE= "quay.io/cilium/operator"
+                CILIUM_OPERATOR_IMAGE= "${IMAGE_REGISTRY}/operator"
                 CILIUM_OPERATOR_TAG = "${DOCKER_TAG}"
-                HUBBLE_RELAY_IMAGE= "quay.io/cilium/hubble-relay-ci"
+                HUBBLE_RELAY_IMAGE= "${IMAGE_REGISTRY}/hubble-relay-ci"
                 HUBBLE_RELAY_TAG = "${DOCKER_TAG}"
             }
             steps {
@@ -246,7 +246,7 @@ pipeline {
                     sh 'cd ${TESTDIR}; ./archive_test_results.sh || true'
                     sh 'cd ${TESTDIR}/..; mv *.zip ${WORKSPACE} || true'
                     sh 'cd ${TESTDIR}; mv *.xml ${WORKSPACE}/${PROJ_PATH}/test || true'
-                    sh 'cd ${TESTDIR}; vagrant destroy -f || true'
+                    sh 'cd ${TESTDIR}; ./vagrant_cleanup.sh || true'
                     archiveArtifacts artifacts: '*.zip'
                     junit testDataPublishers: [[$class: 'AttachmentPublisher']], testResults: 'src/github.com/cilium/cilium/test/*.xml'
                 }

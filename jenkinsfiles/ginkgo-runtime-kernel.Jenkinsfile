@@ -34,7 +34,7 @@ pipeline {
             )}"""
         BASE_IMAGE="""${sh(
                 returnStdout: true,
-                script: 'if [ "${run_with_race_detection}" = "" ]; then echo -n "scratch"; else echo -n "quay.io/cilium/cilium-runtime:e6c79547ddb491d2d92d3a82b2d84d5ca6ca0db5@sha256:415af38f8caeac5cd5fafe5d5b645b42744ee032c7b85c768cd57f28ffe86df9"; fi'
+                script: 'if [ "${run_with_race_detection}" = "" ]; then echo -n "scratch"; else echo -n "quay.io/cilium/cilium-runtime:fe3fe058796057d2a089fac72a6a7afdf6b31435@sha256:d3f15d63ba73529963a3e9b5b2ff737f5638fc7a33819ac5380e72f2af7b4642"; fi'
             )}"""
     }
 
@@ -96,7 +96,7 @@ pipeline {
         }
         stage ("Copy code and boot vms"){
             options {
-                timeout(time: 30, unit: 'MINUTES')
+                timeout(time: 50, unit: 'MINUTES')
             }
 
             environment {
@@ -110,11 +110,9 @@ pipeline {
                 sh 'cp -a ${WORKSPACE}/${PROJ_PATH} ${GOPATH}/${PROJ_PATH}'
                 withCredentials([usernamePassword(credentialsId: 'CILIUM_BOT_DUMMY', usernameVariable: 'DOCKER_LOGIN', passwordVariable: 'DOCKER_PASSWORD')]) {
                     retry(3) {
-                        timeout(time: 30, unit: 'MINUTES'){
-                            dir("${TESTDIR}") {
-                                sh 'vagrant destroy runtime --force'
-                                sh 'KERNEL=$(python get-gh-comment-info.py "${ghprbCommentBody}" --retrieve=kernel_version | sed "s/^$/${DEFAULT_KERNEL}/") vagrant up runtime --provision'
-                            }
+                        dir("${TESTDIR}") {
+                            sh 'vagrant destroy runtime --force'
+                            sh 'KERNEL=$(python3 get-gh-comment-info.py "${ghprbCommentBody}" --retrieve=kernel_version | sed "s/^$/${DEFAULT_KERNEL}/") vagrant up runtime --provision'
                         }
                     }
                 }
@@ -138,7 +136,7 @@ pipeline {
                 TESTDIR="${GOPATH}/${PROJ_PATH}/test"
             }
             steps {
-                sh 'cd ${TESTDIR}; ginkgo --focus="$(python get-gh-comment-info.py "${ghprbCommentBody}" | sed "s/^$/Runtime/" | sed "s/K8s.*/NoTests/")" --tags=integration_tests -v --failFast=${FAILFAST} -- -cilium.provision=false -cilium.timeout=${GINKGO_TIMEOUT} -cilium.runQuarantined=${RUN_QUARANTINED}'
+                sh 'cd ${TESTDIR}; ginkgo --focus="$(python3 get-gh-comment-info.py "${ghprbCommentBody}" | sed "s/^$/Runtime/" | sed "s/K8s.*/NoTests/")" --tags=integration_tests -v --failFast=${FAILFAST} -- -cilium.provision=false -cilium.timeout=${GINKGO_TIMEOUT} -cilium.runQuarantined=${RUN_QUARANTINED}'
             }
             post {
                 always {
@@ -146,7 +144,7 @@ pipeline {
                     sh 'cd ${TESTDIR}; ./archive_test_results_eks.sh || true'
                     sh 'cd ${TESTDIR}/..; mv *.zip ${WORKSPACE} || true'
                     sh 'cd ${TESTDIR}; mv *.xml ${WORKSPACE}/${PROJ_PATH}/test || true'
-                    sh 'cd ${TESTDIR}; vagrant destroy -f || true'
+                    sh 'cd ${TESTDIR}; ./vagrant_cleanup.sh || true'
                     archiveArtifacts artifacts: '*.zip'
                     junit testDataPublishers: [[$class: 'AttachmentPublisher']], testResults: 'src/github.com/cilium/cilium/test/*.xml'
                 }

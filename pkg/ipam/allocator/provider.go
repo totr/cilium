@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package allocator
 
@@ -22,6 +22,6 @@ type AllocatorProvider interface {
 type NodeEventHandler interface {
 	Create(resource *v2.CiliumNode) bool
 	Update(resource *v2.CiliumNode) bool
-	Delete(nodeName string)
+	Delete(resource *v2.CiliumNode)
 	Resync(context.Context, time.Time)
 }

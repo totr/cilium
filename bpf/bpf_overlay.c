@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2016-2020 Authors of Cilium */
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* Copyright Authors of Cilium */
 
 #include <bpf/ctx/skb.h>
 #include <bpf/api.h>
@@ -19,6 +19,10 @@
  */
 #define SKIP_ICMPV6_ECHO_HANDLING
 
+/* Controls the inclusion of the CILIUM_CALL_SRV6 section in the object file.
+ */
+#define SKIP_SRV6_HANDLING
+
 #include "lib/tailcall.h"
 #include "lib/common.h"
 #include "lib/edt.h"
@@ -31,12 +35,20 @@
 #include "lib/drop.h"
 #include "lib/identity.h"
 #include "lib/nodeport.h"
+#include "lib/clustermesh.h"
+
+#ifdef ENABLE_VTEP
+#include "lib/arp.h"
+#include "lib/encap.h"
+#include "lib/eps.h"
+#endif /* ENABLE_VTEP */
 
 #ifdef ENABLE_IPV6
 static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 				       __u32 *identity)
 {
 	int ret, l3_off = ETH_HLEN, hdrlen;
+	struct remote_endpoint_info *info;
 	void *data_end, *data;
 	struct ipv6hdr *ip6;
 	struct bpf_tunnel_key key = {};
@@ -47,22 +59,26 @@ static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 	if (!revalidate_data_pull(ctx, &data, &data_end, &ip6))
 		return DROP_INVALID;
 #ifdef ENABLE_NODEPORT
-	if (!bpf_skip_nodeport(ctx)) {
+	if (!ctx_skip_nodeport(ctx)) {
 		ret = nodeport_lb6(ctx, *identity);
 		if (ret < 0)
 			return ret;
 	}
 #endif
-	ret = encap_remap_v6_host_address(ctx, false);
-	if (unlikely(ret < 0))
-		return ret;
 
 	if (!revalidate_data(ctx, &data, &data_end, &ip6))
 		return DROP_INVALID;
 
+	/* Lookup the source in the ipcache. After decryption this will be the
+	 * inner source IP to get the source security identity.
+	 */
+	info = ipcache_lookup6(&IPCACHE_MAP, (union v6addr *)&ip6->saddr,
+			       V6_CACHE_KEY_LEN, 0);
+
 	decrypted = ((ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_DECRYPT);
 	if (decrypted) {
-		*identity = key.tunnel_id = get_identity(ctx);
+		if (info)
+			*identity = key.tunnel_id = info->sec_label;
 	} else {
 		if (unlikely(ctx_get_tunnel_key(ctx, &key, sizeof(key), 0) < 0))
 			return DROP_NO_TUNNEL_KEY;
@@ -74,6 +90,13 @@ static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 		 */
 		if (*identity == HOST_ID)
 			return DROP_INVALID_IDENTITY;
+
+		/* Maybe overwrite the REMOTE_NODE_ID with
+		 * KUBE_APISERVER_NODE_ID to support upgrade. After v1.12,
+		 * this should be removed.
+		 */
+		if (info && identity_is_remote_node(*identity))
+			*identity = info->sec_label;
 	}
 
 	cilium_dbg(ctx, DBG_DECAP, key.tunnel_id, key.tunnel_label);
@@ -91,7 +114,7 @@ static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 
 		/* Decrypt "key" is determined by SPI */
 		ctx->mark = MARK_MAGIC_DECRYPT;
-		set_identity_mark(ctx, *identity);
+
 		/* To IPSec stack on cilium_vxlan we are going to pass
 		 * this up the stack but eth_type_trans has already labeled
 		 * this as an OTHERHOST type packet. To avoid being dropped
@@ -99,6 +122,11 @@ static __always_inline int handle_ipv6(struct __ctx_buff *ctx,
 		 * packet.
 		 */
 		ctx_change_type(ctx, PACKET_HOST);
+
+		send_trace_notify(ctx, TRACE_TO_STACK, *identity, 0, 0,
+				  ctx->ingress_ifindex, TRACE_REASON_ENCRYPTED,
+				  TRACE_PAYLOAD_LEN);
+
 		return CTX_ACT_OK;
 	}
 	ctx->mark = 0;
@@ -117,12 +145,12 @@ not_esp:
 			goto to_host;
 
 		nexthdr = ip6->nexthdr;
-		hdrlen = ipv6_hdrlen(ctx, l3_off, &nexthdr);
+		hdrlen = ipv6_hdrlen(ctx, &nexthdr);
 		if (hdrlen < 0)
 			return hdrlen;
 
 		return ipv6_local_delivery(ctx, l3_off, *identity, ep,
-					   METRIC_INGRESS, false);
+					   METRIC_INGRESS, false, false);
 	}
 
 	/* A packet entering the node from the tunnel and not going to a local
@@ -147,7 +175,7 @@ to_host:
 #endif
 }
 
-__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV6_FROM_LXC)
+__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV6_FROM_OVERLAY)
 int tail_handle_ipv6(struct __ctx_buff *ctx)
 {
 	__u32 src_identity = 0;
@@ -161,8 +189,101 @@ int tail_handle_ipv6(struct __ctx_buff *ctx)
 #endif /* ENABLE_IPV6 */
 
 #ifdef ENABLE_IPV4
+static __always_inline int ipv4_host_delivery(struct __ctx_buff *ctx, struct iphdr *ip4)
+{
+#ifdef HOST_IFINDEX
+	if (1) {
+		union macaddr host_mac = HOST_IFINDEX_MAC;
+		union macaddr router_mac = NODE_MAC;
+		int ret;
+
+		ret = ipv4_l3(ctx, ETH_HLEN, (__u8 *)&router_mac.addr,
+			      (__u8 *)&host_mac.addr, ip4);
+		if (ret != CTX_ACT_OK)
+			return ret;
+
+		cilium_dbg_capture(ctx, DBG_CAPTURE_DELIVERY, HOST_IFINDEX);
+		return ctx_redirect(ctx, HOST_IFINDEX, 0);
+	}
+#else
+	return CTX_ACT_OK;
+#endif
+}
+
+#if defined(ENABLE_CLUSTER_AWARE_ADDRESSING) && defined(ENABLE_INTER_CLUSTER_SNAT)
+static __always_inline int handle_inter_cluster_revsnat(struct __ctx_buff *ctx, __u32 *src_identity)
+{
+	int ret;
+	struct iphdr *ip4;
+	__u32 cluster_id = 0;
+	void *data_end, *data;
+	struct endpoint_info *ep;
+	__u32 identity = ctx_load_meta(ctx, CB_SRC_LABEL);
+	__u32 cluster_id_from_identity =
+		extract_cluster_id_from_identity(identity);
+	const struct ipv4_nat_target target = {
+	       .min_port = NODEPORT_PORT_MIN_NAT,
+	       .max_port = NODEPORT_PORT_MAX_NAT,
+	       .cluster_id = cluster_id_from_identity,
+	};
+
+	ctx_store_meta(ctx, CB_SRC_LABEL, 0);
+
+	*src_identity = identity;
+
+	ret = snat_v4_rev_nat(ctx, &target);
+	if (ret != NAT_PUNT_TO_STACK && ret != DROP_NAT_NO_MAPPING) {
+		if (IS_ERR(ret))
+			return ret;
+
+		/*
+		 * RevSNAT succeeded. Identify the remote host using
+		 * cluster_id in the rest of the datapath logic.
+		 */
+		cluster_id = cluster_id_from_identity;
+	}
+
+	/* Theoretically, we only need to revalidate data after we
+	 * perform revSNAT. However, we observed the mysterious
+	 * verifier error in the kernel 4.19 that when we only do
+	 * revalidate after the revSNAT, verifier detects an error
+	 * for the subsequent read for ip4 pointer. To avoid that,
+	 * we always revalidate data here.
+	 */
+	if (!revalidate_data(ctx, &data, &data_end, &ip4))
+		return DROP_INVALID;
+
+	ep = lookup_ip4_endpoint(ip4);
+	if (ep) {
+		/* We don't support inter-cluster SNAT from host */
+		if (ep->flags & ENDPOINT_F_HOST)
+			return ipv4_host_delivery(ctx, ip4);
+
+		return ipv4_local_delivery(ctx, ETH_HLEN, identity, ip4, ep,
+					   METRIC_INGRESS, false, false, true,
+					   cluster_id);
+	}
+
+	return DROP_UNROUTABLE;
+}
+
+__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV4_INTER_CLUSTER_REVSNAT)
+int tail_handle_inter_cluster_revsnat(struct __ctx_buff *ctx)
+{
+	int ret;
+	__u32 src_identity;
+
+	ret = handle_inter_cluster_revsnat(ctx, &src_identity);
+	if (IS_ERR(ret))
+		return send_drop_notify_error(ctx, src_identity, ret,
+					      CTX_ACT_DROP, METRIC_INGRESS);
+	return ret;
+}
+#endif
+
 static __always_inline int handle_ipv4(struct __ctx_buff *ctx, __u32 *identity)
 {
+	struct remote_endpoint_info *info;
 	void *data_end, *data;
 	struct iphdr *ip4;
 	struct endpoint_info *ep;
@@ -183,7 +304,7 @@ static __always_inline int handle_ipv4(struct __ctx_buff *ctx, __u32 *identity)
 #endif
 
 #ifdef ENABLE_NODEPORT
-	if (!bpf_skip_nodeport(ctx)) {
+	if (!ctx_skip_nodeport(ctx)) {
 		int ret = nodeport_lb4(ctx, *identity);
 
 		if (ret < 0)
@@ -193,10 +314,16 @@ static __always_inline int handle_ipv4(struct __ctx_buff *ctx, __u32 *identity)
 	if (!revalidate_data(ctx, &data, &data_end, &ip4))
 		return DROP_INVALID;
 
+	/* Lookup the source in the ipcache. After decryption this will be the
+	 * inner source IP to get the source security identity.
+	 */
+	info = ipcache_lookup4(&IPCACHE_MAP, ip4->saddr, V4_CACHE_KEY_LEN, 0);
+
 	decrypted = ((ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_DECRYPT);
 	/* If packets are decrypted the key has already been pushed into metadata. */
 	if (decrypted) {
-		*identity = key.tunnel_id = get_identity(ctx);
+		if (info)
+			*identity = key.tunnel_id = info->sec_label;
 	} else {
 		if (unlikely(ctx_get_tunnel_key(ctx, &key, sizeof(key), 0) < 0))
 			return DROP_NO_TUNNEL_KEY;
@@ -204,6 +331,46 @@ static __always_inline int handle_ipv4(struct __ctx_buff *ctx, __u32 *identity)
 
 		if (*identity == HOST_ID)
 			return DROP_INVALID_IDENTITY;
+#ifdef ENABLE_VTEP
+		{
+			struct vtep_key vkey = {};
+			struct vtep_value *vtep;
+
+			vkey.vtep_ip = ip4->saddr & VTEP_MASK;
+			vtep = map_lookup_elem(&VTEP_MAP, &vkey);
+			if (!vtep)
+				goto skip_vtep;
+			if (vtep->tunnel_endpoint) {
+				if (*identity != WORLD_ID)
+					return DROP_INVALID_VNI;
+			}
+		}
+skip_vtep:
+#endif
+
+#if defined(ENABLE_CLUSTER_AWARE_ADDRESSING) && defined(ENABLE_INTER_CLUSTER_SNAT)
+		{
+			__u32 cluster_id_from_identity =
+				extract_cluster_id_from_identity(*identity);
+
+			/* When we see inter-cluster communication and if
+			 * the destination is IPV4_INTER_CLUSTER_SNAT, try
+			 * to perform revSNAT. We tailcall from here since
+			 * we saw the complexity issue when we added this
+			 * logic in-line.
+			 */
+			if (cluster_id_from_identity != 0 &&
+			    cluster_id_from_identity != CLUSTER_ID &&
+			    ip4->daddr == IPV4_INTER_CLUSTER_SNAT) {
+				ctx_store_meta(ctx, CB_SRC_LABEL, *identity);
+				ep_tail_call(ctx, CILIUM_CALL_IPV4_INTER_CLUSTER_REVSNAT);
+				return DROP_MISSED_TAIL_CALL;
+			}
+		}
+#endif
+		/* See comment at equivalent code in handle_ipv6() */
+		if (info && identity_is_remote_node(*identity))
+			*identity = info->sec_label;
 	}
 
 	cilium_dbg(ctx, DBG_DECAP, key.tunnel_id, key.tunnel_label);
@@ -220,7 +387,7 @@ static __always_inline int handle_ipv4(struct __ctx_buff *ctx, __u32 *identity)
 		}
 
 		ctx->mark = MARK_MAGIC_DECRYPT;
-		set_identity_mark(ctx, *identity);
+
 		/* To IPSec stack on cilium_vxlan we are going to pass
 		 * this up the stack but eth_type_trans has already labeled
 		 * this as an OTHERHOST type packet. To avoid being dropped
@@ -228,6 +395,11 @@ static __always_inline int handle_ipv4(struct __ctx_buff *ctx, __u32 *identity)
 		 * packet.
 		 */
 		ctx_change_type(ctx, PACKET_HOST);
+
+		send_trace_notify(ctx, TRACE_TO_STACK, *identity, 0, 0,
+				  ctx->ingress_ifindex, TRACE_REASON_ENCRYPTED,
+				  TRACE_PAYLOAD_LEN);
+
 		return CTX_ACT_OK;
 	}
 	ctx->mark = 0;
@@ -244,33 +416,18 @@ not_esp:
 			goto to_host;
 
 		return ipv4_local_delivery(ctx, ETH_HLEN, *identity, ip4, ep,
-					   METRIC_INGRESS, false);
+					   METRIC_INGRESS, false, false, true,
+					   0);
 	}
 
 	/* A packet entering the node from the tunnel and not going to a local
 	 * endpoint has to be going to the local host.
 	 */
 to_host:
-#ifdef HOST_IFINDEX
-	if (1) {
-		union macaddr host_mac = HOST_IFINDEX_MAC;
-		union macaddr router_mac = NODE_MAC;
-		int ret;
-
-		ret = ipv4_l3(ctx, ETH_HLEN, (__u8 *)&router_mac.addr,
-			      (__u8 *)&host_mac.addr, ip4);
-		if (ret != CTX_ACT_OK)
-			return ret;
-
-		cilium_dbg_capture(ctx, DBG_CAPTURE_DELIVERY, HOST_IFINDEX);
-		return ctx_redirect(ctx, HOST_IFINDEX, 0);
-	}
-#else
-	return CTX_ACT_OK;
-#endif
+	return ipv4_host_delivery(ctx, ip4);
 }
 
-__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV4_FROM_LXC)
+__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV4_FROM_OVERLAY)
 int tail_handle_ipv4(struct __ctx_buff *ctx)
 {
 	__u32 src_identity = 0;
@@ -281,19 +438,103 @@ int tail_handle_ipv4(struct __ctx_buff *ctx)
 					      CTX_ACT_DROP, METRIC_INGRESS);
 	return ret;
 }
+
+#ifdef ENABLE_VTEP
+/*
+ * ARP responder for ARP requests from VTEP
+ * Respond to remote VTEP endpoint with cilium_vxlan MAC
+ */
+__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_ARP)
+int tail_handle_arp(struct __ctx_buff *ctx)
+{
+	union macaddr mac = NODE_MAC;
+	union macaddr smac;
+	struct trace_ctx trace = {
+		.reason = TRACE_REASON_CT_REPLY,
+		.monitor = TRACE_PAYLOAD_LEN,
+	};
+	__be32 sip;
+	__be32 tip;
+	int ret;
+	struct bpf_tunnel_key key = {};
+	struct vtep_key vkey = {};
+	struct vtep_value *info;
+
+	if (unlikely(ctx_get_tunnel_key(ctx, &key, sizeof(key), 0) < 0))
+		return send_drop_notify_error(ctx, 0, DROP_NO_TUNNEL_KEY, CTX_ACT_DROP,
+										METRIC_INGRESS);
+
+	if (!arp_validate(ctx, &mac, &smac, &sip, &tip) || !__lookup_ip4_endpoint(tip))
+		goto pass_to_stack;
+	vkey.vtep_ip = sip & VTEP_MASK;
+	info = map_lookup_elem(&VTEP_MAP, &vkey);
+	if (!info)
+		goto pass_to_stack;
+
+	ret = arp_prepare_response(ctx, &mac, tip, &smac, sip);
+	if (unlikely(ret != 0))
+		return send_drop_notify_error(ctx, 0, ret, CTX_ACT_DROP, METRIC_EGRESS);
+	if (info->tunnel_endpoint)
+		return __encap_and_redirect_with_nodeid(ctx,
+							info->tunnel_endpoint,
+							LOCAL_NODE_ID,
+							WORLD_ID,
+							WORLD_ID,
+							&trace);
+
+	return send_drop_notify_error(ctx, 0, DROP_UNKNOWN_L3, CTX_ACT_DROP, METRIC_EGRESS);
+
+pass_to_stack:
+	send_trace_notify(ctx, TRACE_TO_STACK, 0, 0, 0, ctx->ingress_ifindex,
+			  trace.reason, trace.monitor);
+	return CTX_ACT_OK;
+}
+#endif /* ENABLE_VTEP */
+
 #endif /* ENABLE_IPV4 */
+
+#ifdef ENABLE_IPSEC
+static __always_inline bool is_esp(struct __ctx_buff *ctx, __u16 proto)
+{
+	void *data, *data_end;
+	__u8 protocol = 0;
+	struct ipv6hdr *ip6 __maybe_unused;
+	struct iphdr *ip4 __maybe_unused;
+
+	switch (proto) {
+#ifdef ENABLE_IPV6
+	case bpf_htons(ETH_P_IPV6):
+		if (!revalidate_data_pull(ctx, &data, &data_end, &ip6))
+			return false;
+		protocol = ip6->nexthdr;
+		break;
+#endif
+#ifdef ENABLE_IPV4
+	case bpf_htons(ETH_P_IP):
+		if (!revalidate_data_pull(ctx, &data, &data_end, &ip4))
+			return false;
+		protocol = ip4->protocol;
+		break;
+#endif
+	default:
+		return false;
+	}
+
+	return protocol == IPPROTO_ESP;
+}
+#endif /* ENABLE_IPSEC */
 
 /* Attached to the ingress of cilium_vxlan/cilium_geneve to execute on packets
  * entering the node via the tunnel.
  */
 __section("from-overlay")
-int from_overlay(struct __ctx_buff *ctx)
+int cil_from_overlay(struct __ctx_buff *ctx)
 {
 	__u16 proto;
 	int ret;
 
 	bpf_clear_meta(ctx);
-	bpf_skip_nodeport_clear(ctx);
+	ctx_skip_nodeport_clear(ctx);
 
 	if (!validate_ethertype(ctx, &proto)) {
 		/* Pass unknown traffic to the stack */
@@ -301,22 +542,51 @@ int from_overlay(struct __ctx_buff *ctx)
 		goto out;
 	}
 
+/* We need to handle following possible packets come to this program
+ *
+ * 1. ESP packets coming from overlay (encrypted and not marked)
+ * 2. Non-ESP packets coming from overlay (plain and not marked)
+ * 3. Non-ESP packets coming from stack re-inserted by xfrm (plain
+ *    and marked with MARK_MAGIC_DECRYPT and has an identity as
+ *    well, IPSec mode only)
+ *
+ * 1. will be traced with TRACE_REASON_ENCRYPTED
+ * 2. will be traced without TRACE_REASON_ENCRYPTED
+ * 3. will be traced without TRACE_REASON_ENCRYPTED, and with identity
+ *
+ * Note that 1. contains the ESP packets someone else generated.
+ * In that case, we trace it as "encrypted", but it doesn't mean
+ * "encrypted by Cilium".
+ *
+ * When IPSec is disabled, we won't use TRACE_REASON_ENCRYPTED even
+ * if the packets are ESP, because it doesn't matter for the
+ * non-IPSec mode.
+ */
 #ifdef ENABLE_IPSEC
-	if ((ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_DECRYPT) {
-		send_trace_notify(ctx, TRACE_FROM_OVERLAY, get_identity(ctx), 0, 0,
-				  ctx->ingress_ifindex,
-				  TRACE_REASON_ENCRYPTED, TRACE_PAYLOAD_LEN);
-	} else
+	if (is_esp(ctx, proto))
+		send_trace_notify(ctx, TRACE_FROM_OVERLAY, 0, 0, 0,
+				  ctx->ingress_ifindex, TRACE_REASON_ENCRYPTED,
+				  TRACE_PAYLOAD_LEN);
+	else
 #endif
 	{
-		send_trace_notify(ctx, TRACE_FROM_OVERLAY, 0, 0, 0,
-				  ctx->ingress_ifindex, 0, TRACE_PAYLOAD_LEN);
+		enum trace_point obs_point = TRACE_FROM_OVERLAY;
+
+		/* Non-ESP packet marked with MARK_MAGIC_DECRYPT is a packet
+		 * re-inserted from the stack.
+		 */
+		if ((ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_DECRYPT)
+			obs_point = TRACE_FROM_STACK;
+
+		send_trace_notify(ctx, obs_point, 0, 0, 0,
+				  ctx->ingress_ifindex,
+				  TRACE_REASON_UNKNOWN, TRACE_PAYLOAD_LEN);
 	}
 
 	switch (proto) {
 	case bpf_htons(ETH_P_IPV6):
 #ifdef ENABLE_IPV6
-		ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_LXC);
+		ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_OVERLAY);
 		ret = DROP_MISSED_TAIL_CALL;
 #else
 		ret = DROP_UNKNOWN_L3;
@@ -325,12 +595,19 @@ int from_overlay(struct __ctx_buff *ctx)
 
 	case bpf_htons(ETH_P_IP):
 #ifdef ENABLE_IPV4
-		ep_tail_call(ctx, CILIUM_CALL_IPV4_FROM_LXC);
+		ep_tail_call(ctx, CILIUM_CALL_IPV4_FROM_OVERLAY);
 		ret = DROP_MISSED_TAIL_CALL;
 #else
 		ret = DROP_UNKNOWN_L3;
 #endif
 		break;
+
+#ifdef ENABLE_VTEP
+	case bpf_htons(ETH_P_ARP):
+		ep_tail_call(ctx, CILIUM_CALL_ARP);
+		ret = DROP_MISSED_TAIL_CALL;
+		break;
+#endif
 
 	default:
 		/* Pass unknown traffic to the stack */
@@ -346,13 +623,10 @@ out:
  * leaving the node via the tunnel.
  */
 __section("to-overlay")
-int to_overlay(struct __ctx_buff *ctx)
+int cil_to_overlay(struct __ctx_buff *ctx)
 {
-	int ret;
-
-	ret = encap_remap_v6_host_address(ctx, true);
-	if (unlikely(ret < 0))
-		goto out;
+	int ret = TC_ACT_OK;
+	__u32 cluster_id __maybe_unused = 0;
 
 #ifdef ENABLE_BANDWIDTH_MANAGER
 	/* In tunneling mode, we should do this as close as possible to the
@@ -371,16 +645,24 @@ int to_overlay(struct __ctx_buff *ctx)
 #endif
 
 #ifdef ENABLE_NODEPORT
-	if ((ctx->mark & MARK_MAGIC_SNAT_DONE) == MARK_MAGIC_SNAT_DONE) {
+	if (ctx_snat_done(ctx)) {
 		ret = CTX_ACT_OK;
 		goto out;
 	}
-	ret = handle_nat_fwd(ctx);
+
+	/* This must be after above ctx_snat_done, since the MARK_MAGIC_CLUSTER_ID
+	 * is a super set of the MARK_MAGIC_SNAT_DONE. They will never be used together,
+	 * but SNAT check should always take presedence.
+	 */
+#ifdef ENABLE_CLUSTER_AWARE_ADDRESSING
+	cluster_id = ctx_get_cluster_id_mark(ctx);
 #endif
+	ret = handle_nat_fwd(ctx, cluster_id);
 out:
+#endif
 	if (IS_ERR(ret))
 		return send_drop_notify_error(ctx, 0, ret, CTX_ACT_DROP, METRIC_EGRESS);
 	return ret;
 }
 
-BPF_LICENSE("GPL");
+BPF_LICENSE("Dual BSD/GPL");

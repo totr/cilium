@@ -150,7 +150,7 @@ pkg/controller
 pkg/datapath
   Abstraction layer for datapath interaction
 
-pkg/default
+pkg/defaults
   All default values
 
 pkg/elf
@@ -170,6 +170,9 @@ pkg/fqdn
 
 pkg/health
   Network connectivity health checking
+
+pkg/hive
+  A dependency injection framework for modular composition of applications
 
 pkg/identity
   Representation of a security identity for workloads

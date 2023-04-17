@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,20 +11,20 @@ import (
 	"os"
 	"sync"
 
+	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/ipam"
-	"github.com/cilium/cilium/pkg/k8s"
-	"github.com/cilium/cilium/pkg/k8s/watchers"
+	"github.com/cilium/cilium/pkg/k8s/watchers/resources"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	"github.com/cilium/cilium/pkg/maps/lxcmap"
+	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type endpointRestoreState struct {
@@ -64,11 +64,15 @@ func (d *Daemon) validateEndpoint(ep *endpoint.Endpoint) (valid bool, err error)
 		return false, nil
 	}
 
-	if ep.K8sPodName != "" && ep.K8sNamespace != "" && k8s.IsEnabled() {
-		d.k8sWatcher.WaitForCacheSync(watchers.K8sAPIGroupPodV1Core)
-		_, err = d.k8sWatcher.GetCachedPod(ep.K8sNamespace, ep.K8sPodName)
+	if ep.K8sPodName != "" && ep.K8sNamespace != "" && d.clientset.IsEnabled() {
+		d.k8sWatcher.WaitForCacheSync(resources.K8sAPIGroupPodV1Core)
+		pod, err := d.k8sWatcher.GetCachedPod(ep.K8sNamespace, ep.K8sPodName)
 		if err != nil && k8serrors.IsNotFound(err) {
 			return false, fmt.Errorf("Kubernetes pod %s/%s does not exist", ep.K8sNamespace, ep.K8sPodName)
+		} else if err == nil && pod.Spec.NodeName != nodeTypes.GetName() {
+			// if flag `option.Config.K8sEventHandover` is false and CiliumEndpointCRD is disabled,
+			// `GetCachedPod` may return endpoint has moved to another node.
+			return false, fmt.Errorf("Kubernetes pod %s/%s is not owned by this agent", ep.K8sNamespace, ep.K8sPodName)
 		}
 
 		// Initialize the endpoint's event queue because the following call to
@@ -100,13 +104,14 @@ func (d *Daemon) validateEndpoint(ep *endpoint.Endpoint) (valid bool, err error)
 // ready. In summary:
 //
 // 1. fetchOldEndpoints(): Unmarshal old endpoints
-//    - used to start DNS proxy with restored DNS history and rules
-// 2. restoreOldEndpoints(): validate endpoint data after k8s has been configured
-//    - IP allocation
-//    - some endpoints may be rejected and not regnerated in the 3rd step
-// 3. regenerateRestoredEndpoints(): Regenerate the restored endpoints
-//    - recreate endpoint's policy, as well as bpf programs and maps
+//   - used to start DNS proxy with restored DNS history and rules
 //
+// 2. restoreOldEndpoints(): validate endpoint data after k8s has been configured
+//   - IP allocation
+//   - some endpoints may be rejected and not regnerated in the 3rd step
+//
+// 3. regenerateRestoredEndpoints(): Regenerate the restored endpoints
+//   - recreate endpoint's policy, as well as bpf programs and maps
 func (d *Daemon) fetchOldEndpoints(dir string) (*endpointRestoreState, error) {
 	state := &endpointRestoreState{
 		possible: nil,
@@ -127,7 +132,7 @@ func (d *Daemon) fetchOldEndpoints(dir string) (*endpointRestoreState, error) {
 	}
 	eptsID := endpoint.FilterEPDir(dirFiles)
 
-	state.possible = endpoint.ReadEPsFromDirNames(d.ctx, d, d, dir, eptsID)
+	state.possible = endpoint.ReadEPsFromDirNames(d.ctx, d, d, d.ipcache, dir, eptsID)
 
 	if len(state.possible) == 0 {
 		log.Info("No old endpoints found.")
@@ -169,7 +174,7 @@ func (d *Daemon) restoreOldEndpoints(state *endpointRestoreState, clean bool) er
 
 	for _, ep := range state.possible {
 		scopedLog := log.WithField(logfields.EndpointID, ep.ID)
-		if k8s.IsEnabled() {
+		if d.clientset.IsEnabled() {
 			scopedLog = scopedLog.WithField("k8sPodName", ep.GetK8sNamespaceAndPodName())
 		}
 
@@ -210,8 +215,8 @@ func (d *Daemon) restoreOldEndpoints(state *endpointRestoreState, clean bool) er
 		state.restored = append(state.restored, ep)
 
 		if existingEndpoints != nil {
-			delete(existingEndpoints, ep.IPv4.String())
-			delete(existingEndpoints, ep.IPv6.String())
+			delete(existingEndpoints, ep.GetIPv4Address())
+			delete(existingEndpoints, ep.GetIPv6Address())
 		}
 	}
 
@@ -221,8 +226,8 @@ func (d *Daemon) restoreOldEndpoints(state *endpointRestoreState, clean bool) er
 	}).Info("Endpoints restored")
 
 	if existingEndpoints != nil {
-		for hostIP, info := range existingEndpoints {
-			if ip := net.ParseIP(hostIP); !info.IsHost() && ip != nil {
+		for epIP, info := range existingEndpoints {
+			if ip := net.ParseIP(epIP); !info.IsHost() && ip != nil {
 				if err := lxcmap.DeleteEntry(ip); err != nil {
 					log.WithError(err).Warn("Unable to delete obsolete endpoint from BPF map")
 				} else {
@@ -279,6 +284,7 @@ func (d *Daemon) regenerateRestoredEndpoints(state *endpointRestoreState) (resto
 		log.WithField(logfields.EndpointID, ep.ID).Info("Successfully restored endpoint. Scheduling regeneration")
 		go func(ep *endpoint.Endpoint, epRegenerated chan<- bool) {
 			if err := ep.RegenerateAfterRestore(); err != nil {
+				log.WithField(logfields.EndpointID, ep.ID).WithError(err).Debug("error regenerating during restore")
 				epRegenerated <- false
 				return
 			}
@@ -332,21 +338,21 @@ func (d *Daemon) regenerateRestoredEndpoints(state *endpointRestoreState) (resto
 func (d *Daemon) allocateIPsLocked(ep *endpoint.Endpoint) error {
 	var err error
 
-	if option.Config.EnableIPv6 && ep.IPv6 != nil {
-		_, err = d.ipam.AllocateIPWithoutSyncUpstream(ep.IPv6.IP(), ep.HumanStringLocked()+" [restored]")
+	if option.Config.EnableIPv6 && ep.IPv6.IsValid() {
+		_, err = d.ipam.AllocateIPWithoutSyncUpstream(ep.IPv6.AsSlice(), ep.HumanStringLocked()+" [restored]", ipam.PoolDefault)
 		if err != nil {
-			return fmt.Errorf("unable to reallocate %s IPv6 address: %w", ep.IPv6.IP(), err)
+			return fmt.Errorf("unable to reallocate %s IPv6 address: %w", ep.IPv6, err)
 		}
 
 		defer func() {
 			if err != nil {
-				d.ipam.ReleaseIP(ep.IPv6.IP())
+				d.ipam.ReleaseIP(ep.IPv6.AsSlice(), ipam.PoolDefault)
 			}
 		}()
 	}
 
-	if option.Config.EnableIPv4 && ep.IPv4 != nil {
-		_, err = d.ipam.AllocateIPWithoutSyncUpstream(ep.IPv4.IP(), ep.HumanStringLocked()+"[restored]")
+	if option.Config.EnableIPv4 && ep.IPv4.IsValid() {
+		_, err = d.ipam.AllocateIPWithoutSyncUpstream(ep.IPv4.AsSlice(), ep.HumanStringLocked()+" [restored]", ipam.PoolDefault)
 		switch {
 		// We only check for BypassIPAllocUponRestore for IPv4 because we
 		// assume that this flag is only turned on for IPv4-only IPAM modes
@@ -356,10 +362,10 @@ func (d *Daemon) allocateIPsLocked(ep *endpoint.Endpoint) error {
 		// https://github.com/cilium/cilium/pull/15453. Other errors are not
 		// bypassed.
 		case err != nil &&
-			errors.Is(err, ipam.NewIPNotAvailableInPoolError(ep.IPv4.IP())) &&
+			errors.Is(err, ipam.NewIPNotAvailableInPoolError(ep.IPv4.AsSlice())) &&
 			option.Config.BypassIPAvailabilityUponRestore:
 			log.WithError(err).WithFields(logrus.Fields{
-				logfields.IPAddr:     ep.IPv4.IP(),
+				logfields.IPAddr:     ep.IPv4,
 				logfields.EndpointID: ep.ID,
 				logfields.K8sPodName: ep.GetK8sNamespaceAndPodName(),
 			}).Warn(
@@ -369,7 +375,7 @@ func (d *Daemon) allocateIPsLocked(ep *endpoint.Endpoint) error {
 					"a fresh IP from the pool.",
 			)
 		case err != nil:
-			return fmt.Errorf("unable to reallocate %s IPv4 address: %w", ep.IPv4.IP(), err)
+			return fmt.Errorf("unable to reallocate %s IPv4 address: %w", ep.IPv4, err)
 		}
 	}
 
@@ -390,14 +396,15 @@ func (d *Daemon) initRestore(restoredEndpoints *endpointRestoreState) chan struc
 		}()
 
 		go func() {
-			if k8s.IsEnabled() {
+			if d.clientset.IsEnabled() {
 				// Also wait for all cluster mesh to be synchronized with the
 				// datapath before proceeding.
 				if d.clustermesh != nil {
-					err := d.clustermesh.ClustersSynced(context.Background())
+					err := d.clustermesh.ClustersSynced(d.ctx)
 					if err != nil {
 						log.WithError(err).Fatal("timeout while waiting for all clusters to be locally synchronized")
 					}
+					log.Debug("all clusters have been correctly synchronized locally")
 				}
 				// Start controller which removes any leftover Kubernetes
 				// services that may have been deleted while Cilium was not

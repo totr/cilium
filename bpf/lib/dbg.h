@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __LIB_DBG__
 #define __LIB_DBG__
@@ -119,6 +119,10 @@ enum {
 	DBG_SK_ASSIGN,		/* arg1: result
 				 * arg2: unuseds
 				 */
+	DBG_L7_LB,		/* arg1: saddr (last 4 bytes for IPv6)
+				 * arg2: daddr (last 4 bytes for IPv6)
+				 * arg3: proxy port (in host byte order)
+				 */
 };
 
 /* Capture types */
@@ -216,7 +220,7 @@ static __always_inline void cilium_dbg_capture2(struct __ctx_buff *ctx, __u8 typ
 	__u64 cap_len = min_t(__u64, TRACE_PAYLOAD_LEN, ctx_len);
 	struct debug_capture_msg msg = {
 		__notify_common_hdr(CILIUM_NOTIFY_DBG_CAPTURE, type),
-		__notify_pktcap_hdr(ctx_len, cap_len),
+		__notify_pktcap_hdr(ctx_len, (__u16)cap_len),
 		.arg1	= arg1,
 		.arg2	= arg2,
 	};

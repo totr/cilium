@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package kvstore
 
@@ -29,7 +28,7 @@ func (e *ConsulSuite) SetUpTest(c *C) {
 }
 
 func (e *ConsulSuite) TearDownTest(c *C) {
-	Client().Close()
+	Client().Close(context.TODO())
 }
 
 var handler http.HandlerFunc

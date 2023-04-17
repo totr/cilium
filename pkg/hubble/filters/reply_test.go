@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Hubble
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Hubble
 
 package filters
 
@@ -10,10 +7,11 @@ import (
 	"context"
 	"testing"
 
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func Test_filterByReplyField(t *testing.T) {

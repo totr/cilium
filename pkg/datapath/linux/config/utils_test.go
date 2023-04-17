@@ -1,26 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package config
 
 import (
-	"testing"
-
 	. "gopkg.in/check.v1"
 )
-
-type ConfigSuite struct{}
-
-var (
-	_ = Suite(&ConfigSuite{})
-)
-
-func Test(t *testing.T) {
-	TestingT(t)
-}
 
 type formatTestCase struct {
 	input  []byte

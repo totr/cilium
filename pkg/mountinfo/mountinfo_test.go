@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build linux && !privileged_tests
-// +build linux,!privileged_tests
+//go:build linux
 
 package mountinfo
 
@@ -10,10 +9,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	"golang.org/x/sys/unix"
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 const (

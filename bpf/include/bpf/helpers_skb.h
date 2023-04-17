@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __BPF_HELPERS_SKB__
 #define __BPF_HELPERS_SKB__
@@ -48,6 +48,10 @@ static int BPF_FUNC(skb_get_tunnel_key, struct __sk_buff *skb,
 static int BPF_FUNC(skb_set_tunnel_key, struct __sk_buff *skb,
 		    const struct bpf_tunnel_key *from, __u32 size,
 		    __u32 flags);
+static int BPF_FUNC(skb_get_tunnel_opt, struct __sk_buff *skb,
+		    void *opt, __u32 size);
+static int BPF_FUNC(skb_set_tunnel_opt, struct __sk_buff *skb,
+		    void *opt, __u32 size);
 
 /* Events for user space */
 static int BPF_FUNC_REMAP(skb_event_output, struct __sk_buff *skb, void *map,

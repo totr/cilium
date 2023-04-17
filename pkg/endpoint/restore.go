@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
@@ -8,15 +8,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/cilium/cilium/api/v1/models"
-	"github.com/cilium/cilium/pkg/addressing"
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
@@ -30,8 +34,6 @@ import (
 	"github.com/cilium/cilium/pkg/mac"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/sirupsen/logrus"
 )
 
 // getCiliumVersionString returns the first line containing ciliumCHeaderPrefix.
@@ -44,7 +46,7 @@ func getCiliumVersionString(epCHeaderFilePath string) ([]byte, error) {
 	defer f.Close()
 	for {
 		b, err := br.ReadBytes('\n')
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return []byte{}, nil
 		}
 		if err != nil {
@@ -67,7 +69,9 @@ func hasHostObjectFile(epDir string) bool {
 
 // ReadEPsFromDirNames returns a mapping of endpoint ID to endpoint of endpoints
 // from a list of directory names that can possible contain an endpoint.
-func ReadEPsFromDirNames(ctx context.Context, owner regeneration.Owner, policyGetter policyRepoGetter, basePath string, eptsDirNames []string) map[uint16]*Endpoint {
+func ReadEPsFromDirNames(ctx context.Context, owner regeneration.Owner, policyGetter policyRepoGetter,
+	namedPortsGetter namedPortsGetter, basePath string, eptsDirNames []string) map[uint16]*Endpoint {
+
 	completeEPDirNames, incompleteEPDirNames := partitionEPDirNamesByRestoreStatus(eptsDirNames)
 
 	if len(incompleteEPDirNames) > 0 {
@@ -76,7 +80,7 @@ func ReadEPsFromDirNames(ctx context.Context, owner regeneration.Owner, policyGe
 				logfields.EndpointID: epDirName,
 			})
 			fullDirName := filepath.Join(basePath, epDirName)
-			scopedLog.Warning(fmt.Sprintf("Found incomplete restore directory %s. Removing it...", fullDirName))
+			scopedLog.Info(fmt.Sprintf("Found incomplete restore directory %s. Removing it...", fullDirName))
 			if err := os.RemoveAll(epDirName); err != nil {
 				scopedLog.WithError(err).Warn(fmt.Sprintf("Error while removing directory %s. Ignoring it...", fullDirName))
 			}
@@ -114,22 +118,6 @@ func ReadEPsFromDirNames(ctx context.Context, owner regeneration.Owner, policyGe
 			continue
 		}
 
-		// This symlink is only needed when upgrading from a pre-1.11 Cilium
-		// and we can thus remove it once Cilium v1.11 is the oldest supported
-		// version.
-		oldCHeaderFile := filepath.Join(epDir, oldCHeaderFileName)
-		if _, err := os.Stat(oldCHeaderFile); err != nil {
-			if !os.IsNotExist(err) {
-				scopedLog.WithError(err).Warn("Failed to check if old C header exists. Ignoring endpoint")
-				continue
-			}
-			if err := os.Symlink(common.CHeaderFileName, oldCHeaderFile); err != nil {
-				scopedLog.WithError(err).Warn("Failed to create symlink for C header. Ignoring endpoint")
-				continue
-			}
-			scopedLog.Debug("Created symlink for endpoint C header file")
-		}
-
 		scopedLog.Debug("Found endpoint C header file")
 
 		bEp, err := getCiliumVersionString(cHeaderFile)
@@ -137,7 +125,7 @@ func ReadEPsFromDirNames(ctx context.Context, owner regeneration.Owner, policyGe
 			scopedLog.WithError(err).Warn("Unable to read the C header file")
 			continue
 		}
-		ep, err := parseEndpoint(ctx, owner, policyGetter, bEp)
+		ep, err := parseEndpoint(ctx, owner, policyGetter, namedPortsGetter, bEp)
 		if err != nil {
 			scopedLog.WithError(err).Warn("Unable to parse the C header file")
 			continue
@@ -212,13 +200,12 @@ func (e *Endpoint) RegenerateAfterRestore() error {
 		RegenerationLevel: regeneration.RegenerateWithDatapathRewrite,
 	}
 	if buildSuccess := <-e.Regenerate(regenerationMetadata); !buildSuccess {
-		scopedLog.Warn("Failed while regenerating endpoint")
 		return fmt.Errorf("failed while regenerating endpoint")
 	}
 
 	// NOTE: unconditionalRLock is used here because it's used only for logging an already restored endpoint
 	e.unconditionalRLock()
-	scopedLog.WithField(logfields.IPAddr, []string{e.IPv4.String(), e.IPv6.String()}).Info("Restored endpoint")
+	scopedLog.WithField(logfields.IPAddr, []string{e.GetIPv4Address(), e.GetIPv6Address()}).Info("Restored endpoint")
 	e.runlock()
 	return nil
 }
@@ -239,7 +226,7 @@ func (e *Endpoint) restoreIdentity() error {
 	// requests.
 	controllerName := fmt.Sprintf("restoring-ep-identity (%v)", e.ID)
 	var (
-		identity          *identity.Identity
+		id                *identity.Identity
 		allocatedIdentity = make(chan struct{})
 	)
 	e.UpdateController(controllerName,
@@ -247,7 +234,7 @@ func (e *Endpoint) restoreIdentity() error {
 			DoFunc: func(ctx context.Context) (err error) {
 				allocateCtx, cancel := context.WithTimeout(ctx, option.Config.KVstoreConnectivityTimeout)
 				defer cancel()
-				identity, _, err = e.allocator.AllocateIdentity(allocateCtx, l, true)
+				id, _, err = e.allocator.AllocateIdentity(allocateCtx, l, true, identity.InvalidIdentity)
 				if err != nil {
 					return err
 				}
@@ -268,7 +255,7 @@ func (e *Endpoint) restoreIdentity() error {
 	// kvstore before doing any policy calculation for
 	// endpoints that don't have a fixed identity or are
 	// not well known.
-	if !identity.IsFixed() && !identity.IsWellKnown() {
+	if !id.IsFixed() && !id.IsWellKnown() {
 		// Getting the initial global identities while we are restoring should
 		// block the restoring of the endpoint.
 		// If the endpoint is removed, this controller will cancel the allocator
@@ -315,11 +302,11 @@ func (e *Endpoint) restoreIdentity() error {
 	e.setState(StateRestoring, "Synchronizing endpoint labels with KVStore")
 
 	if e.SecurityIdentity != nil {
-		if oldSecID := e.SecurityIdentity.ID; identity.ID != oldSecID {
+		if oldSecID := e.SecurityIdentity.ID; id.ID != oldSecID {
 			log.WithFields(logrus.Fields{
 				logfields.EndpointID:              e.ID,
 				logfields.IdentityLabels + ".old": oldSecID,
-				logfields.IdentityLabels + ".new": identity.ID,
+				logfields.IdentityLabels + ".new": id.ID,
 			}).Info("Security identity for endpoint is different from the security identity restored for the endpoint")
 
 			// The identity of the endpoint being
@@ -364,7 +351,7 @@ func (e *Endpoint) restoreIdentity() error {
 	// The identity of a freshly restored endpoint is incomplete due to some
 	// parts of the identity not being marshaled to JSON. Hence we must set
 	// the identity even if has not changed.
-	e.SetIdentity(identity, true)
+	e.SetIdentity(id, true)
 	e.unlock()
 
 	return nil
@@ -381,7 +368,6 @@ func (e *Endpoint) toSerializedEndpoint() *serializableEndpoint {
 		ContainerID:           e.containerID,
 		DockerNetworkID:       e.dockerNetworkID,
 		DockerEndpointID:      e.dockerEndpointID,
-		DatapathMapID:         e.datapathMapID,
 		IfName:                e.ifName,
 		IfIndex:               e.ifIndex,
 		OpLabels:              e.OpLabels,
@@ -397,12 +383,12 @@ func (e *Endpoint) toSerializedEndpoint() *serializableEndpoint {
 		K8sPodName:            e.K8sPodName,
 		K8sNamespace:          e.K8sNamespace,
 		DatapathConfiguration: e.DatapathConfiguration,
+		CiliumEndpointUID:     e.ciliumEndpointUID,
 	}
 }
 
 // serializableEndpoint contains the fields from an Endpoint which are needed to be
 // restored if cilium-agent restarts.
-//
 //
 // WARNING - STABLE API
 // This structure is written as JSON to StateDir/{ID}/ep_config.h to allow to
@@ -410,7 +396,6 @@ func (e *Endpoint) toSerializedEndpoint() *serializableEndpoint {
 // will read the file and re-create all endpoints with all fields which are not
 // marked as private to JSON marshal. Do NOT modify this structure in ways which
 // is not JSON forward compatible.
-//
 type serializableEndpoint struct {
 	// ID of the endpoint, unique in the scope of the node
 	ID uint16
@@ -430,9 +415,6 @@ type serializableEndpoint struct {
 	// libnetwork
 	DockerEndpointID string
 
-	// Corresponding BPF map identifier for tail call map of ipvlan datapath
-	DatapathMapID int
-
 	// ifName is the name of the host facing interface (veth pair) which
 	// connects into the endpoint
 	IfName string
@@ -451,10 +433,10 @@ type serializableEndpoint struct {
 	LXCMAC mac.MAC // Container MAC address.
 
 	// IPv6 is the IPv6 address of the endpoint
-	IPv6 addressing.CiliumIPv6
+	IPv6 netip.Addr
 
 	// IPv4 is the IPv4 address of the endpoint
-	IPv4 addressing.CiliumIPv4
+	IPv4 netip.Addr
 
 	// nodeMAC is the MAC of the node (agent). The MAC is different for every endpoint.
 	NodeMAC mac.MAC
@@ -488,6 +470,12 @@ type serializableEndpoint struct {
 	// plugin which performed the plumbing will enable certain datapath
 	// features according to the mode selected.
 	DatapathConfiguration models.EndpointDatapathConfiguration
+
+	// CiliumEndpointUID contains the unique identifier ref for the CiliumEndpoint
+	// that this Endpoint was managing.
+	// This is used to avoid overwriting/deleting ciliumendpoints that are managed
+	// by other endpoints.
+	CiliumEndpointUID types.UID
 }
 
 // UnmarshalJSON expects that the contents of `raw` are a serializableEndpoint,
@@ -498,7 +486,7 @@ func (ep *Endpoint) UnmarshalJSON(raw []byte) error {
 	restoredEp := &serializableEndpoint{
 		OpLabels:   labels.NewOpLabels(),
 		DNSHistory: fqdn.NewDNSCacheWithLimit(option.Config.ToFQDNsMinTTL, option.Config.ToFQDNsMaxIPsPerHost),
-		DNSZombies: fqdn.NewDNSZombieMappings(option.Config.ToFQDNsMaxDeferredConnectionDeletes),
+		DNSZombies: fqdn.NewDNSZombieMappings(option.Config.ToFQDNsMaxDeferredConnectionDeletes, option.Config.ToFQDNsMaxIPsPerHost),
 	}
 	if err := json.Unmarshal(raw, restoredEp); err != nil {
 		return fmt.Errorf("error unmarshaling serializableEndpoint from base64 representation: %s", err)
@@ -520,7 +508,6 @@ func (ep *Endpoint) fromSerializedEndpoint(r *serializableEndpoint) {
 	ep.containerID = r.ContainerID
 	ep.dockerNetworkID = r.DockerNetworkID
 	ep.dockerEndpointID = r.DockerEndpointID
-	ep.datapathMapID = r.DatapathMapID
 	ep.ifName = r.IfName
 	ep.ifIndex = r.IfIndex
 	ep.OpLabels = r.OpLabels
@@ -536,4 +523,5 @@ func (ep *Endpoint) fromSerializedEndpoint(r *serializableEndpoint) {
 	ep.K8sNamespace = r.K8sNamespace
 	ep.DatapathConfiguration = r.DatapathConfiguration
 	ep.Options = r.Options
+	ep.ciliumEndpointUID = r.CiliumEndpointUID
 }

@@ -13,19 +13,19 @@ cilium ip list [flags]
 ```
   -h, --help            help for list
   -n, --numeric         Print numeric identities
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
   -v, --verbose         Print all fields of ipcache
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium ip](../cilium_ip)	 - Manage IP addresses and associated information
+* [cilium ip](cilium_ip.md)	 - Manage IP addresses and associated information
 

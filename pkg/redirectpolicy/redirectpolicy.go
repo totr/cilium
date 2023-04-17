@@ -1,24 +1,15 @@
-//  Copyright 2020 Authors of Cilium
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package redirectpolicy
 
 import (
 	"fmt"
-	"net"
+
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/api/v1/models"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/k8s"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/labels"
@@ -26,8 +17,6 @@ import (
 	"github.com/cilium/cilium/pkg/loadbalancer"
 	lb "github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	"k8s.io/apimachinery/pkg/types"
 )
 
 type lrpConfigType = int
@@ -92,7 +81,7 @@ type backend struct {
 }
 
 func (be *backend) GetModel() *models.LRPBackend {
-	ip := be.IP.String()
+	ip := be.AddrCluster.String()
 	return &models.LRPBackend{
 		PodID: be.podID.String(),
 		BackendAddress: &models.BackendAddress{
@@ -118,7 +107,7 @@ func (feM *feMapping) GetModel() *models.FrontendMapping {
 	}
 	return &models.FrontendMapping{
 		FrontendAddress: &models.FrontendAddress{
-			IP:       feM.feAddr.IP.String(),
+			IP:       feM.feAddr.AddrCluster.String(),
 			Protocol: feM.feAddr.Protocol,
 			Port:     feM.feAddr.Port,
 		},
@@ -187,10 +176,9 @@ func getSanitizedLRPConfig(name, namespace string, uid types.UID, spec v2.Cilium
 			" matchers can not be specified")
 	case addrMatcher != nil:
 		// LRP specifies IP/port tuple config for traffic that needs to be redirected.
-		ip := net.ParseIP(addrMatcher.IP)
-		if ip == nil {
-			return nil, fmt.Errorf("invalid address matcher IP %v",
-				addrMatcher.IP)
+		addrCluster, err := cmtypes.ParseAddrCluster(addrMatcher.IP)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address matcher IP %v: %s", addrMatcher.IP, err)
 		}
 		if len(addrMatcher.ToPorts) > 1 {
 			// If there are multiple ports, then the ports must be named.
@@ -206,7 +194,7 @@ func getSanitizedLRPConfig(name, namespace string, uid types.UID, spec v2.Cilium
 				return nil, fmt.Errorf("invalid address matcher port %v", err)
 			}
 			// Set the scope to ScopeExternal as the externalTrafficPolicy is set to Cluster.
-			fe = loadbalancer.NewL3n4Addr(proto, ip, p, loadbalancer.ScopeExternal)
+			fe = loadbalancer.NewL3n4Addr(proto, addrCluster, p, loadbalancer.ScopeExternal)
 			feM := &feMapping{
 				feAddr: fe,
 				fePort: pName,
@@ -245,7 +233,7 @@ func getSanitizedLRPConfig(name, namespace string, uid types.UID, spec v2.Cilium
 			}
 			// Set the scope to ScopeExternal as the externalTrafficPolicy is set to Cluster.
 			// frontend ip will later be populated with the clusterIP of the service.
-			fe = loadbalancer.NewL3n4Addr(proto, net.IP{}, p, loadbalancer.ScopeExternal)
+			fe = loadbalancer.NewL3n4Addr(proto, cmtypes.AddrCluster{}, p, loadbalancer.ScopeExternal)
 			feM := &feMapping{
 				feAddr: fe,
 				fePort: pName,

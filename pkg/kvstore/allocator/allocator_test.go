@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package allocator
 
@@ -14,14 +13,14 @@ import (
 	"testing"
 	"time"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/allocator"
 	"github.com/cilium/cilium/pkg/idpool"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/rand"
 	"github.com/cilium/cilium/pkg/rate"
 	"github.com/cilium/cilium/pkg/testutils"
-
-	. "gopkg.in/check.v1"
 )
 
 const (
@@ -49,7 +48,7 @@ func (e *AllocatorEtcdSuite) SetUpTest(c *C) {
 
 func (e *AllocatorEtcdSuite) TearDownTest(c *C) {
 	kvstore.Client().DeletePrefix(context.TODO(), testPrefix)
-	kvstore.Client().Close()
+	kvstore.Client().Close(context.TODO())
 }
 
 type AllocatorConsulSuite struct {
@@ -65,10 +64,10 @@ func (e *AllocatorConsulSuite) SetUpTest(c *C) {
 
 func (e *AllocatorConsulSuite) TearDownTest(c *C) {
 	kvstore.Client().DeletePrefix(context.TODO(), testPrefix)
-	kvstore.Client().Close()
+	kvstore.Client().Close(context.TODO())
 }
 
-//FIXME: this should be named better, it implements pkg/allocator.Backend
+// FIXME: this should be named better, it implements pkg/allocator.Backend
 type TestAllocatorKey string
 
 func (t TestAllocatorKey) GetKey() string { return string(t) }
@@ -617,7 +616,7 @@ func (s *AllocatorSuite) TestRemoteCache(c *C) {
 	c.Assert(err, IsNil)
 	a2, err := allocator.NewAllocator(TestAllocatorKey(""), backend2, allocator.WithMax(idpool.ID(256)))
 	c.Assert(err, IsNil)
-	rc := a.WatchRemoteKVStore(a2)
+	rc := a.WatchRemoteKVStore("", a2)
 	c.Assert(rc, Not(IsNil))
 
 	// wait for remote cache to be populated

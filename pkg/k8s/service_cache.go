@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package k8s
 
 import (
 	"net"
 
-	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/davecgh/go-spew/spew"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/exp/slices"
+	core_v1 "k8s.io/api/core/v1"
+
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
+	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/ip"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_discovery_v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1"
@@ -16,10 +22,6 @@ import (
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 	serviceStore "github.com/cilium/cilium/pkg/service/store"
-	core_v1 "k8s.io/api/core/v1"
-
-	"github.com/davecgh/go-spew/spew"
-	"github.com/sirupsen/logrus"
 )
 
 // CacheAction is the type of action that was performed on the cache
@@ -32,9 +34,6 @@ const (
 	// DeleteService reflects that the service was deleted
 	DeleteService
 )
-
-// Used to implement the topology aware hints.
-const LabelTopologyZone = "topology.kubernetes.io/zone"
 
 // String returns the cache action as a string
 func (c CacheAction) String() string {
@@ -88,13 +87,15 @@ type ServiceCache struct {
 	// externalEndpoints is a list of additional service backends derived from source other than the local cluster
 	externalEndpoints map[ServiceID]externalEndpoints
 
-	nodeAddressing datapath.NodeAddressing
+	nodeAddressing types.NodeAddressing
 
 	selfNodeZoneLabel string
+
+	ServiceMutators []func(svc *slim_corev1.Service, svcInfo *Service)
 }
 
 // NewServiceCache returns a new ServiceCache
-func NewServiceCache(nodeAddressing datapath.NodeAddressing) ServiceCache {
+func NewServiceCache(nodeAddressing types.NodeAddressing) ServiceCache {
 	return ServiceCache{
 		services:          map[ServiceID]*Service{},
 		endpoints:         map[ServiceID]*EndpointSlices{},
@@ -121,7 +122,7 @@ func (s *ServiceCache) GetServiceIP(svcID ServiceID) *loadbalancer.L3n4Addr {
 	}
 
 	for _, port := range svc.Ports {
-		return loadbalancer.NewL3n4Addr(port.Protocol, feIP, port.Port,
+		return loadbalancer.NewL3n4Addr(port.Protocol, cmtypes.MustAddrClusterFromIP(feIP), port.Port,
 			loadbalancer.ScopeExternal)
 	}
 	return nil
@@ -156,7 +157,7 @@ func (s *ServiceCache) GetServiceAddrsWithType(svcID ServiceID,
 		addrs := make([]*loadbalancer.L3n4Addr, 0, len(svc.FrontendIPs))
 		for _, feIP := range svc.FrontendIPs {
 			if isValidServiceFrontendIP(feIP) {
-				addrs = append(addrs, loadbalancer.NewL3n4Addr(l4Addr.Protocol, feIP, l4Addr.Port, loadbalancer.ScopeExternal))
+				addrs = append(addrs, loadbalancer.NewL3n4Addr(l4Addr.Protocol, cmtypes.MustAddrClusterFromIP(feIP), l4Addr.Port, loadbalancer.ScopeExternal))
 			}
 		}
 
@@ -179,7 +180,7 @@ func (s *ServiceCache) GetEndpointsOfService(svcID ServiceID) *Endpoints {
 }
 
 // GetNodeAddressing returns the registered node addresses to this service cache.
-func (s *ServiceCache) GetNodeAddressing() datapath.NodeAddressing {
+func (s *ServiceCache) GetNodeAddressing() types.NodeAddressing {
 	return s.nodeAddressing
 }
 
@@ -191,6 +192,10 @@ func (s *ServiceCache) UpdateService(k8sSvc *slim_corev1.Service, swg *lock.Stop
 	svcID, newService := ParseService(k8sSvc, s.nodeAddressing)
 	if newService == nil {
 		return svcID
+	}
+
+	for _, mutator := range s.ServiceMutators {
+		mutator(k8sSvc, newService)
 	}
 
 	s.mutex.Lock()
@@ -406,9 +411,9 @@ func (s *ServiceCache) UniqueServiceFrontends() FrontendList {
 		for _, feIP := range svc.FrontendIPs {
 			for _, p := range svc.Ports {
 				address := loadbalancer.L3n4Addr{
-					IP:     feIP,
-					L4Addr: *p,
-					Scope:  loadbalancer.ScopeExternal,
+					AddrCluster: cmtypes.MustAddrClusterFromIP(feIP),
+					L4Addr:      *p,
+					Scope:       loadbalancer.ScopeExternal,
 				}
 				uniqueFrontends[address.StringWithProtocol()] = struct{}{}
 			}
@@ -439,7 +444,7 @@ func (s *ServiceCache) filterEndpoints(localEndpoints *Endpoints, svc *Service) 
 		return localEndpoints
 	}
 
-	if svc.TrafficPolicy == loadbalancer.SVCTrafficPolicyLocal {
+	if svc.ExtTrafficPolicy == loadbalancer.SVCTrafficPolicyLocal || svc.IntTrafficPolicy == loadbalancer.SVCTrafficPolicyLocal {
 		// According to https://kubernetes.io/docs/concepts/services-networking/topology-aware-hints/#constraints:
 		// """
 		// Topology Aware Hints are not used when either externalTrafficPolicy or
@@ -448,7 +453,7 @@ func (s *ServiceCache) filterEndpoints(localEndpoints *Endpoints, svc *Service) 
 		return localEndpoints
 	}
 
-	filteredEndpoints := &Endpoints{Backends: map[string]*Backend{}}
+	filteredEndpoints := &Endpoints{Backends: map[cmtypes.AddrCluster]*Backend{}}
 
 	for key, backend := range localEndpoints.Backends {
 		if len(backend.HintsForZones) == 0 {
@@ -478,7 +483,9 @@ func (s *ServiceCache) filterEndpoints(localEndpoints *Endpoints, svc *Service) 
 // returns a boolean that indicates whether the service is ready to be plumbed,
 // this is true if:
 // A local endpoints resource is present. Regardless whether the
-//    endpoints resource contains actual backends or not.
+//
+//	endpoints resource contains actual backends or not.
+//
 // OR Remote endpoints exist which correlate to the service.
 func (s *ServiceCache) correlateEndpoints(id ServiceID) (*Endpoints, bool) {
 	endpoints := newEndpoints()
@@ -491,12 +498,15 @@ func (s *ServiceCache) correlateEndpoints(id ServiceID) (*Endpoints, bool) {
 		localEndpoints = s.filterEndpoints(localEndpoints, svc)
 
 		for ip, e := range localEndpoints.Backends {
+			e.Preferred = svcFound && svc.IncludeExternal && svc.ServiceAffinity == serviceAffinityLocal
 			endpoints.Backends[ip] = e
 		}
 	}
 
+	var hasExternalEndpoints bool
 	if svcFound && svc.IncludeExternal {
-		externalEndpoints, hasExternalEndpoints := s.externalEndpoints[id]
+		externalEndpoints, ok := s.externalEndpoints[id]
+		hasExternalEndpoints = ok && len(externalEndpoints.endpoints) > 0
 		if hasExternalEndpoints {
 			// remote cluster endpoints already contain all Endpoints from all
 			// EndpointSlices so no need to search the endpoints of a particular
@@ -511,6 +521,7 @@ func (s *ServiceCache) correlateEndpoints(id ServiceID) (*Endpoints, bool) {
 							"cluster":              clusterName,
 						}).Warning("Conflicting service backend IP")
 					} else {
+						e.Preferred = svc.ServiceAffinity == serviceAffinityRemote
 						endpoints.Backends[ip] = e
 					}
 				}
@@ -519,9 +530,17 @@ func (s *ServiceCache) correlateEndpoints(id ServiceID) (*Endpoints, bool) {
 	}
 
 	// Report the service as ready if a local endpoints object exists or if
-	// external endpoints have have been identified
-	return endpoints, hasLocalEndpoints || len(endpoints.Backends) > 0
+	// external endpoints have been identified
+	return endpoints, hasLocalEndpoints || hasExternalEndpoints
 }
+
+// mergeExternalServiceOption is the type for the options to customize the behavior of external services merging.
+type mergeExternalServiceOption int
+
+const (
+	// optClusterAware enables the cluster aware handling for external services merging.
+	optClusterAware mergeExternalServiceOption = iota
+)
 
 // MergeExternalServiceUpdate merges a cluster service of a remote cluster into
 // the local service cache. The service endpoints are stored as external endpoints
@@ -538,9 +557,14 @@ func (s *ServiceCache) MergeExternalServiceUpdate(service *serviceStore.ClusterS
 	s.mergeServiceUpdateLocked(service, nil, swg)
 }
 
-func (s *ServiceCache) mergeServiceUpdateLocked(service *serviceStore.ClusterService, oldService *Service, swg *lock.StoppableWaitGroup) {
-	id := ServiceID{Name: service.Name, Namespace: service.Namespace}
+func (s *ServiceCache) mergeServiceUpdateLocked(service *serviceStore.ClusterService,
+	oldService *Service, swg *lock.StoppableWaitGroup, opts ...mergeExternalServiceOption) {
 	scopedLog := log.WithFields(logrus.Fields{logfields.ServiceName: service.String()})
+
+	id := ServiceID{Name: service.Name, Namespace: service.Namespace}
+	if slices.Contains(opts, optClusterAware) {
+		id.Cluster = service.Cluster
+	}
 
 	externalEndpoints, ok := s.externalEndpoints[id]
 	if !ok {
@@ -548,23 +572,28 @@ func (s *ServiceCache) mergeServiceUpdateLocked(service *serviceStore.ClusterSer
 		s.externalEndpoints[id] = externalEndpoints
 	}
 
-	scopedLog.Debugf("Updating backends to %+v", service.Backends)
-	backends := map[string]*Backend{}
-	for ipString, portConfig := range service.Backends {
-		backends[ipString] = &Backend{Ports: portConfig}
-	}
-	externalEndpoints.endpoints[service.Cluster] = &Endpoints{
-		Backends: backends,
+	// The cluster the service belongs to will match the current one when dealing with external
+	// workloads (and in that case all endpoints shall be always present), and not match in the
+	// cluster-mesh case (where remote endpoints shall be used only if it is shared).
+	if service.Cluster != option.Config.ClusterName && !service.Shared {
+		delete(externalEndpoints.endpoints, service.Cluster)
+	} else {
+		scopedLog.Debugf("Updating backends to %+v", service.Backends)
+		backends := map[cmtypes.AddrCluster]*Backend{}
+		for ipString, portConfig := range service.Backends {
+			backends[cmtypes.MustParseAddrCluster(ipString)] = &Backend{Ports: portConfig}
+		}
+		externalEndpoints.endpoints[service.Cluster] = &Endpoints{
+			Backends: backends,
+		}
 	}
 
 	svc, ok := s.services[id]
 
 	endpoints, serviceReady := s.correlateEndpoints(id)
 
-	// Only send event notification if service is shared and ready.
-	// External endpoints are still tracked but correlation will not happen
-	// until the service is marked as shared.
-	if ok && svc.Shared && serviceReady {
+	// Only send event notification if service is ready.
+	if ok && serviceReady {
 		swg.Add()
 		s.Events <- ServiceEvent{
 			Action:     UpdateService,
@@ -582,31 +611,45 @@ func (s *ServiceCache) mergeServiceUpdateLocked(service *serviceStore.ClusterSer
 // stored as external endpoints and are correlated on demand with local
 // services via correlateEndpoints().
 func (s *ServiceCache) MergeExternalServiceDelete(service *serviceStore.ClusterService, swg *lock.StoppableWaitGroup) {
-	scopedLog := log.WithFields(logrus.Fields{logfields.ServiceName: service.String()})
-	id := ServiceID{Name: service.Name, Namespace: service.Namespace}
-
 	// Ignore updates of own cluster
 	if service.Cluster == option.Config.ClusterName {
-		scopedLog.Debug("Not merging external service. Own cluster")
 		return
 	}
 
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	id := ServiceID{Cluster: service.Cluster, Name: service.Name, Namespace: service.Namespace}
+	var opts []mergeExternalServiceOption
+	if _, clusterAware := s.services[id]; clusterAware {
+		opts = append(opts, optClusterAware)
+	}
+
+	s.mergeExternalServiceDeleteLocked(service, swg, opts...)
+}
+
+func (s *ServiceCache) mergeExternalServiceDeleteLocked(service *serviceStore.ClusterService, swg *lock.StoppableWaitGroup, opts ...mergeExternalServiceOption) {
+	scopedLog := log.WithFields(logrus.Fields{logfields.ServiceName: service.String()})
+
+	id := ServiceID{Name: service.Name, Namespace: service.Namespace}
+	if slices.Contains(opts, optClusterAware) {
+		id.Cluster = service.Cluster
+	}
+
 	externalEndpoints, ok := s.externalEndpoints[id]
 	if ok {
 		scopedLog.Debug("Deleting external endpoints")
 
 		delete(externalEndpoints.endpoints, service.Cluster)
+		if len(externalEndpoints.endpoints) == 0 {
+			delete(s.externalEndpoints, id)
+		}
 
 		svc, ok := s.services[id]
 
 		endpoints, serviceReady := s.correlateEndpoints(id)
 
-		// Only send event notification if service is shared. External
-		// endpoints are still tracked but correlation will not happen
-		// until the service is marked as shared.
+		// Only send event notification if service is shared.
 		if ok && svc.Shared {
 			swg.Add()
 			event := ServiceEvent{
@@ -618,6 +661,7 @@ func (s *ServiceCache) MergeExternalServiceDelete(service *serviceStore.ClusterS
 			}
 
 			if !serviceReady {
+				delete(s.services, id)
 				event.Action = DeleteService
 			}
 
@@ -663,6 +707,9 @@ func (s *ServiceCache) MergeClusterServiceDelete(service *serviceStore.ClusterSe
 	if ok {
 		scopedLog.Debug("Deleting cluster endpoints")
 		delete(externalEndpoints.endpoints, service.Cluster)
+		if len(externalEndpoints.endpoints) == 0 {
+			delete(s.externalEndpoints, id)
+		}
 	}
 
 	svc, ok := s.services[id]
@@ -722,7 +769,7 @@ func (s *ServiceCache) updateSelfNodeLabels(labels map[string]string,
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	zone := labels[LabelTopologyZone]
+	zone := labels[core_v1.LabelTopologyZone]
 
 	if s.selfNodeZoneLabel == zone {
 		return

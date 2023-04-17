@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,14 +9,14 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/client/daemon"
 	"github.com/cilium/cilium/api/v1/models"
 	pkg "github.com/cilium/cilium/pkg/client"
 	"github.com/cilium/cilium/pkg/command"
 	healthPkg "github.com/cilium/cilium/pkg/health/client"
 	"github.com/cilium/cilium/pkg/health/defaults"
-
-	"github.com/spf13/cobra"
 )
 
 // statusCmd represents the daemon_status command
@@ -47,7 +47,7 @@ func init() {
 	statusCmd.Flags().BoolVar(&brief, "brief", false, "Only print a one-line status message")
 	statusCmd.Flags().BoolVar(&verbose, "verbose", false, "Equivalent to --all-addresses --all-controllers --all-nodes --all-redirects --all-clusters --all-health")
 	statusCmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "Sets the timeout to use when querying for health")
-	command.AddJSONOutput(statusCmd)
+	command.AddOutputOption(statusCmd)
 }
 
 func statusDaemon() {
@@ -76,7 +76,7 @@ func statusDaemon() {
 			fmt.Fprintf(os.Stderr, "%s\n", pkg.Hint(err))
 		}
 		os.Exit(1)
-	} else if command.OutputJSON() {
+	} else if command.OutputOption() {
 		if err := command.PrintOutput(resp.Payload); err != nil {
 			os.Exit(1)
 		}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cilium/cilium/pkg/command"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/pkg/command"
 )
 
 // policyGetCmd represents the policy_get command
@@ -19,7 +19,7 @@ var policyGetCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		if resp, err := client.PolicyGet(args); err != nil {
 			Fatalf("Cannot get policy: %s\n", err)
-		} else if command.OutputJSON() {
+		} else if command.OutputOption() {
 			if err := command.PrintOutput(resp); err != nil {
 				os.Exit(1)
 			}
@@ -31,5 +31,5 @@ var policyGetCmd = &cobra.Command{
 
 func init() {
 	policyCmd.AddCommand(policyGetCmd)
-	command.AddJSONOutput(policyGetCmd)
+	command.AddOutputOption(policyGetCmd)
 }

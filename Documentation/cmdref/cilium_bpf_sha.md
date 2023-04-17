@@ -13,14 +13,14 @@ Manage compiled BPF template objects
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf sha get](../cilium_bpf_sha_get)	 - Get datapath SHA header
-* [cilium bpf sha list](../cilium_bpf_sha_list)	 - List BPF template objects.
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf sha get](cilium_bpf_sha_get.md)	 - Get datapath SHA header
+* [cilium bpf sha list](cilium_bpf_sha_list.md)	 - List BPF template objects.
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package dnsproxy
 
@@ -9,28 +9,34 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/semaphore"
+	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/fqdn/matchpattern"
+	"github.com/cilium/cilium/pkg/fqdn/re"
 	"github.com/cilium/cilium/pkg/fqdn/restore"
 	"github.com/cilium/cilium/pkg/identity"
+	ippkg "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
-	"github.com/cilium/cilium/pkg/policy/api"
+	"github.com/cilium/cilium/pkg/proxy/accesslog"
 	"github.com/cilium/cilium/pkg/spanstat"
-
-	"github.com/golang/groupcache/lru"
-	"github.com/miekg/dns"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -92,17 +98,19 @@ type DNSProxy struct {
 	// parsing etc. for us.
 	UDPServer, TCPServer *dns.Server
 
-	// UDPClient, TCPClient are the miekg/dns client instances. Forwarded
-	// requests are made with these clients but are sent to the originally
-	// intended DNS server.
-	// Note: The DNS request ID is randomized but when seeing a lot of traffic we
-	// may still exhaust the 16-bit ID space for our (source IP, source Port) and
-	// this may cause DNS disruption. A client pool may be better.
-	UDPClient, TCPClient *dns.Client
-
 	// EnableDNSCompression allows the DNS proxy to compress responses to
 	// endpoints that are larger than 512 Bytes or the EDNS0 option, if present.
 	EnableDNSCompression bool
+
+	// ConcurrencyLimit limits parallel goroutines number that serve DNS
+	ConcurrencyLimit *semaphore.Weighted
+	// ConcurrencyGracePeriod is the grace period for waiting on
+	// ConcurrencyLimit before timing out
+	ConcurrencyGracePeriod time.Duration
+
+	// logLimiter limits log msgs that could be bursty and too verbose.
+	// Currently used when ConcurrencyLimit is set.
+	logLimiter logging.Limiter
 
 	// lookupTargetDNSServer extracts the originally intended target of a DNS
 	// query. It is always set to lookupTargetDNSServer in
@@ -114,7 +122,7 @@ type DNSProxy struct {
 	maxIPsPerRestoredDNSRule int
 
 	// this mutex protects variables below this point
-	lock.Mutex
+	lock.RWMutex
 
 	// usedServers is the set of DNS servers that have been allowed and used successfully.
 	// This is used to limit the number of IPs we store for restored DNS rules.
@@ -123,7 +131,6 @@ type DNSProxy struct {
 	// allowed tracks all allowed L7 DNS rules by endpointID, destination port,
 	// and L3 Selector. All must match for a query to be allowed.
 	//
-	// matchNames with no regexp wildcards are still compiled, internally.
 	// Note: Simple DNS names, e.g. bar.foo.com, will treat the "." as a literal.
 	allowed perEPAllow
 
@@ -132,6 +139,11 @@ type DNSProxy struct {
 	// a restart
 	restored perEPRestored
 
+	// cache is an internal structure to keep track of all the in use DNS rules. We do that
+	// so that we avoid storing multiple similar versions of the same rules, so that we can improve
+	// performance and reduce memory consumption when multiple endpoints or ports have similar rules.
+	cache regexCache
+
 	// mapping restored endpoint IP (both IPv4 and IPv6) to *Endpoint
 	restoredEPs restoredEPs
 
@@ -139,11 +151,20 @@ type DNSProxy struct {
 	// DNS request is invalid
 	rejectReply int32
 
-	// regexCompileLRU contains an LRU cache for the regex.Compile of rules.
-	// Keeping an LRU cache avoids excessive memory allocations when compiling
-	// regex strings via regex.Compile.
-	regexCompileLRU *lru.Cache
+	// UnbindAddress unbinds dns servers from socket in order to stop serving DNS traffic before proxy shutdown
+	unbindAddress func()
 }
+
+// regexCacheEntry is a lookup entry used to cache a compiled regex
+// and how many references it has
+type regexCacheEntry struct {
+	regex          *regexp.Regexp
+	referenceCount int
+}
+
+// regexCache is a reference counted cache used for reusing the compiled regex when multiple policies
+// have the same set of rules, or the same rule applies to multiple endpoints.
+type regexCache map[string]*regexCacheEntry
 
 // perEPAllow maps EndpointIDs to ports + selectors + rules
 type perEPAllow map[uint64]portToSelectorAllow
@@ -152,14 +173,31 @@ type perEPAllow map[uint64]portToSelectorAllow
 type portToSelectorAllow map[uint16]CachedSelectorREEntry
 
 // CachedSelectorREEntry maps port numbers to selectors to rules, mirroring
-// policy.L7DataMap but the DNS rules are compiled into a single regexp
+// policy.L7DataMap but the DNS rules are compiled into a regex
 type CachedSelectorREEntry map[policy.CachedSelector]*regexp.Regexp
 
 // structure for restored rules that can be used while Cilium agent is restoring endpoints
-type perEPRestored map[uint64]restore.DNSRules
+type perEPRestored map[uint64]map[uint16][]restoredIPRule
+
+// restoredIPRule is the dnsproxy internal way of representing a restored IPRule
+// where we also store the actual compiled regular expression as a, as well
+// as the original restored IPRule
+type restoredIPRule struct {
+	restore.IPRule
+	regex *regexp.Regexp
+}
 
 // map from EP IPs to *Endpoint
 type restoredEPs map[string]*endpoint.Endpoint
+
+// asIPRule returns a new restore.IPRule representing the rules, including the provided IP map.
+func asIPRule(r *regexp.Regexp, IPs map[string]struct{}) restore.IPRule {
+	pattern := "^-$"
+	if r != nil {
+		pattern = r.String()
+	}
+	return restore.IPRule{IPs: IPs, Re: restore.RuleRegex{Pattern: &pattern}}
+}
 
 // CheckRestored checks endpointID, destPort, destIP, and name against the restored rules,
 // and only returns true if a restored rule matches.
@@ -170,7 +208,22 @@ func (p *DNSProxy) checkRestored(endpointID uint64, destPort uint16, destIP stri
 	}
 
 	for i := range ipRules {
-		if _, exists := ipRules[i].IPs[destIP]; (exists || ipRules[i].IPs == nil) && ipRules[i].Re.MatchString(name) {
+		ipRule := ipRules[i]
+		if _, exists := ipRule.IPs[destIP]; exists || ipRule.IPs == nil {
+			if ipRule.regex != nil && ipRule.regex.MatchString(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// skipIPInRestorationRLocked skips IPs that are allowed but have never been used,
+// but only if at least one server has been used so far.
+// Requires the RLock to be held.
+func (p *DNSProxy) skipIPInRestorationRLocked(ip string) bool {
+	if len(p.usedServers) > 0 {
+		if _, used := p.usedServers[ip]; !used {
 			return true
 		}
 	}
@@ -180,47 +233,73 @@ func (p *DNSProxy) checkRestored(endpointID uint64, destPort uint16, destIP stri
 // GetRules creates a fresh copy of EP's DNS rules to be stored
 // for later restoration.
 func (p *DNSProxy) GetRules(endpointID uint16) (restore.DNSRules, error) {
-	p.Lock()
-	defer p.Unlock()
+	// Lock ordering note: Acquiring the IPCache read lock (as LookupIPsBySecID does) while holding
+	// the proxy lock can lead to a deadlock. Avoid this by reading the state from DNSProxy while
+	// holding the read lock, then perform the IPCache lookups.
+	// Note that IPCache state may change in between calls to LookupIPsBySecID.
+	p.RLock()
+
+	type selRegex struct {
+		re *regexp.Regexp
+		cs policy.CachedSelector
+	}
+
+	portToSelRegex := make(map[uint16][]selRegex)
+	for port, entries := range p.allowed[uint64(endpointID)] {
+		var nidRules = make([]selRegex, 0, len(entries))
+		// Copy the entries to avoid racy map accesses after we release the lock. We don't need
+		// constant time access, hence a preallocated slice instead of another map.
+		for cs, regex := range entries {
+			nidRules = append(nidRules, selRegex{cs: cs, re: regex})
+		}
+		portToSelRegex[port] = nidRules
+	}
+
+	// We've read what we need from the proxy. The following IPCache lookups _must_ occur outside of
+	// the critical section.
+	p.RUnlock()
 
 	restored := make(restore.DNSRules)
-	for port, entries := range p.allowed[uint64(endpointID)] {
+	for port, selRegexes := range portToSelRegex {
 		var ipRules restore.IPRules
-		for cs, regex := range entries {
-			var IPs map[string]struct{}
-			if !cs.IsWildcard() {
-				IPs = make(map[string]struct{})
-				count := 0
-			Loop:
-				for _, nid := range cs.GetSelections() {
-					nidIPs := p.LookupIPsBySecID(nid)
-					for _, ip := range nidIPs {
-						// Skip IPs that are allowed but have never been used,
-						// but only if at least one server has been used so far.
-						if len(p.usedServers) > 0 {
-							if _, used := p.usedServers[ip]; !used {
-								continue
-							}
-						}
-						IPs[ip] = struct{}{}
-						count++
-						if count > p.maxIPsPerRestoredDNSRule {
-							log.WithFields(logrus.Fields{
-								logfields.EndpointID:            endpointID,
-								logfields.Port:                  port,
-								logfields.EndpointLabelSelector: cs,
-								logfields.Limit:                 p.maxIPsPerRestoredDNSRule,
-								logfields.Count:                 len(nidIPs),
-							}).Warning("Too many IPs for a DNS rule, skipping the rest")
-							break Loop
-						}
+		for _, selRegex := range selRegexes {
+			if selRegex.cs.IsWildcard() {
+				ipRules = append(ipRules, asIPRule(selRegex.re, nil))
+				continue
+			}
+			ips := make(map[string]struct{})
+			count := 0
+			nids := selRegex.cs.GetSelections()
+		Loop:
+			for _, nid := range nids {
+				// Note: p.RLock must not be held during this call to IPCache
+				nidIPs := p.LookupIPsBySecID(nid)
+				p.RLock()
+				for _, ip := range nidIPs {
+					if p.skipIPInRestorationRLocked(ip) {
+						continue
+					}
+					ips[ip] = struct{}{}
+					count++
+					if count > p.maxIPsPerRestoredDNSRule {
+						log.WithFields(logrus.Fields{
+							logfields.EndpointID:            endpointID,
+							logfields.Port:                  port,
+							logfields.EndpointLabelSelector: selRegex.cs,
+							logfields.Limit:                 p.maxIPsPerRestoredDNSRule,
+							logfields.Count:                 len(nidIPs),
+						}).Warning("Too many IPs for a DNS rule, skipping the rest")
+						p.RUnlock()
+						break Loop
 					}
 				}
+				p.RUnlock()
 			}
-			ipRules = append(ipRules, restore.IPRule{IPs: IPs, Re: restore.RuleRegex{Regexp: regex}})
+			ipRules = append(ipRules, asIPRule(selRegex.re, ips))
 		}
 		restored[port] = ipRules
 	}
+
 	return restored, nil
 }
 
@@ -231,13 +310,36 @@ func (p *DNSProxy) GetRules(endpointID uint16) (restore.DNSRules, error) {
 func (p *DNSProxy) RestoreRules(ep *endpoint.Endpoint) {
 	p.Lock()
 	defer p.Unlock()
-	if ep.IPv4.IsSet() {
+	if ep.IPv4.IsValid() {
 		p.restoredEPs[ep.IPv4.String()] = ep
 	}
-	if ep.IPv6.IsSet() {
+	if ep.IPv6.IsValid() {
 		p.restoredEPs[ep.IPv6.String()] = ep
 	}
-	p.restored[uint64(ep.ID)] = ep.DNSRules
+	restoredRules := make(map[uint16][]restoredIPRule, len(ep.DNSRules))
+	for port, dnsRule := range ep.DNSRules {
+		ipRules := make([]restoredIPRule, 0, len(dnsRule))
+		for _, ipRule := range dnsRule {
+			if ipRule.Re.Pattern == nil {
+				continue
+			}
+			regex, err := p.cache.lookupOrCompileRegex(*ipRule.Re.Pattern)
+			if err != nil {
+				log.WithFields(logrus.Fields{
+					logfields.EndpointID: ep.ID,
+					logfields.Rule:       *ipRule.Re.Pattern,
+				}).Info("Disregarding restored DNS rule due to failure in compiling regex. Traffic to the FQDN may be disrupted.")
+				continue
+			}
+			rule := restoredIPRule{
+				IPRule: ipRule,
+				regex:  regex,
+			}
+			ipRules = append(ipRules, rule)
+		}
+		restoredRules[port] = ipRules
+	}
+	p.restored[uint64(ep.ID)] = restoredRules
 
 	log.Debugf("Restored rules for endpoint %d: %v", ep.ID, ep.DNSRules)
 }
@@ -251,6 +353,11 @@ func (p *DNSProxy) removeRestoredRulesLocked(endpointID uint64) {
 				delete(p.restoredEPs, ip)
 			}
 		}
+		for _, rule := range p.restored[endpointID] {
+			for _, r := range rule {
+				p.cache.releaseRegex(r.regex)
+			}
+		}
 		delete(p.restored, endpointID)
 	}
 }
@@ -262,55 +369,133 @@ func (p *DNSProxy) RemoveRestoredRules(endpointID uint16) {
 	p.removeRestoredRulesLocked(uint64(endpointID))
 }
 
-// setPortRulesForID sets the matching rules for endpointID and destPort for
-// later lookups. It converts newRules into a unified regexp that can be reused
-// later.
-func (allow perEPAllow) setPortRulesForID(lru *lru.Cache, endpointID uint64, destPort uint16, newRules policy.L7DataMap) error {
-	// This is the delete case
-	if len(newRules) == 0 {
-		epPorts := allow[endpointID]
-		delete(epPorts, destPort)
-		if len(epPorts) == 0 {
-			delete(allow, endpointID)
-		}
+// lookupOrCompileRegex will check if the pattern is already compiled and present in another policy, and
+// will reuse it in order to reduce memory consumption. The usage is reference counted, so all calls where
+// lookupOrCompileRegex returns no error, a subsequent call to release it via releaseRegex has to
+// be done when it's no longer being used by the policy.
+func (c regexCache) lookupOrCompileRegex(pattern string) (*regexp.Regexp, error) {
+	if entry, ok := c[pattern]; ok {
+		entry.referenceCount += 1
+		return entry.regex, nil
+	}
+	regex, err := re.CompileRegex(pattern)
+	if err != nil {
+		return nil, err
+	}
+	c[pattern] = &regexCacheEntry{regex: regex, referenceCount: 1}
+	return regex, nil
+}
+
+// lookupOrInsertRegex is equivalent to lookupOrCompileRegex, but a compiled regex is provided
+// instead of the pattern. In case a compiled regex with the same pattern as the provided regex is already present in
+// the cache, the already present regex will be returned. By doing that, the duplicate can be garbage collected in case
+// there are no other references to it. Trying to insert a nil value is a noop and will return nil
+func (c regexCache) lookupOrInsertRegex(regex *regexp.Regexp) *regexp.Regexp {
+	if regex == nil {
 		return nil
 	}
+	pattern := regex.String()
+	if entry, ok := c[pattern]; ok {
+		entry.referenceCount += 1
+		return entry.regex
+	}
+	c[pattern] = &regexCacheEntry{regex: regex, referenceCount: 1}
+	return regex
+}
 
-	newRE, err := GetSelectorRegexMap(newRules, lru)
+// releaseRegex releases the provided regex. In case there are no longer any references to it,
+// it will be freed. Running release on a nil value is a noop.
+func (c regexCache) releaseRegex(regex *regexp.Regexp) {
+	if regex == nil {
+		return
+	}
+	pattern := regex.String()
+	if indexEntry, ok := c[pattern]; ok {
+		switch indexEntry.referenceCount {
+		case 1:
+			delete(c, pattern)
+		default:
+			indexEntry.referenceCount -= 1
+		}
+	}
+}
+
+// removeAndReleasePortRulesForID removes the old port rules for the given destPort on the given endpointID. It also
+// releases the regexes so that unused regex can be freed from memory.
+func (allow perEPAllow) removeAndReleasePortRulesForID(cache regexCache, endpointID uint64, destPort uint16) {
+	epPorts, hasEpPorts := allow[endpointID]
+	if !hasEpPorts {
+		return
+	}
+	for _, m := range epPorts[destPort] {
+		cache.releaseRegex(m)
+	}
+	delete(epPorts, destPort)
+	if len(epPorts) == 0 {
+		delete(allow, endpointID)
+	}
+}
+
+// setPortRulesForID sets the matching rules for endpointID and destPort for
+// later lookups. It converts newRules into a compiled regex
+func (allow perEPAllow) setPortRulesForID(cache regexCache, endpointID uint64, destPort uint16, newRules policy.L7DataMap) error {
+	if len(newRules) == 0 {
+		allow.removeAndReleasePortRulesForID(cache, endpointID, destPort)
+		return nil
+	}
+	cse := make(CachedSelectorREEntry, len(newRules))
+	var err error
+	for selector, newRuleset := range newRules {
+		pattern := GeneratePattern(newRuleset)
+
+		var regex *regexp.Regexp
+		regex, err = cache.lookupOrCompileRegex(pattern)
+		if err != nil {
+			break
+		}
+		cse[selector] = regex
+	}
 	if err != nil {
+		// Unregister the registered regexes before returning the error to avoid
+		// leaving unused references in the cache
+		for k, regex := range cse {
+			cache.releaseRegex(regex)
+			delete(cse, k)
+		}
 		return err
 	}
-
+	allow.removeAndReleasePortRulesForID(cache, endpointID, destPort)
 	epPorts, exist := allow[endpointID]
 	if !exist {
 		epPorts = make(portToSelectorAllow)
 		allow[endpointID] = epPorts
 	}
-
-	epPorts[destPort] = newRE
+	epPorts[destPort] = cse
 	return nil
 }
 
 // setPortRulesForIDFromUnifiedFormat sets the matching rules for endpointID and destPort for
-// later lookups.
-func (allow perEPAllow) setPortRulesForIDFromUnifiedFormat(endpointID uint64, destPort uint16, newRules CachedSelectorREEntry) error {
-	// This is the delete case
+// later lookups. It does not guarantee it will reuse all the provided regexes, since it will reuse
+// already existing regexes with the same pattern in case they are already in use.
+func (allow perEPAllow) setPortRulesForIDFromUnifiedFormat(cache regexCache, endpointID uint64, destPort uint16, newRules CachedSelectorREEntry) error {
 	if len(newRules) == 0 {
-		epPorts := allow[endpointID]
-		delete(epPorts, destPort)
-		if len(epPorts) == 0 {
-			delete(allow, endpointID)
-		}
+		allow.removeAndReleasePortRulesForID(cache, endpointID, destPort)
 		return nil
 	}
+	cse := make(CachedSelectorREEntry, len(newRules))
+	for selector, providedRegex := range newRules {
+		// In case the regex is already compiled and in use in another regex, lookupOrInsertRegex
+		// will return a ref. to the existing regex, and use that one.
+		cse[selector] = cache.lookupOrInsertRegex(providedRegex)
+	}
 
+	allow.removeAndReleasePortRulesForID(cache, endpointID, destPort)
 	epPorts, exist := allow[endpointID]
 	if !exist {
 		epPorts = make(portToSelectorAllow)
 		allow[endpointID] = epPorts
 	}
-
-	epPorts[destPort] = newRules
+	epPorts[destPort] = cse
 	return nil
 }
 
@@ -328,7 +513,7 @@ type LookupEndpointIDByIPFunc func(ip net.IP) (endpoint *endpoint.Endpoint, err 
 // LookupSecIDByIPFunc Func wraps logic to lookup an IP's security ID from the
 // ipcache.
 // See DNSProxy.LookupSecIDByIP for usage.
-type LookupSecIDByIPFunc func(ip net.IP) (secID ipcache.Identity, exists bool)
+type LookupSecIDByIPFunc func(ip netip.Addr) (secID ipcache.Identity, exists bool)
 
 // LookupIPsBySecIDFunc Func wraps logic to lookup an IPs by security ID from the
 // ipcache.
@@ -336,23 +521,71 @@ type LookupIPsBySecIDFunc func(nid identity.NumericIdentity) []string
 
 // NotifyOnDNSMsgFunc handles propagating DNS response data
 // See DNSProxy.LookupEndpointIDByIP for usage.
-type NotifyOnDNSMsgFunc func(lookupTime time.Time, ep *endpoint.Endpoint, epIPPort string, serverAddr string, msg *dns.Msg, protocol string, allowed bool, stat *ProxyRequestContext) error
+type NotifyOnDNSMsgFunc func(lookupTime time.Time, ep *endpoint.Endpoint, epIPPort string, serverID identity.NumericIdentity, serverAddr string, msg *dns.Msg, protocol string, allowed bool, stat *ProxyRequestContext) error
+
+// ErrFailedAcquireSemaphore is an an error representing the DNS proxy's
+// failure to acquire the semaphore. This is error is treated like a timeout.
+type ErrFailedAcquireSemaphore struct {
+	parallel int
+}
+
+func (e ErrFailedAcquireSemaphore) Timeout() bool { return true }
+
+// Temporary is deprecated. Return false.
+func (e ErrFailedAcquireSemaphore) Temporary() bool { return false }
+func (e ErrFailedAcquireSemaphore) Error() string {
+	return fmt.Sprintf(
+		"failed to acquire DNS proxy semaphore, %d parallel requests already in-flight",
+		e.parallel,
+	)
+}
+
+// ErrTimedOutAcquireSemaphore is an an error representing the DNS proxy timing
+// out when acquiring the semaphore. It is treated the same as
+// ErrTimedOutAcquireSemaphore.
+type ErrTimedOutAcquireSemaphore struct {
+	ErrFailedAcquireSemaphore
+
+	gracePeriod time.Duration
+}
+
+func (e ErrTimedOutAcquireSemaphore) Error() string {
+	return fmt.Sprintf(
+		"timed out after %v acquiring DNS proxy semaphore, %d parallel requests already in-flight",
+		e.gracePeriod,
+		e.parallel,
+	)
+}
+
+// ErrDNSRequestNoEndpoint represents an error when the local daemon cannot
+// find the corresponding endpoint that triggered a DNS request processed by
+// the local DNS proxy (FQDN proxy).
+type ErrDNSRequestNoEndpoint struct{}
+
+func (ErrDNSRequestNoEndpoint) Error() string {
+	return "DNS request cannot be associated with an existing endpoint"
+}
 
 // ProxyRequestContext proxy dns request context struct to send in the callback
 type ProxyRequestContext struct {
+	TotalTime      spanstat.SpanStat
 	ProcessingTime spanstat.SpanStat // This is going to happen at the end of the second callback.
 	// Error is a enum of [timeout, allow, denied, proxyerr].
-	UpstreamTime spanstat.SpanStat
-	Success      bool
-	Err          error
+	UpstreamTime         spanstat.SpanStat
+	SemaphoreAcquireTime spanstat.SpanStat
+	PolicyCheckTime      spanstat.SpanStat
+	PolicyGenerationTime spanstat.SpanStat
+	DataplaneTime        spanstat.SpanStat
+	Success              bool
+	Err                  error
+	DataSource           accesslog.DNSDataSource
 }
 
 // IsTimeout return true if the ProxyRequest timeout
 func (proxyStat *ProxyRequestContext) IsTimeout() bool {
-	netErr, isNetErr := proxyStat.Err.(net.Error)
-	if isNetErr && netErr.Timeout() {
-		return true
-
+	var neterr net.Error
+	if errors.As(proxyStat.Err, &neterr) {
+		return neterr.Timeout()
 	}
 	return false
 }
@@ -368,7 +601,14 @@ func (proxyStat *ProxyRequestContext) IsTimeout() bool {
 // notifyFunc will be called with DNS response data that is returned to a
 // requesting endpoint. Note that denied requests will not trigger this
 // callback.
-func StartDNSProxy(address string, port uint16, enableDNSCompression bool, maxRestoreDNSIPs int, lookupEPFunc LookupEndpointIDByIPFunc, lookupSecIDFunc LookupSecIDByIPFunc, lookupIPsFunc LookupIPsBySecIDFunc, notifyFunc NotifyOnDNSMsgFunc) (*DNSProxy, error) {
+func StartDNSProxy(
+	address string, port uint16, enableDNSCompression bool, maxRestoreDNSIPs int,
+	lookupEPFunc LookupEndpointIDByIPFunc,
+	lookupSecIDFunc LookupSecIDByIPFunc,
+	lookupIPsFunc LookupIPsBySecIDFunc,
+	notifyFunc NotifyOnDNSMsgFunc,
+	concurrencyLimit int, concurrencyGracePeriod time.Duration,
+) (*DNSProxy, error) {
 	if port == 0 {
 		log.Debug("DNS Proxy port is configured to 0. A random port will be assigned by the OS.")
 	}
@@ -382,22 +622,28 @@ func StartDNSProxy(address string, port uint16, enableDNSCompression bool, maxRe
 		LookupSecIDByIP:          lookupSecIDFunc,
 		LookupIPsBySecID:         lookupIPsFunc,
 		NotifyOnDNSMsg:           notifyFunc,
+		logLimiter:               logging.NewLimiter(10*time.Second, 1),
 		lookupTargetDNSServer:    lookupTargetDNSServer,
 		usedServers:              make(map[string]struct{}),
 		allowed:                  make(perEPAllow),
 		restored:                 make(perEPRestored),
 		restoredEPs:              make(restoredEPs),
+		cache:                    make(regexCache),
 		EnableDNSCompression:     enableDNSCompression,
 		maxIPsPerRestoredDNSRule: maxRestoreDNSIPs,
-		regexCompileLRU:          lru.New(128),
+	}
+	if concurrencyLimit > 0 {
+		p.ConcurrencyLimit = semaphore.NewWeighted(int64(concurrencyLimit))
+		p.ConcurrencyGracePeriod = concurrencyGracePeriod
 	}
 	atomic.StoreInt32(&p.rejectReply, dns.RcodeRefused)
 
 	// Start the DNS listeners on UDP and TCP
 	var (
-		UDPConn                *net.UDPConn
-		TCPListener            *net.TCPListener
-		err                    error
+		UDPConn     *net.UDPConn
+		TCPListener *net.TCPListener
+		err         error
+
 		EnableIPv4, EnableIPv6 = option.Config.EnableIPv4, option.Config.EnableIPv6
 	)
 
@@ -437,11 +683,11 @@ func StartDNSProxy(address string, port uint16, enableDNSCompression bool, maxRe
 		}(s)
 	}
 
-	// Bind the DNS forwarding clients on UDP and TCP
-	// Note: SingleInFlight should remain disabled. When enabled it folds DNS
-	// retries into the previous lookup, suppressing them.
-	p.UDPClient = &dns.Client{Net: "udp", Timeout: ProxyForwardTimeout, SingleInflight: false}
-	p.TCPClient = &dns.Client{Net: "tcp", Timeout: ProxyForwardTimeout, SingleInflight: false}
+	// This function is called in proxy.Cleanup, which is added to Daemon cleanup module in bootstrapFQDN
+	p.unbindAddress = func() {
+		UDPConn.Close()
+		TCPListener.Close()
+	}
 
 	return p, nil
 }
@@ -465,7 +711,7 @@ func (p *DNSProxy) UpdateAllowed(endpointID uint64, destPort uint16, newRules po
 	p.Lock()
 	defer p.Unlock()
 
-	err := p.allowed.setPortRulesForID(p.regexCompileLRU, endpointID, destPort, newRules)
+	err := p.allowed.setPortRulesForID(p.cache, endpointID, destPort, newRules)
 	if err == nil {
 		// Rules were updated based on policy, remove restored rules
 		p.removeRestoredRulesLocked(endpointID)
@@ -478,7 +724,7 @@ func (p *DNSProxy) UpdateAllowedFromSelectorRegexes(endpointID uint64, destPort 
 	p.Lock()
 	defer p.Unlock()
 
-	err := p.allowed.setPortRulesForIDFromUnifiedFormat(endpointID, destPort, newRules)
+	err := p.allowed.setPortRulesForIDFromUnifiedFormat(p.cache, endpointID, destPort, newRules)
 	if err == nil {
 		// Rules were updated based on policy, remove restored rules
 		p.removeRestoredRulesLocked(endpointID)
@@ -491,17 +737,17 @@ func (p *DNSProxy) UpdateAllowedFromSelectorRegexes(endpointID uint64, destPort 
 // something that was added (via UpdateAllowed or RestoreRules) previously.
 func (p *DNSProxy) CheckAllowed(endpointID uint64, destPort uint16, destID identity.NumericIdentity, destIP net.IP, name string) (allowed bool, err error) {
 	name = strings.ToLower(dns.Fqdn(name))
-	p.Lock()
-	defer p.Unlock()
+	p.RLock()
+	defer p.RUnlock()
 
 	epAllow, exists := p.allowed.getPortRulesForID(endpointID, destPort)
 	if !exists {
 		return p.checkRestored(endpointID, destPort, destIP.String(), name), nil
 	}
 
-	for selector, re := range epAllow {
+	for selector, regex := range epAllow {
 		// The port was matched in getPortRulesForID, above.
-		if selector.Selects(destID) && re.MatchString(name) {
+		if regex != nil && selector.Selects(destID) && (regex.String() == matchpattern.MatchAllAnchoredPattern || regex.MatchString(name)) {
 			return true, nil
 		}
 	}
@@ -509,67 +755,107 @@ func (p *DNSProxy) CheckAllowed(endpointID uint64, destPort uint16, destID ident
 	return false, nil
 }
 
+func setSoMark(fd int, secId identity.NumericIdentity) error {
+	mark := linux_defaults.MagicMarkIdentity
+	mark |= int(uint32(secId&0xFFFF)<<16 | uint32((secId&0xFF0000)>>16))
+	err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, mark)
+	if err != nil {
+		return fmt.Errorf("error setting SO_MARK: %w", err)
+	}
+	return nil
+}
+
 // ServeDNS handles individual DNS requests forwarded to the proxy, and meets
 // the dns.Handler interface.
 // It will:
-//  - Look up the endpoint that sent the request by IP, via LookupEndpointByIP.
-//  - Look up the Sec ID of the destination server, via LookupSecIDByIP.
-//  - Check that the endpoint ID, destination Sec ID, destination port and the
-//  qname all match a rule. If not, the request is dropped.
-//  - The allowed request is forwarded to the originally intended DNS server IP
-//  - The response is shared via NotifyOnDNSMsg (this will go to a
-//  fqdn/NameManager instance).
-//  - Write the response to the endpoint.
+//   - Look up the endpoint that sent the request by IP, via LookupEndpointByIP.
+//   - Look up the Sec ID of the destination server, via LookupSecIDByIP.
+//   - Check that the endpoint ID, destination Sec ID, destination port and the
+//     qname all match a rule. If not, the request is dropped.
+//   - The allowed request is forwarded to the originally intended DNS server IP
+//   - The response is shared via NotifyOnDNSMsg (this will go to a
+//     fqdn/NameManager instance).
+//   - Write the response to the endpoint.
 func (p *DNSProxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
-	stat := ProxyRequestContext{}
-	stat.ProcessingTime.Start()
+	stat := ProxyRequestContext{DataSource: accesslog.DNSSourceProxy}
+	stat.TotalTime.Start()
 	requestID := request.Id // keep the original request ID
 	qname := string(request.Question[0].Name)
 	protocol := w.LocalAddr().Network()
+	epIPPort := w.RemoteAddr().String()
 	scopedLog := log.WithFields(logrus.Fields{
 		logfields.DNSName:      qname,
-		logfields.IPAddr:       w.RemoteAddr(),
-		logfields.DNSRequestID: request.Id})
+		logfields.IPAddr:       epIPPort,
+		logfields.DNSRequestID: requestID,
+	})
+
+	if p.ConcurrencyLimit != nil {
+		// TODO: Consider plumbing the daemon context here.
+		ctx, cancel := context.WithTimeout(context.TODO(), p.ConcurrencyGracePeriod)
+		defer cancel()
+
+		stat.SemaphoreAcquireTime.Start()
+		// Enforce the concurrency limit by attempting to acquire the
+		// semaphore.
+		if err := p.enforceConcurrencyLimit(ctx); err != nil {
+			stat.SemaphoreAcquireTime.End(false)
+			if p.logLimiter.Allow() {
+				scopedLog.WithError(err).Error("Dropping DNS request due to too many DNS requests already in-flight")
+			}
+			stat.Err = err
+			p.NotifyOnDNSMsg(time.Now(), nil, epIPPort, 0, "", request, protocol, false, &stat)
+			p.sendRefused(scopedLog, w, request)
+			return
+		}
+		stat.SemaphoreAcquireTime.End(true)
+		defer p.ConcurrencyLimit.Release(1)
+	}
+	stat.ProcessingTime.Start()
+
 	scopedLog.Debug("Handling DNS query from endpoint")
 
-	epIPPort := w.RemoteAddr().String()
 	addr, _, err := net.SplitHostPort(epIPPort)
 	if err != nil {
 		scopedLog.WithError(err).Error("cannot extract endpoint IP from DNS request")
-		stat.Err = fmt.Errorf("Cannot extract endpoint IP from DNS request: %s", err)
+		stat.Err = fmt.Errorf("Cannot extract endpoint IP from DNS request: %w", err)
 		stat.ProcessingTime.End(false)
-		p.NotifyOnDNSMsg(time.Now(), nil, epIPPort, "", request, protocol, false, &stat)
+		p.NotifyOnDNSMsg(time.Now(), nil, epIPPort, 0, "", request, protocol, false, &stat)
 		p.sendRefused(scopedLog, w, request)
 		return
 	}
 	ep, err := p.LookupEndpointByIP(net.ParseIP(addr))
 	if err != nil {
 		scopedLog.WithError(err).Error("cannot extract endpoint ID from DNS request")
-		stat.Err = fmt.Errorf("Cannot extract endpoint ID from DNS request: %s", err)
+		stat.Err = fmt.Errorf("Cannot extract endpoint ID from DNS request: %w", err)
 		stat.ProcessingTime.End(false)
-		p.NotifyOnDNSMsg(time.Now(), nil, epIPPort, "", request, protocol, false, &stat)
+		p.NotifyOnDNSMsg(time.Now(), nil, epIPPort, 0, "", request, protocol, false, &stat)
 		p.sendRefused(scopedLog, w, request)
 		return
 	}
 
-	scopedLog = scopedLog.WithField(logfields.EndpointID, ep.StringID())
+	scopedLog = scopedLog.WithFields(logrus.Fields{
+		logfields.EndpointID: ep.StringID(),
+		logfields.Identity:   ep.GetIdentity(),
+	})
 
-	targetServerIP, targetServerPort, targetServerAddr, err := p.lookupTargetDNSServer(w)
+	targetServerIP, targetServerPort, targetServerAddrStr, err := p.lookupTargetDNSServer(w)
 	if err != nil {
 		log.WithError(err).Error("cannot extract destination IP:port from DNS request")
-		stat.Err = fmt.Errorf("Cannot extract destination IP:port from DNS request: %s", err)
+		stat.Err = fmt.Errorf("Cannot extract destination IP:port from DNS request: %w", err)
 		stat.ProcessingTime.End(false)
-		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, request, protocol, false, &stat)
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, 0, targetServerAddrStr, request, protocol, false, &stat)
 		p.sendRefused(scopedLog, w, request)
 		return
 	}
 
 	targetServerID := identity.ReservedIdentityWorld
-	if serverSecID, exists := p.LookupSecIDByIP(targetServerIP); !exists {
-		scopedLog.WithField("server", targetServerAddr).Debug("cannot find server ip in ipcache, defaulting to WORLD")
+	// Ignore invalid IP - getter will handle invalid value.
+	targetServerAddr, _ := ippkg.AddrFromIP(targetServerIP)
+	if serverSecID, exists := p.LookupSecIDByIP(targetServerAddr); !exists {
+		scopedLog.WithField("server", targetServerAddrStr).Debug("cannot find server ip in ipcache, defaulting to WORLD")
 	} else {
 		targetServerID = serverSecID.ID
-		scopedLog.WithField("server", targetServerAddr).Debugf("Found target server to of DNS request secID %+v", serverSecID)
+		scopedLog.WithField("server", targetServerAddrStr).Debugf("Found target server to of DNS request secID %+v", serverSecID)
 	}
 
 	// The allowed check is first because we don't want to use DNS responses that
@@ -577,59 +863,90 @@ func (p *DNSProxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	// Note: The cache doesn't know about the source of the DNS data (yet) and so
 	// it won't enforce any separation between results from different endpoints.
 	// This isn't ideal but we are trusting the DNS responses anyway.
+	stat.PolicyCheckTime.Start()
 	allowed, err := p.CheckAllowed(uint64(ep.ID), targetServerPort, targetServerID, targetServerIP, qname)
+	stat.PolicyCheckTime.End(err == nil)
 	switch {
 	case err != nil:
 		scopedLog.WithError(err).Error("Rejecting DNS query from endpoint due to error")
-		stat.Err = fmt.Errorf("Rejecting DNS query from endpoint due to error: %s", err)
+		stat.Err = fmt.Errorf("Rejecting DNS query from endpoint due to error: %w", err)
 		stat.ProcessingTime.End(false)
-		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, request, protocol, false, &stat)
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, false, &stat)
 		p.sendRefused(scopedLog, w, request)
 		return
 
 	case !allowed:
 		scopedLog.Debug("Rejecting DNS query from endpoint due to policy")
+		// Send refused msg before calling NotifyOnDNSMsg() because we know
+		// that this DNS request is rejected anyway. NotifyOnDNSMsg depends on
+		// stat.Err field to be set in order to propagate the correct
+		// information for metrics.
 		stat.Err = p.sendRefused(scopedLog, w, request)
 		stat.ProcessingTime.End(true)
-		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, request, protocol, false, &stat)
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, false, &stat)
 		return
 	}
 
 	scopedLog.Debug("Forwarding DNS request for a name that is allowed")
-	p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, request, protocol, true, &stat)
+	p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, true, &stat)
 
 	// Keep the same L4 protocol. This handles DNS re-requests over TCP, for
 	// requests that were too large for UDP.
 	var client *dns.Client
 	switch protocol {
 	case "udp":
-		client = p.UDPClient
+		client = &dns.Client{Net: "udp", Timeout: ProxyForwardTimeout, SingleInflight: false}
 	case "tcp":
-		client = p.TCPClient
+		client = &dns.Client{Net: "tcp", Timeout: ProxyForwardTimeout, SingleInflight: false}
 	default:
 		scopedLog.Error("Cannot parse DNS proxy client network to select forward client")
-		stat.Err = fmt.Errorf("Cannot parse DNS proxy client network to select forward client: %s", err)
+		stat.Err = fmt.Errorf("Cannot parse DNS proxy client network to select forward client: %w", err)
 		stat.ProcessingTime.End(false)
-		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, request, protocol, false, &stat)
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, false, &stat)
 		p.sendRefused(scopedLog, w, request)
 		return
 	}
 	stat.ProcessingTime.End(true)
 	stat.UpstreamTime.Start()
 
+	dialer := net.Dialer{
+		Timeout: 2 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			var soerr error
+			if err := c.Control(func(su uintptr) {
+				soerr = setSoMark(int(su), ep.GetIdentity())
+			}); err != nil {
+				return err
+			}
+			return soerr
+		}}
+	client.Dialer = &dialer
+
+	conn, err := client.Dial(targetServerAddrStr)
+	if err != nil {
+		err := fmt.Errorf("failed to dial connection to %v: %w", targetServerAddrStr, err)
+		stat.Err = err
+		scopedLog.WithError(err).Error("Failed to dial connection to the upstream DNS server, cannot service DNS request")
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, false, &stat)
+		p.sendRefused(scopedLog, w, request)
+		return
+	}
+	defer conn.Close()
+
 	request.Id = dns.Id() // force a random new ID for this request
-	response, _, err := client.Exchange(request, targetServerAddr)
+	response, _, err := client.ExchangeWithConn(request, conn)
 	stat.UpstreamTime.End(err == nil)
 	if err != nil {
 		stat.Err = err
 		if stat.IsTimeout() {
 			scopedLog.WithError(err).Warn("Timeout waiting for response to forwarded proxied DNS lookup")
-		} else {
-			scopedLog.WithError(err).Error("Cannot forward proxied DNS lookup")
-			p.sendRefused(scopedLog, w, request)
-			stat.Err = fmt.Errorf("Cannot forward proxied DNS lookup: %s", err)
+			p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, false, &stat)
+			return
 		}
-		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, request, protocol, false, &stat)
+		scopedLog.WithError(err).Error("Cannot forward proxied DNS lookup")
+		stat.Err = fmt.Errorf("cannot forward proxied DNS lookup: %w", err)
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, request, protocol, false, &stat)
+		p.sendRefused(scopedLog, w, request)
 		return
 	}
 
@@ -637,7 +954,7 @@ func (p *DNSProxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	stat.Success = true
 
 	scopedLog.Debug("Notifying with DNS response to original DNS query")
-	p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, response, protocol, true, &stat)
+	p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, response, protocol, true, &stat)
 
 	scopedLog.Debug("Responding to original DNS query")
 	// restore the ID to the one in the initial request so it matches what the requester expects.
@@ -646,8 +963,8 @@ func (p *DNSProxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 	err = w.WriteMsg(response)
 	if err != nil {
 		scopedLog.WithError(err).Error("Cannot forward proxied DNS response")
-		stat.Err = fmt.Errorf("Cannot forward proxied DNS response: %s", err)
-		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerAddr, response, protocol, true, &stat)
+		stat.Err = fmt.Errorf("Cannot forward proxied DNS response: %w", err)
+		p.NotifyOnDNSMsg(time.Now(), ep, epIPPort, targetServerID, targetServerAddrStr, response, protocol, true, &stat)
 	} else {
 		p.Lock()
 		// Add the server to the set of used DNS servers. This set is never GCd, but is limited by set
@@ -655,6 +972,29 @@ func (p *DNSProxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		p.usedServers[targetServerIP.String()] = struct{}{}
 		p.Unlock()
 	}
+}
+
+func (p *DNSProxy) enforceConcurrencyLimit(ctx context.Context) error {
+	if p.ConcurrencyGracePeriod == 0 {
+		// No grace time configured. Failing to acquire semaphore means
+		// immediately give up.
+		if !p.ConcurrencyLimit.TryAcquire(1) {
+			return ErrFailedAcquireSemaphore{
+				parallel: option.Config.DNSProxyConcurrencyLimit,
+			}
+		}
+	} else if err := p.ConcurrencyLimit.Acquire(ctx, 1); err != nil && errors.Is(err, context.DeadlineExceeded) {
+		// We ignore err because errTimedOutAcquireSemaphore implements the
+		// net.Error interface deeming it a timeout error which will be
+		// treated the same as context.DeadlineExceeded.
+		return ErrTimedOutAcquireSemaphore{
+			ErrFailedAcquireSemaphore: ErrFailedAcquireSemaphore{
+				parallel: option.Config.DNSProxyConcurrencyLimit,
+			},
+			gracePeriod: p.ConcurrencyGracePeriod,
+		}
+	}
+	return nil
 }
 
 // sendRefused creates and sends a REFUSED response for request to w
@@ -665,7 +1005,7 @@ func (p *DNSProxy) sendRefused(scopedLog *logrus.Entry, w dns.ResponseWriter, re
 
 	if err = w.WriteMsg(refused); err != nil {
 		scopedLog.WithError(err).Error("Cannot send REFUSED response")
-		err = fmt.Errorf("cannot send REFUSED response: %s", err)
+		err = fmt.Errorf("cannot send REFUSED response: %w", err)
 	}
 	return err
 }
@@ -801,39 +1141,33 @@ func shouldCompressResponse(request, response *dns.Msg) bool {
 	return false
 }
 
-func GetSelectorRegexMap(l7 policy.L7DataMap, lru *lru.Cache) (CachedSelectorREEntry, error) {
-	newRE := make(CachedSelectorREEntry)
-	for selector, l7Rules := range l7 {
-		if l7Rules == nil {
-			l7Rules = &policy.PerSelectorPolicy{L7Rules: api.L7Rules{DNS: []api.PortRuleDNS{{MatchPattern: "*"}}}}
+// GeneratePattern takes a set of l7Rules and returns a regular expression pattern for matching the
+// provided l7 rules.
+func GeneratePattern(l7Rules *policy.PerSelectorPolicy) (pattern string) {
+	if l7Rules == nil || len(l7Rules.DNS) == 0 {
+		return matchpattern.MatchAllAnchoredPattern
+	}
+	reStrings := make([]string, 0, len(l7Rules.DNS))
+	for _, dnsRule := range l7Rules.DNS {
+		if len(dnsRule.MatchName) > 0 {
+			dnsRuleName := strings.ToLower(dns.Fqdn(dnsRule.MatchName))
+			dnsRuleNameAsRE := matchpattern.ToUnAnchoredRegexp(dnsRuleName)
+			reStrings = append(reStrings, dnsRuleNameAsRE)
 		}
-		reStrings := make([]string, 0, len(l7Rules.DNS))
-		for _, dnsRule := range l7Rules.DNS {
-			if len(dnsRule.MatchName) > 0 {
-				dnsRuleName := strings.ToLower(dns.Fqdn(dnsRule.MatchName))
-				dnsPatternAsRE := matchpattern.ToRegexp(dnsRuleName)
-				reStrings = append(reStrings, "("+dnsPatternAsRE+")")
+		if len(dnsRule.MatchPattern) > 0 {
+			dnsPattern := matchpattern.Sanitize(dnsRule.MatchPattern)
+			dnsPatternAsRE := matchpattern.ToUnAnchoredRegexp(dnsPattern)
+			if dnsPatternAsRE == matchpattern.MatchAllUnAnchoredPattern {
+				return matchpattern.MatchAllAnchoredPattern
 			}
-			if len(dnsRule.MatchPattern) > 0 {
-				dnsPattern := matchpattern.Sanitize(dnsRule.MatchPattern)
-				dnsPatternAsRE := matchpattern.ToRegexp(dnsPattern)
-				reStrings = append(reStrings, "("+dnsPatternAsRE+")")
-			}
-		}
-		mp := strings.Join(reStrings, "|")
-		rei, ok := lru.Get(mp)
-		if ok {
-			re := rei.(*regexp.Regexp)
-			newRE[selector] = re
-		} else {
-			re, err := regexp.Compile(mp)
-			if err != nil {
-				return nil, err
-			}
-			lru.Add(mp, re)
-			newRE[selector] = re
+			reStrings = append(reStrings, dnsPatternAsRE)
 		}
 	}
+	return "^(?:" + strings.Join(reStrings, "|") + ")$"
+}
 
-	return newRE, nil
+func (p *DNSProxy) Cleanup() {
+	if p.unbindAddress != nil {
+		p.unbindAddress()
+	}
 }

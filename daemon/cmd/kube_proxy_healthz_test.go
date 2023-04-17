@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -12,9 +9,9 @@ import (
 	"net/http/httptest"
 	"time"
 
-	"github.com/cilium/cilium/api/v1/models"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/api/v1/models"
 )
 
 // 'check' testing suite scaffolding.

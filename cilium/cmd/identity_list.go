@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,6 +9,8 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	identityApi "github.com/cilium/cilium/api/v1/client/policy"
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/api"
@@ -17,9 +19,6 @@ import (
 	"github.com/cilium/cilium/pkg/identity/cache"
 	"github.com/cilium/cilium/pkg/identity/identitymanager"
 	"github.com/cilium/cilium/pkg/labels"
-	"github.com/spf13/viper"
-
-	"github.com/spf13/cobra"
 )
 
 // identityListCmd represents the identity_list command
@@ -34,15 +33,15 @@ var identityListCmd = &cobra.Command{
 
 func init() {
 	identityCmd.AddCommand(identityListCmd)
-	command.AddJSONOutput(identityListCmd)
+	command.AddOutputOption(identityListCmd)
 	flags := identityListCmd.Flags()
 	flags.Bool("endpoints", false, "list identities of locally managed endpoints")
-	viper.BindPFlags(flags)
+	vp.BindPFlags(flags)
 }
 
 func listIdentities(args []string) {
 	switch {
-	case viper.GetBool("endpoints"):
+	case vp.GetBool("endpoints"):
 		params := identityApi.NewGetIdentityEndpointsParams().WithTimeout(api.ClientTimeout)
 		identities, err := client.Policy.GetIdentityEndpoints(params)
 		if err != nil {
@@ -73,9 +72,9 @@ func listIdentities(args []string) {
 }
 
 func printIdentitesEndpoints(identities []*models.IdentityEndpoints) {
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(identities); err != nil {
-			Fatalf("Unable to provide JSON output: %s", err)
+			Fatalf("Unable to provide %s output: %s", command.OutputOptionString(), err)
 		}
 		return
 	}

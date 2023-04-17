@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/command"
-
-	"github.com/spf13/cobra"
 )
 
 // recorderGetCmd represents the recorder_get command
@@ -30,7 +30,7 @@ var recorderGetCmd = &cobra.Command{
 		if err != nil {
 			Fatalf("Cannot get recorder '%v': %s\n", id, err)
 		}
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(rec); err != nil {
 				os.Exit(1)
 			}
@@ -48,5 +48,5 @@ var recorderGetCmd = &cobra.Command{
 
 func init() {
 	recorderCmd.AddCommand(recorderGetCmd)
-	command.AddJSONOutput(recorderGetCmd)
+	command.AddOutputOption(recorderGetCmd)
 }

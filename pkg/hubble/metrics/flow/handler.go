@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package flow
 
@@ -7,12 +7,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	"github.com/cilium/cilium/pkg/hubble/metrics/api"
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type flowHandler struct {
@@ -44,7 +44,19 @@ func (h *flowHandler) Status() string {
 	return h.context.Status()
 }
 
-func (h *flowHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
+func (h *flowHandler) Context() *api.ContextOptions {
+	return h.context
+}
+
+func (h *flowHandler) ListMetricVec() []*prometheus.MetricVec {
+	return []*prometheus.MetricVec{h.flows.MetricVec}
+}
+
+func (h *flowHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) error {
+	labelValues, err := h.context.GetLabelValues(flow)
+	if err != nil {
+		return err
+	}
 	var typeName, subType string
 	eventType := flow.GetEventType().GetType()
 	switch eventType {
@@ -75,7 +87,8 @@ func (h *flowHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
 	}
 
 	labels := []string{v1.FlowProtocol(flow), typeName, subType, flow.GetVerdict().String()}
-	labels = append(labels, h.context.GetLabelValues(flow)...)
+	labels = append(labels, labelValues...)
 
 	h.flows.WithLabelValues(labels...).Inc()
+	return nil
 }

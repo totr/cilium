@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+
 	"github.com/cilium/cilium/hubble-relay/cmd/completion"
 	"github.com/cilium/cilium/hubble-relay/cmd/serve"
 	"github.com/cilium/cilium/hubble-relay/cmd/version"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	v "github.com/cilium/cilium/pkg/version"
-
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 // configFilePath defines where the hubble-relay config file should be found.
@@ -22,8 +22,8 @@ const configFilePath = "/etc/hubble-relay/config.yaml"
 func New() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:          "hubble-relay",
-		Short:        "hubble-relay is a proxy server for the hubble API",
-		Long:         "hubble-relay is a proxy server for the hubble API.",
+		Short:        "Hubble Relay is a proxy server for the hubble API",
+		Long:         "Hubble Relay is a proxy server for the hubble API.",
 		SilenceUsage: true,
 		Version:      v.GetCiliumVersion().Version,
 	}

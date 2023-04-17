@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package sink
 
@@ -9,6 +9,9 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
+
 	"github.com/cilium/cilium/pkg/byteorder"
 	"github.com/cilium/cilium/pkg/hubble/recorder/pcap"
 	"github.com/cilium/cilium/pkg/lock"
@@ -16,9 +19,6 @@ import (
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/monitor"
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
-	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "recorder-sink")
@@ -118,10 +118,10 @@ func NewDispatch(sinkQueueSize int) (*Dispatch, error) {
 // The provided p.Header is written to the pcap sink during initialization.
 // The sink is unregistered automatically when it stops. A sink is stopped for
 // one of the following four reasons. In all cases, Handle.Done will be closed.
-//  - Explicitly via Handle.Stop (Handle.Err() == nil)
-//  - When one of the p.StopCondition is hit (Handle.Err() == nil)
-//  - When the context ctx is cancelled (Handle.Err() != nil)
-//  - When an error occurred (Handle.Err() != nil)
+//   - Explicitly via Handle.Stop (Handle.Err() == nil)
+//   - When one of the p.StopCondition is hit (Handle.Err() == nil)
+//   - When the context ctx is cancelled (Handle.Err() != nil)
+//   - When an error occurred (Handle.Err() != nil)
 func (d *Dispatch) StartSink(ctx context.Context, p PcapSink) (*Handle, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()

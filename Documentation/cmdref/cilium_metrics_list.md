@@ -13,18 +13,18 @@ cilium metrics list [flags]
 ```
   -h, --help                   help for list
   -p, --match-pattern string   Show only metrics whose names match matchpattern
-  -o, --output string          json| jsonpath='{}'
+  -o, --output string          json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium metrics](../cilium_metrics)	 - Access metric status
+* [cilium metrics](cilium_metrics.md)	 - Access metric status
 

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build linux
-// +build linux
 
 package bpf
 
@@ -52,7 +51,7 @@ func GetOpenMaps() []*models.BPFMap {
 	// create a copy of mapRegister so we can unlock the mutex again as
 	// locking Map.lock inside of the mutex is not permitted
 	mutex.RLock()
-	maps := []*Map{}
+	maps := make([]*Map, 0, len(mapRegister))
 	for _, m := range mapRegister {
 		maps = append(maps, m)
 	}

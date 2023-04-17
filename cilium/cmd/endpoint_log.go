@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,9 +8,9 @@ import (
 	"os"
 	"text/tabwriter"
 
-	"github.com/cilium/cilium/pkg/command"
-
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/pkg/command"
 )
 
 // endpointLogCmd represents the endpoint_log command
@@ -26,7 +26,7 @@ var endpointLogCmd = &cobra.Command{
 
 func init() {
 	endpointCmd.AddCommand(endpointLogCmd)
-	command.AddJSONOutput(endpointLogCmd)
+	command.AddOutputOption(endpointLogCmd)
 }
 
 func getEndpointLog(cmd *cobra.Command, args []string) {
@@ -37,7 +37,7 @@ func getEndpointLog(cmd *cobra.Command, args []string) {
 		Fatalf("Cannot get endpoint log %s: %s\n", eID, err)
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(epLog); err != nil {
 			os.Exit(1)
 		}

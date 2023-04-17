@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/maps/ctmap"
 	"github.com/cilium/cilium/pkg/option"
-	"github.com/spf13/cobra"
 )
 
 // bpfCtCmd represents the bpf_ct command

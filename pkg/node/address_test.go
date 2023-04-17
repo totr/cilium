@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package node
 
@@ -14,10 +11,10 @@ import (
 	"reflect"
 	"testing"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/cidr"
-
-	. "gopkg.in/check.v1"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -31,17 +28,6 @@ var _ = Suite(&NodeSuite{})
 
 func (s *NodeSuite) TearDownTest(c *C) {
 	Uninitialize()
-}
-
-func (s *NodeSuite) TestMaskCheck(c *C) {
-	InitDefaultPrefix("")
-
-	allocCIDR := cidr.MustParseCIDR("1.1.1.1/16")
-	SetIPv4AllocRange(allocCIDR)
-	SetInternalIPv4Router(allocCIDR.IP)
-	c.Assert(IsHostIPv4(GetInternalIPv4Router()), Equals, true)
-	c.Assert(IsHostIPv4(GetIPv4()), Equals, true)
-	c.Assert(IsHostIPv6(GetIPv6()), Equals, true)
 }
 
 // This also provides cover for RestoreHostIPs.
@@ -125,22 +111,9 @@ func (s *NodeSuite) Test_chooseHostIPsToRestore(c *C) {
 	}
 	for _, tt := range tests {
 		c.Log("Test: " + tt.name)
-		got, err := chooseHostIPsToRestore(tt.ipv6, tt.fromK8s, tt.fromFS, tt.cidr)
-		if tt.expect == nil {
-			// If we don't expect to change it, set it to what's currently the
-			// router IP.
-			if tt.ipv6 {
-				tt.expect = GetIPv6Router()
-			} else {
-				tt.expect = GetInternalIPv4Router()
-			}
-		}
+		got, err := chooseHostIPsToRestore(tt.ipv6, tt.fromK8s, tt.fromFS, []*cidr.CIDR{tt.cidr})
 		c.Assert(err, checker.DeepEquals, tt.err)
-		if tt.ipv6 {
-			c.Assert(got, checker.DeepEquals, tt.expect)
-		} else {
-			c.Assert(got, checker.DeepEquals, tt.expect)
-		}
+		c.Assert(got, checker.DeepEquals, tt.expect)
 	}
 }
 
@@ -168,7 +141,6 @@ func (s *NodeSuite) Test_getCiliumHostIPsFromFile(c *C) {
 #define IPV4_GATEWAY 0x100000a
 #define IPV4_LOOPBACK 0x5dd0000a
 #define IPV4_MASK 0xffff
-#define NAT46_PREFIX { .addr = { 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xff, 0xff, 0x0, 0x0, 0x0, 0x0 } }
 #define HOST_IP 0xfd, 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xb
 #define HOST_ID 1
 #define WORLD_ID 2

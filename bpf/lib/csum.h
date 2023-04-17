@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __LIB_CSUM_H_
 #define __LIB_CSUM_H_
@@ -38,7 +38,21 @@ static __always_inline void csum_l4_offset_and_flags(__u8 nexthdr,
 		off->offset = UDP_CSUM_OFF;
 		off->flags = BPF_F_MARK_MANGLED_0;
 		break;
-
+#ifdef ENABLE_SCTP
+	case IPPROTO_SCTP:
+		/* Disable readjusting checksums of SCTP packets.
+		 * SCTP packets use a crc32c checksum over the SCTP
+		 * header and the data and do not checksum the any
+		 * part of the packet prior to the SCTP header.
+		 * This means as long as we do not modify the ports
+		 * the SCTP checksum will not change. We do this
+		 * because there is not a good way to calculate a
+		 * crc32c checksum in eBPF and will likely require
+		 * additional kernel support.
+		 */
+		off->offset = 0;
+		break;
+#endif  /* ENABLE_SCTP */
 	case IPPROTO_ICMPV6:
 		off->offset = offsetof(struct icmp6hdr, icmp6_cksum);
 		break;

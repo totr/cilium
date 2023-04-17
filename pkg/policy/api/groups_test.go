@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package api
 
 import (
 	"context"
 	"fmt"
-	"net"
-
-	"github.com/cilium/cilium/pkg/checker"
+	"net/netip"
+	"testing"
 
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 func GetToGroupsRule() ToGroups {
@@ -32,16 +30,16 @@ func GetToGroupsRule() ToGroups {
 	}
 }
 func GetCallBackWithRule(ips ...string) GroupProviderFunc {
-	netIPs := []net.IP{}
+	netIPs := make([]netip.Addr, 0, len(ips))
 	for _, ip := range ips {
-		netIPs = append(netIPs, net.ParseIP(ip))
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			netIPs = append(netIPs, addr)
+		}
 	}
 
-	cb := func(ctx context.Context, group *ToGroups) ([]net.IP, error) {
+	return func(ctx context.Context, group *ToGroups) ([]netip.Addr, error) {
 		return netIPs, nil
 	}
-
-	return cb
 }
 
 func (s *PolicyAPITestSuite) TestGetCIDRSetWithValidValue(c *C) {
@@ -84,9 +82,8 @@ func (s *PolicyAPITestSuite) TestGetCIDRSetWithUniqueCIDRRule(c *C) {
 }
 
 func (s *PolicyAPITestSuite) TestGetCIDRSetWithError(c *C) {
-
-	cb := func(ctx context.Context, group *ToGroups) ([]net.IP, error) {
-		return []net.IP{}, fmt.Errorf("Invalid credentials")
+	cb := func(ctx context.Context, group *ToGroups) ([]netip.Addr, error) {
+		return []netip.Addr{}, fmt.Errorf("Invalid credentials")
 	}
 	RegisterToGroupsProvider(AWSProvider, cb)
 	group := GetToGroupsRule()
@@ -102,4 +99,18 @@ func (s *PolicyAPITestSuite) TestWithoutProviderRegister(c *C) {
 	cidr, err := group.GetCidrSet(context.TODO())
 	c.Assert(cidr, IsNil)
 	c.Assert(err, NotNil)
+}
+
+func BenchmarkGetCIDRSet(b *testing.B) {
+	cb := GetCallBackWithRule("192.168.1.1", "192.168.10.10", "192.168.10.3")
+	RegisterToGroupsProvider(AWSProvider, cb)
+	group := GetToGroupsRule()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := group.GetCidrSet(context.TODO())
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

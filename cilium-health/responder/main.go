@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 // Ensure build fails on versions of Go that are not supported by Cilium.
 // This build tag should be kept in sync with the version specified in go.mod.
-//go:build go1.17
-// +build go1.17
+//go:build go1.20
 
 package main
 
@@ -14,12 +13,12 @@ import (
 	"os"
 	"os/signal"
 
+	flag "github.com/spf13/pflag"
+	"golang.org/x/sys/unix"
+
 	healthDefaults "github.com/cilium/cilium/pkg/health/defaults"
 	"github.com/cilium/cilium/pkg/health/probe/responder"
 	"github.com/cilium/cilium/pkg/pidfile"
-
-	flag "github.com/spf13/pflag"
-	"golang.org/x/sys/unix"
 )
 
 func main() {

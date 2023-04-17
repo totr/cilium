@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
@@ -8,15 +8,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"sync/atomic"
-	"unsafe"
+
+	"github.com/cilium/lumberjack/v2"
+	"github.com/sirupsen/logrus"
 
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var (
@@ -35,15 +33,13 @@ const (
 // getLogger returns a logrus object with EndpointID, containerID and the Endpoint
 // revision fields.
 func (e *Endpoint) getLogger() *logrus.Entry {
-	v := atomic.LoadPointer(&e.logger)
-	return (*logrus.Entry)(v)
+	return e.logger.Load()
 }
 
 // getPolicyLogger returns a logger to be used for policy update debugging, or nil,
 // if not configured.
 func (e *Endpoint) getPolicyLogger() *logrus.Entry {
-	v := atomic.LoadPointer(&e.policyLogger)
-	return (*logrus.Entry)(v)
+	return e.policyLogger.Load()
 }
 
 // PolicyDebug logs the 'msg' with 'fields' if policy debug logging is enabled.
@@ -73,11 +69,10 @@ func (e *Endpoint) Logger(subsystem string) *logrus.Entry {
 // endopoints do not need locks to call this.
 func (e *Endpoint) UpdateLogger(fields map[string]interface{}) {
 	e.updatePolicyLogger(fields)
-	v := atomic.LoadPointer(&e.logger)
-	epLogger := (*logrus.Entry)(v)
+	epLogger := e.logger.Load()
 	if fields != nil && epLogger != nil {
 		newLogger := epLogger.WithFields(fields)
-		atomic.StorePointer(&e.logger, unsafe.Pointer(newLogger))
+		e.logger.Store(newLogger)
 		return
 	}
 
@@ -96,13 +91,12 @@ func (e *Endpoint) UpdateLogger(fields map[string]interface{}) {
 		return
 	}
 
-	// default to using the log var set above
-	baseLogger := log.Logger
+	// default to a new default logger
+	baseLogger := logging.InitializeDefaultLogger()
 
 	// If this endpoint is set to debug ensure it will print debug by giving it
 	// an independent logger
 	if e.Options != nil && e.Options.IsEnabled(option.Debug) {
-		baseLogger = logging.InitializeDefaultLogger()
 		baseLogger.SetLevel(logrus.DebugLevel)
 	} else {
 		// Debug mode takes priority; if not in debug, check what log level user
@@ -118,8 +112,8 @@ func (e *Endpoint) UpdateLogger(fields map[string]interface{}) {
 		logfields.ContainerID:            e.getShortContainerID(),
 		logfields.DatapathPolicyRevision: e.policyRevision,
 		logfields.DesiredPolicyRevision:  e.nextPolicyRevision,
-		logfields.IPv4:                   e.IPv4.String(),
-		logfields.IPv6:                   e.IPv6.String(),
+		logfields.IPv4:                   e.GetIPv4Address(),
+		logfields.IPv6:                   e.GetIPv6Address(),
 		logfields.K8sPodName:             e.getK8sNamespaceAndPodName(),
 	})
 
@@ -127,13 +121,12 @@ func (e *Endpoint) UpdateLogger(fields map[string]interface{}) {
 		l = l.WithField(logfields.Identity, e.SecurityIdentity.ID.StringID())
 	}
 
-	atomic.StorePointer(&e.logger, unsafe.Pointer(l))
+	e.logger.Store(l)
 }
 
 // Only to be called from UpdateLogger() above
 func (e *Endpoint) updatePolicyLogger(fields map[string]interface{}) {
-	pv := atomic.LoadPointer(&e.policyLogger)
-	policyLogger := (*logrus.Entry)(pv)
+	policyLogger := e.policyLogger.Load()
 	// e.Options check needed for unit testing.
 	if policyLogger == nil && e.Options != nil && e.Options.IsEnabled(option.DebugPolicy) {
 		policyLogOnce.Do(func() {
@@ -177,8 +170,8 @@ func (e *Endpoint) updatePolicyLogger(fields map[string]interface{}) {
 			logfields.ContainerID:            e.getShortContainerID(),
 			logfields.DatapathPolicyRevision: e.policyRevision,
 			logfields.DesiredPolicyRevision:  e.nextPolicyRevision,
-			logfields.IPv4:                   e.IPv4.String(),
-			logfields.IPv6:                   e.IPv6.String(),
+			logfields.IPv4:                   e.GetIPv4Address(),
+			logfields.IPv6:                   e.GetIPv6Address(),
 			logfields.K8sPodName:             e.getK8sNamespaceAndPodName(),
 		})
 
@@ -186,5 +179,5 @@ func (e *Endpoint) updatePolicyLogger(fields map[string]interface{}) {
 			policyLogger = policyLogger.WithField(logfields.Identity, e.SecurityIdentity.ID.StringID())
 		}
 	}
-	atomic.StorePointer(&e.policyLogger, unsafe.Pointer(policyLogger))
+	e.policyLogger.Store(policyLogger)
 }

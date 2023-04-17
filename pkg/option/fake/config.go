@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package fake
 
@@ -35,4 +35,9 @@ func (f *Config) EncryptionEnabled() bool {
 // NodeEncryptionEnabled returns true if node encryption is enabled
 func (f *Config) NodeEncryptionEnabled() bool {
 	return true
+}
+
+// LocalClusterID returns a dummy cluster ID.
+func (f *Config) LocalClusterID() uint32 {
+	return 5
 }

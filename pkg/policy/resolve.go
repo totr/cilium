@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package policy
 
 import (
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
-
-	"github.com/sirupsen/logrus"
 )
 
 // selectorPolicy is a structure which contains the resolved policy for a
@@ -23,9 +23,6 @@ type selectorPolicy struct {
 
 	// L4Policy contains the computed L4 and L7 policy.
 	L4Policy *L4Policy
-
-	// CIDRPolicy contains the L3 (not L4) CIDR-based policy.
-	CIDRPolicy *CIDRPolicy
 
 	// IngressPolicyEnabled specifies whether this policy contains any policy
 	// at ingress.
@@ -141,10 +138,12 @@ func (p *selectorPolicy) DistillPolicy(policyOwner PolicyOwner, isHost bool) *En
 	// Must come after the 'insertUser()' above to guarantee
 	// PolicyMapChanges will contain all changes that are applied
 	// after the computation of PolicyMapState has started.
+	p.SelectorCache.mutex.RLock()
 	calculatedPolicy.computeDesiredL4PolicyMapEntries()
 	if !isHost {
 		calculatedPolicy.PolicyMapState.DetermineAllowLocalhostIngress()
 	}
+	p.SelectorCache.mutex.RUnlock()
 
 	return calculatedPolicy
 }
@@ -171,7 +170,7 @@ func (p *EndpointPolicy) computeDirectionL4PolicyMapEntries(policyMapState MapSt
 	for _, filter := range l4PolicyMap {
 		lookupDone := false
 		proxyport := uint16(0)
-		keysFromFilter := filter.ToMapState(p.PolicyOwner, direction)
+		keysFromFilter := filter.ToMapState(p.PolicyOwner, direction, p.SelectorCache)
 		for keyFromFilter, entry := range keysFromFilter {
 			// Fix up the proxy port for entries that need proxy redirection
 			if entry.IsRedirectEntry() {
@@ -191,7 +190,7 @@ func (p *EndpointPolicy) computeDirectionL4PolicyMapEntries(policyMapState MapSt
 					continue
 				}
 			}
-			policyMapState.DenyPreferredInsert(keyFromFilter, entry)
+			policyMapState.DenyPreferredInsert(keyFromFilter, entry, p.SelectorCache)
 		}
 	}
 }
@@ -200,10 +199,10 @@ func (p *EndpointPolicy) computeDirectionL4PolicyMapEntries(policyMapState MapSt
 // locking the selector cache to make sure concurrent identity updates
 // have completed.
 // PolicyOwner (aka Endpoint) is also locked during this call.
-func (p *EndpointPolicy) ConsumeMapChanges() (adds, deletes MapState) {
+func (p *EndpointPolicy) ConsumeMapChanges() (adds, deletes Keys) {
 	p.selectorPolicy.SelectorCache.mutex.Lock()
 	defer p.selectorPolicy.SelectorCache.mutex.Unlock()
-	return p.policyMapChanges.consumeMapChanges(p.PolicyMapState)
+	return p.policyMapChanges.consumeMapChanges(p.PolicyMapState, p.SelectorCache)
 }
 
 // AllowsIdentity returns whether the specified policy allows

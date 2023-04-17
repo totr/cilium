@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package ipam
 
@@ -11,6 +8,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"gopkg.in/check.v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apimock "github.com/cilium/cilium/pkg/azure/api/mock"
 	"github.com/cilium/cilium/pkg/azure/types"
@@ -21,9 +21,6 @@ import (
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/testutils"
-
-	"gopkg.in/check.v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func Test(t *testing.T) {
@@ -65,12 +62,6 @@ func newK8sMock() *k8sMock {
 	}
 }
 
-func (k *k8sMock) specRevision() int {
-	k.mutex.RLock()
-	defer k.mutex.RUnlock()
-	return k.specRev
-}
-
 func (k *k8sMock) Create(node *v2.CiliumNode) (*v2.CiliumNode, error) {
 	k.mutex.Lock()
 	k.specRev++
@@ -109,14 +100,6 @@ func (k *k8sMock) getLatestNode(name string) *v2.CiliumNode {
 
 func (k *k8sMock) Get(node string) (*v2.CiliumNode, error) {
 	return &v2.CiliumNode{}, nil
-}
-
-func (k *k8sMock) Delete(nodeName string) error {
-	k.mutex.Lock()
-	k.specRev++
-	delete(k.latestCiliumNode, nodeName)
-	k.mutex.Unlock()
-	return nil
 }
 
 func newCiliumNode(node, instanceID string, preAllocate, minAllocate int) *v2.CiliumNode {
@@ -196,7 +179,7 @@ func (e *IPAMSuite) TestIpamPreAllocate8(c *check.C) {
 	instances.Resync(context.TODO())
 
 	k8sapi := newK8sMock()
-	mngr, err := ipam.NewNodeManager(instances, k8sapi, metricsmock.NewMockMetrics(), 10, false)
+	mngr, err := ipam.NewNodeManager(instances, k8sapi, metricsmock.NewMockMetrics(), 10, false, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(mngr, check.Not(check.IsNil))
 
@@ -258,7 +241,7 @@ func (e *IPAMSuite) TestIpamMinAllocate10(c *check.C) {
 	instances.Resync(context.TODO())
 
 	k8sapi := newK8sMock()
-	mngr, err := ipam.NewNodeManager(instances, k8sapi, metricsmock.NewMockMetrics(), 10, false)
+	mngr, err := ipam.NewNodeManager(instances, k8sapi, metricsmock.NewMockMetrics(), 10, false, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(mngr, check.Not(check.IsNil))
 
@@ -310,7 +293,7 @@ func (e *IPAMSuite) TestIpamManyNodes(c *check.C) {
 
 	k8sapi := newK8sMock()
 	metrics := metricsmock.NewMockMetrics()
-	mngr, err := ipam.NewNodeManager(instances, k8sapi, metrics, 10, false)
+	mngr, err := ipam.NewNodeManager(instances, k8sapi, metrics, 10, false, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(mngr, check.Not(check.IsNil))
 
@@ -352,7 +335,7 @@ func (e *IPAMSuite) TestIpamManyNodes(c *check.C) {
 	}
 
 	// The above check returns as soon as the address requirements are met.
-	// The metrics may still be oudated, resync all nodes to update
+	// The metrics may still be outdated, resync all nodes to update
 	// metrics.
 	mngr.Resync(context.TODO(), time.Now())
 
@@ -366,7 +349,7 @@ func (e *IPAMSuite) TestIpamManyNodes(c *check.C) {
 
 	// All subnets must have been used for allocation
 	for _, subnet := range subnets {
-		c.Assert(metrics.AllocationAttempts("success", subnet.ID), check.Not(check.Equals), 0)
+		c.Assert(metrics.GetAllocationAttempts("createInterfaceAndAllocateIP", "success", subnet.ID), check.Not(check.Equals), 0)
 		c.Assert(metrics.IPAllocations(subnet.ID), check.Not(check.Equals), 0)
 	}
 
@@ -384,7 +367,7 @@ func benchmarkAllocWorker(c *check.C, workers int64, delay time.Duration, rateLi
 
 	k8sapi := newK8sMock()
 	metrics := metricsmock.NewMockMetrics()
-	mngr, err := ipam.NewNodeManager(instances, k8sapi, metrics, workers, false)
+	mngr, err := ipam.NewNodeManager(instances, k8sapi, metrics, workers, false, false)
 	c.Assert(err, check.IsNil)
 	c.Assert(mngr, check.Not(check.IsNil))
 

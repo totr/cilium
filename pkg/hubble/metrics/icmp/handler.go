@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package icmp
 
 import (
 	"context"
 
-	flowpb "github.com/cilium/cilium/api/v1/flow"
-	"github.com/cilium/cilium/pkg/hubble/metrics/api"
-
 	"github.com/google/gopacket/layers"
 	"github.com/prometheus/client_golang/prometheus"
+
+	flowpb "github.com/cilium/cilium/api/v1/flow"
+	"github.com/cilium/cilium/pkg/hubble/metrics/api"
 )
 
 type icmpHandler struct {
@@ -42,21 +42,36 @@ func (h *icmpHandler) Status() string {
 	return h.context.Status()
 }
 
-func (h *icmpHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
+func (h *icmpHandler) Context() *api.ContextOptions {
+	return h.context
+}
+
+func (h *icmpHandler) ListMetricVec() []*prometheus.MetricVec {
+	return []*prometheus.MetricVec{h.icmp.MetricVec}
+}
+
+func (h *icmpHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) error {
 	l4 := flow.GetL4()
 	if l4 == nil {
-		return
+		return nil
+	}
+
+	labelValues, err := h.context.GetLabelValues(flow)
+	if err != nil {
+		return err
 	}
 
 	if icmp := l4.GetICMPv4(); icmp != nil {
 		labels := []string{"IPv4", layers.CreateICMPv4TypeCode(uint8(icmp.Type), uint8(icmp.Code)).String()}
-		labels = append(labels, h.context.GetLabelValues(flow)...)
+		labels = append(labels, labelValues...)
 		h.icmp.WithLabelValues(labels...).Inc()
 	}
 
 	if icmp := l4.GetICMPv6(); icmp != nil {
 		labels := []string{"IPv4", layers.CreateICMPv6TypeCode(uint8(icmp.Type), uint8(icmp.Code)).String()}
-		labels = append(labels, h.context.GetLabelValues(flow)...)
+		labels = append(labels, labelValues...)
 		h.icmp.WithLabelValues(labels...).Inc()
 	}
+
+	return nil
 }

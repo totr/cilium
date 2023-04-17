@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package metadata
 
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"time"
+
+	"github.com/cilium/cilium/pkg/safeio"
 )
 
 const (
@@ -40,9 +41,9 @@ func GetVPCID(ctx context.Context) (string, error) {
 	return getMetadata(ctx, "vpc-id")
 }
 
-// GetCIDRBlock returns the IPv4 CIDR that belongs to the ECS instance from metadata
-func GetCIDRBlock(ctx context.Context) (string, error) {
-	return getMetadata(ctx, "vswitch-cidr-block")
+// GetVPCCIDRBlock returns the IPv4 CIDR block of the VPC to which the instance belongs
+func GetVPCCIDRBlock(ctx context.Context) (string, error) {
+	return getMetadata(ctx, "vpc-cidr-block")
 }
 
 // getMetadata gets metadata
@@ -56,12 +57,18 @@ func getMetadata(ctx context.Context, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("metadata service returned status code %d", resp.StatusCode)
+	}
+
 	defer resp.Body.Close()
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := safeio.ReadAllLimit(resp.Body, safeio.MB)
 	if err != nil {
 		return "", err
 	}

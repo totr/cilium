@@ -13,15 +13,16 @@ Manage policy related BPF maps
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf policy add](../cilium_bpf_policy_add)	 - Add/update policy entry
-* [cilium bpf policy delete](../cilium_bpf_policy_delete)	 - Delete a policy entry
-* [cilium bpf policy get](../cilium_bpf_policy_get)	 - List contents of a policy BPF map
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf policy add](cilium_bpf_policy_add.md)	 - Add/update policy entry
+* [cilium bpf policy delete](cilium_bpf_policy_delete.md)	 - Delete a policy entry
+* [cilium bpf policy get](cilium_bpf_policy_get.md)	 - Get contents of a policy BPF map
+* [cilium bpf policy list](cilium_bpf_policy_list.md)	 - Dump all policy maps
 

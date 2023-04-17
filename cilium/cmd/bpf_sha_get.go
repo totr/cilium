@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,10 +11,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/common"
-
-	"github.com/spf13/cobra"
 )
 
 var bpfShaGetCmd = &cobra.Command{
@@ -33,7 +33,7 @@ var bpfShaGetCmd = &cobra.Command{
 
 func init() {
 	bpfTemplateCmd.AddCommand(bpfShaGetCmd)
-	command.AddJSONOutput(bpfShaGetCmd)
+	command.AddOutputOption(bpfShaGetCmd)
 }
 
 func dumpSha(sha string) {
@@ -43,7 +43,7 @@ func dumpSha(sha string) {
 		Fatalf("Failed to describe SHA: %s", err)
 	}
 
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		regex, err := regexp.Compile("// JSON_OUTPUT: (?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)")
 		if err != nil {
 			Fatalf("Error preparing regex for parsing JSON: %s\n", err)
@@ -60,7 +60,7 @@ func dumpSha(sha string) {
 		}
 
 		if err := command.PrintOutput(jsonStr); err != nil {
-			Fatalf("error printing output in JSON: %s\n", err)
+			Fatalf("error printing output in %s: %s\n", command.OutputOptionString(), err)
 		}
 		return
 	}

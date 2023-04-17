@@ -13,16 +13,13 @@ Manage the egress routing rules
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf egress delete](../cilium_bpf_egress_delete)	 - Delete egress entries
-* [cilium bpf egress get](../cilium_bpf_egress_get)	 - Get egress entries
-* [cilium bpf egress list](../cilium_bpf_egress_list)	 - List egress policy entries
-* [cilium bpf egress update](../cilium_bpf_egress_update)	 - Update egress entries
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf egress list](cilium_bpf_egress_list.md)	 - List egress policy entries
 

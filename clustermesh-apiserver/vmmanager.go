@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package main
 
@@ -7,7 +7,16 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"path"
 	"sort"
+
+	k8sv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/cidr"
@@ -17,20 +26,15 @@ import (
 	"github.com/cilium/cilium/pkg/k8s"
 	k8sConst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
 	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned"
 	"github.com/cilium/cilium/pkg/k8s/informer"
+	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/kvstore/store"
 	"github.com/cilium/cilium/pkg/labels"
+	nodeStore "github.com/cilium/cilium/pkg/node/store"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
-
-	k8sv1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/tools/cache"
 )
 
 type VMManager struct {
@@ -41,23 +45,23 @@ type VMManager struct {
 	ciliumExternalWorkloadInformer cache.Controller
 }
 
-func NewVMManager(ciliumK8sClient clientset.Interface) *VMManager {
+func NewVMManager(clientset k8sClient.Clientset) *VMManager {
 	m := &VMManager{
-		ciliumClient: ciliumK8sClient,
+		ciliumClient: clientset,
 	}
 	m.identityAllocator = identityCache.NewCachingIdentityAllocator(m)
 
 	if option.Config.EnableWellKnownIdentities {
 		identity.InitWellKnownIdentities(option.Config)
 	}
-	m.identityAllocator.InitIdentityAllocator(ciliumK8sClient, identityStore)
-	m.startCiliumExternalWorkloadWatcher()
+	m.identityAllocator.InitIdentityAllocator(clientset, identityStore)
+	m.startCiliumExternalWorkloadWatcher(clientset)
 	return m
 }
 
-func (m *VMManager) startCiliumExternalWorkloadWatcher() {
+func (m *VMManager) startCiliumExternalWorkloadWatcher(clientset k8sClient.Clientset) {
 	m.ciliumExternalWorkloadStore, m.ciliumExternalWorkloadInformer = informer.NewInformer(
-		cache.NewListWatchFromClient(ciliumK8sClient.CiliumV2().RESTClient(),
+		cache.NewListWatchFromClient(clientset.CiliumV2().RESTClient(),
 			ciliumv2.CEWPluralName, k8sv1.NamespaceAll, fields.Everything()),
 		&ciliumv2.CiliumExternalWorkload{},
 		0,
@@ -95,7 +99,7 @@ func (m *VMManager) startCiliumExternalWorkloadWatcher() {
 // UpdateIdentities will be called when identities have changed
 func (m *VMManager) UpdateIdentities(added, deleted identityCache.IdentityCache) {}
 
-// GetSuffix must return the node specific suffix to use
+// GetNodeSuffix must return the node specific suffix to use
 func (m *VMManager) GetNodeSuffix() string {
 	return "vm-allocator"
 }
@@ -118,7 +122,7 @@ func nodeOverrideFromCEW(n *nodeTypes.RegisterNode, cew *ciliumv2.CiliumExternal
 
 	// Override cluster
 	nk.Cluster = cfg.clusterName
-	nk.ClusterID = clusterID
+	nk.ClusterID = cfg.clusterID
 	nk.Labels[k8sConst.PolicyLabelCluster] = cfg.clusterName
 
 	// Override CIDRs if defined
@@ -180,7 +184,7 @@ func (m *VMManager) OnUpdate(k store.Key) {
 				nk.IPAddresses = nil
 
 				// Update the registration, now with the node identity and overridden fields
-				if err := ciliumNodeRegisterStore.UpdateKeySync(context.Background(), nk); err != nil {
+				if err := m.syncKVStoreKey(context.Background(), nk); err != nil {
 					log.WithError(err).Warning("CEW: Unable to update register node in etcd")
 				} else {
 					log.Debugf("CEW: Updated register node in etcd (nid: %d): %v", nid, nk)
@@ -189,7 +193,7 @@ func (m *VMManager) OnUpdate(k store.Key) {
 		} else if len(n.IPAddresses) > 0 {
 			// Phase 2: non-zero ID registration with addresses
 
-			// Override again, just in case the extenal node is misbehaving
+			// Override again, just in case the external node is misbehaving
 			nk := nodeOverrideFromCEW(n, cew)
 
 			id := m.LookupNodeIdentity(nk)
@@ -199,7 +203,7 @@ func (m *VMManager) OnUpdate(k store.Key) {
 
 			// Create cluster resources for the external node
 			nodeIP := nk.GetNodeIP(false)
-			m.UpdateCiliumNodeResource(nk)
+			m.UpdateCiliumNodeResource(nk, cew)
 			m.UpdateCiliumEndpointResource(nk.Name, id, nk.IPAddresses, nodeIP)
 
 			nid := id.ID.Uint32()
@@ -242,7 +246,7 @@ func (m *VMManager) AllocateNodeIdentity(n *nodeTypes.RegisterNode) *identity.Id
 		return id
 	}
 
-	id, allocated, err := m.identityAllocator.AllocateIdentity(ctx, vmLabels, true)
+	id, allocated, err := m.identityAllocator.AllocateIdentity(ctx, vmLabels, true, identity.InvalidIdentity)
 	if err != nil {
 		log.WithError(err).Error("unable to resolve identity")
 	} else {
@@ -271,8 +275,16 @@ const (
 
 // UpdateCiliumNodeResource updates the CiliumNode resource representing the
 // local node
-func (m *VMManager) UpdateCiliumNodeResource(n *nodeTypes.RegisterNode) {
+func (m *VMManager) UpdateCiliumNodeResource(n *nodeTypes.RegisterNode, cew *ciliumv2.CiliumExternalWorkload) {
 	nr := n.ToCiliumNode()
+	nr.OwnerReferences = []metav1.OwnerReference{
+		{
+			APIVersion: ciliumv2.SchemeGroupVersion.String(),
+			Kind:       ciliumv2.CEWKindDefinition,
+			Name:       cew.GetName(),
+			UID:        cew.GetUID(),
+		},
+	}
 
 	for retryCount := 0; retryCount < maxRetryCount; retryCount++ {
 		log.Info("Getting CN during an update")
@@ -348,11 +360,10 @@ func (m *VMManager) UpdateCiliumEndpointResource(name string, id *identity.Ident
 					Name:      name,
 					Namespace: namespace,
 					OwnerReferences: []metav1.OwnerReference{{
-						APIVersion:         "cilium.io/v2",
-						Kind:               "CiliumNode",
-						Name:               nr.ObjectMeta.Name,
-						UID:                nr.ObjectMeta.UID,
-						BlockOwnerDeletion: func() *bool { a := true; return &a }(),
+						APIVersion: "cilium.io/v2",
+						Kind:       "CiliumNode",
+						Name:       nr.ObjectMeta.Name,
+						UID:        nr.ObjectMeta.UID,
 					}},
 					Labels: map[string]string{
 						"name": name,
@@ -426,4 +437,21 @@ func getEndpointIdentity(mdlIdentity *models.Identity) (identity *ciliumv2.Endpo
 	sort.Strings(identity.Labels)
 	log.Infof("Got Endpoint Identity: %v", *identity)
 	return
+}
+
+// syncKVStoreKey synchronizes a key to the kvstore
+func (m *VMManager) syncKVStoreKey(ctx context.Context, key store.LocalKey) error {
+	jsonValue, err := key.Marshal()
+	if err != nil {
+		return err
+	}
+
+	// Update key in kvstore, overwrite an eventual existing key, attach
+	// lease to expire entry when agent dies and never comes back up.
+	k := path.Join(nodeStore.NodeRegisterStorePrefix, key.GetKeyName())
+	if _, err := kvstore.Client().UpdateIfDifferent(ctx, k, jsonValue, true); err != nil {
+		return err
+	}
+
+	return nil
 }

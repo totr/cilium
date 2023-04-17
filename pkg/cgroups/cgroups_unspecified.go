@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build !linux
-// +build !linux
 
 package cgroups
 
@@ -16,4 +15,8 @@ func mountCgroup() error {
 
 func cgrpCheckOrMountLocation(cgroupRoot string) error {
 	return ErrNotImplemented
+}
+
+func GetCgroupID(cgroupPath string) (uint64, error) {
+	return 0, ErrNotImplemented
 }

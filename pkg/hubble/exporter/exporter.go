@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package exporter
 
@@ -8,14 +8,14 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cilium/lumberjack/v2"
+	"github.com/sirupsen/logrus"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	"github.com/cilium/cilium/pkg/hubble/exporter/exporteroption"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
-
-	"github.com/sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // exporter is an implementation of OnDecodedEvent interface that writes Hubble events to a file.

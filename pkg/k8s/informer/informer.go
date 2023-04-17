@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package informer
 
@@ -9,12 +9,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cilium/cilium/pkg/logging"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-
 	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 	utilRuntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/cilium/cilium/pkg/logging"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "k8s")
@@ -51,6 +51,21 @@ func NewInformer(
 	// This will hold the client state, as we know it.
 	clientState := cache.NewStore(cache.DeletionHandlingMetaNamespaceKeyFunc)
 
+	return clientState, NewInformerWithStore(lw, objType, resyncPeriod, h, convertFunc, clientState)
+}
+
+// NewIndexerInformer is a copy of k8s.io/client-go/tools/cache/NewIndexerInformer with a new
+// argument which converts an object into another object that can be stored in
+// the local cache.
+func NewIndexerInformer(
+	lw cache.ListerWatcher,
+	objType k8sRuntime.Object,
+	resyncPeriod time.Duration,
+	h cache.ResourceEventHandler,
+	convertFunc ConvertFunc,
+	indexers cache.Indexers,
+) (cache.Indexer, cache.Controller) {
+	clientState := cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, indexers)
 	return clientState, NewInformerWithStore(lw, objType, resyncPeriod, h, convertFunc, clientState)
 }
 

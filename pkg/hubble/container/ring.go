@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Hubble
+// Copyright Authors of Hubble
 
 package container
 
@@ -7,16 +7,18 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	"github.com/cilium/cilium/pkg/hubble/math"
+	"github.com/cilium/cilium/pkg/hubble/metrics"
 	"github.com/cilium/cilium/pkg/lock"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Capacity is the interface that wraps Cap.
@@ -64,7 +66,7 @@ const (
 // NewCapacity creates a new Capacity from n.
 // The value of n MUST satisfy n=2^i -1 for i = [1, 16]; ie:
 //
-//     1, 3, 7, ..., 2047, 4095, ..., 65535
+//	1, 3, 7, ..., 2047, 4095, ..., 65535
 //
 // Constants CapacityN represent all possible values of n and are valid
 // Capacity that can be provided to NewRing.
@@ -204,7 +206,18 @@ func (r *Ring) LastWrite() uint64 {
 	return atomic.LoadUint64(&r.write) - 1
 }
 
+// OldestWrite returns the oldest element written.
+// Note: It should only be used to read from the beginning of the buffer.
+func (r *Ring) OldestWrite() uint64 {
+	write := atomic.LoadUint64(&r.write)
+	if write > r.dataLen {
+		return write - r.dataLen
+	}
+	return 0
+}
+
 func getLostEvent() *v1.Event {
+	metrics.LostEvents.WithLabelValues(strings.ToLower(flowpb.LostEventSource_HUBBLE_RING_BUFFER.String())).Inc()
 	now := time.Now().UTC()
 	return &v1.Event{
 		Timestamp: &timestamppb.Timestamp{

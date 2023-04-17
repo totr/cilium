@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Hubble
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Hubble
 
 package filters
 
@@ -154,6 +151,18 @@ func TestHTTPFilters(t *testing.T) {
 				f: []*flowpb.FlowFilter{
 					{
 						HttpStatusCode: []string{"909"},
+						EventType:      []*flowpb.EventTypeFilter{{Type: api.MessageTypeAccessLog}},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid status code text",
+			args: args{
+				f: []*flowpb.FlowFilter{
+					{
+						HttpStatusCode: []string{"HTTP 200 OK"},
 						EventType:      []*flowpb.EventTypeFilter{{Type: api.MessageTypeAccessLog}},
 					},
 				},

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
@@ -18,6 +18,13 @@ import (
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
+)
+
+// StatusNA is value of fields in the output of 'kubectl get cep' in case of disabled "--endpoint-status"
+const (
+	EndpointPolicyStateEnforcing    cilium_v2.EndpointPolicyState = "enforcing"
+	EndpointPolicyStateNonEnforcing cilium_v2.EndpointPolicyState = "non-enforcing"
+	EndpointPolicyStateDisabled     cilium_v2.EndpointPolicyState = "<status disabled>"
 )
 
 func getEndpointStatusControllers(mdlControllers models.ControllerStatuses) (controllers cilium_v2.ControllerList) {
@@ -120,11 +127,7 @@ func getEndpointNetworking(mdlNetworking *models.EndpointNetworking) (networking
 		Addressing: make(cilium_v2.AddressPairList, len(mdlNetworking.Addressing)),
 	}
 
-	if option.Config.EnableIPv4 {
-		networking.NodeIP = node.GetIPv4().String()
-	} else {
-		networking.NodeIP = node.GetIPv6().String()
-	}
+	networking.NodeIP = node.GetCiliumEndpointNodeIP()
 
 	for i, pair := range mdlNetworking.Addressing {
 		networking.Addressing[i] = &cilium_v2.AddressPair{
@@ -227,6 +230,16 @@ func (e *Endpoint) getEndpointPolicy() (ep *cilium_v2.EndpointPolicy) {
 				e.desiredPolicy.EgressPolicyEnabled,
 		},
 	}
+	if ep.Ingress.Enforcing {
+		ep.Ingress.State = EndpointPolicyStateEnforcing
+	} else {
+		ep.Ingress.State = EndpointPolicyStateNonEnforcing
+	}
+	if ep.Egress.Enforcing {
+		ep.Egress.State = EndpointPolicyStateEnforcing
+	} else {
+		ep.Egress.State = EndpointPolicyStateNonEnforcing
+	}
 
 	// Handle allow-all cases
 	allowsAllIngress, allowsAllEgress := e.desiredPolicy.AllowsIdentity(identity.IdentityUnknown)
@@ -279,6 +292,19 @@ func (e *Endpoint) getEndpointPolicy() (ep *cilium_v2.EndpointPolicy) {
 	return
 }
 
+func (e *Endpoint) getEndpointPolicyStateDisabled() (ep *cilium_v2.EndpointPolicy) {
+	ep = &cilium_v2.EndpointPolicy{
+		Ingress: &cilium_v2.EndpointPolicyDirection{
+			State: EndpointPolicyStateDisabled,
+		},
+		Egress: &cilium_v2.EndpointPolicyDirection{
+			State: EndpointPolicyStateDisabled,
+		},
+	}
+
+	return
+}
+
 func (e *Endpoint) getEndpointVisibilityPolicyStatus() *string {
 	if e.visibilityPolicy == nil {
 		return nil
@@ -292,6 +318,11 @@ func (e *Endpoint) getEndpointVisibilityPolicyStatus() *string {
 	return &str
 }
 
+func (e *Endpoint) getEndpointVisibilityPolicyStatusDisabled() *string {
+	str := EndpointPolicyStateDisabled
+	return (*string)(&str)
+}
+
 // EndpointStatusConfiguration is the configuration interface that a caller of
 // to GetCiliumEndpointStatus() must implement
 type EndpointStatusConfiguration interface {
@@ -302,7 +333,7 @@ type EndpointStatusConfiguration interface {
 
 func compressEndpointState(state models.EndpointState) string {
 	switch state {
-	case models.EndpointStateRestoring, models.EndpointStateWaitingToRegenerate,
+	case models.EndpointStateRestoring, models.EndpointStateWaitingDashToDashRegenerate,
 		models.EndpointStateRegenerating, models.EndpointStateReady,
 		models.EndpointStateDisconnecting, models.EndpointStateDisconnected:
 		return string(models.EndpointStateReady)
@@ -323,7 +354,7 @@ func (e *Endpoint) GetCiliumEndpointStatus(conf EndpointStatusConfiguration) *ci
 		Identity:            getEndpointIdentity(identitymodel.CreateModel(e.SecurityIdentity)),
 		Networking:          getEndpointNetworking(e.getModelNetworkingRLocked()),
 		State:               compressEndpointState(e.getModelCurrentStateRLocked()),
-		Encryption:          cilium_v2.EncryptionSpec{Key: int(node.GetIPsecKeyIdentity())},
+		Encryption:          cilium_v2.EncryptionSpec{Key: int(node.GetEncryptKeyIndex())},
 		NamedPorts:          e.getNamedPortsModel(),
 	}
 
@@ -335,6 +366,9 @@ func (e *Endpoint) GetCiliumEndpointStatus(conf EndpointStatusConfiguration) *ci
 	if conf.EndpointStatusIsEnabled(option.EndpointStatusPolicy) {
 		status.Policy = e.getEndpointPolicy()
 		status.VisibilityPolicyStatus = e.getEndpointVisibilityPolicyStatus()
+	} else {
+		status.Policy = e.getEndpointPolicyStateDisabled()
+		status.VisibilityPolicyStatus = e.getEndpointVisibilityPolicyStatusDisabled()
 	}
 
 	if conf.EndpointStatusIsEnabled(option.EndpointStatusHealth) {

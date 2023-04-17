@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package manager
 
@@ -12,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/bgp/mock"
-	"github.com/cilium/cilium/pkg/lock"
-
 	"github.com/google/go-cmp/cmp"
 	metallbk8s "go.universe.tf/metallb/pkg/k8s"
 	mlbk8s "go.universe.tf/metallb/pkg/k8s"
 	"go.universe.tf/metallb/pkg/k8s/types"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/cilium/cilium/pkg/bgp/mock"
+	"github.com/cilium/cilium/pkg/lock"
 )
 
 const (
@@ -82,7 +79,7 @@ func TestManagerEventNoService(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 
@@ -150,7 +147,7 @@ func TestManagerEvent(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 

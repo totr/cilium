@@ -1,55 +1,38 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package option
 
-import (
-	"errors"
-
-	datapathOption "github.com/cilium/cilium/pkg/datapath/option"
-)
-
 const (
-	PolicyTracing       = "PolicyTracing"
-	ConntrackAccounting = "ConntrackAccounting"
-	ConntrackLocal      = "ConntrackLocal"
-	Conntrack           = "Conntrack"
-	Debug               = "Debug"
-	DebugLB             = "DebugLB"
-	DebugPolicy         = "DebugPolicy"
-	DropNotify          = "DropNotification"
-	TraceNotify         = "TraceNotification"
-	PolicyVerdictNotify = "PolicyVerdictNotification"
-	PolicyAuditMode     = "PolicyAuditMode"
-	MonitorAggregation  = "MonitorAggregationLevel"
-	NAT46               = "NAT46"
-	AlwaysEnforce       = "always"
-	NeverEnforce        = "never"
-	DefaultEnforcement  = "default"
-)
-
-var (
-	ErrNAT46ReqIPv4 = errors.New("NAT46 requires IPv4 to be enabled")
-	ErrNAT46ReqIPv6 = errors.New("NAT46 requires IPv6 to be enabled")
-	ErrNAT46ReqVeth = errors.New("NAT46 not supported in ipvlan datapath mode")
+	PolicyTracing        = "PolicyTracing"
+	ConntrackAccounting  = "ConntrackAccounting"
+	ConntrackLocal       = "ConntrackLocal"
+	Debug                = "Debug"
+	DebugLB              = "DebugLB"
+	DebugPolicy          = "DebugPolicy"
+	DropNotify           = "DropNotification"
+	TraceNotify          = "TraceNotification"
+	TraceSockNotify      = "TraceSockNotification"
+	PolicyVerdictNotify  = "PolicyVerdictNotification"
+	PolicyAuditMode      = "PolicyAuditMode"
+	MonitorAggregation   = "MonitorAggregationLevel"
+	SourceIPVerification = "SourceIPVerification"
+	AlwaysEnforce        = "always"
+	NeverEnforce         = "never"
+	DefaultEnforcement   = "default"
 )
 
 var (
 	specConntrackAccounting = Option{
 		Define:      "CONNTRACK_ACCOUNTING",
 		Description: "Enable per flow (conntrack) statistics",
-		Requires:    []string{Conntrack},
+		Requires:    nil,
 	}
 
 	specConntrackLocal = Option{
 		Define:      "CONNTRACK_LOCAL",
 		Description: "Use endpoint dedicated tracking table instead of global one",
-		Requires:    []string{Conntrack},
-	}
-
-	specConntrack = Option{
-		Define:      "CONNTRACK",
-		Description: "Enable stateful connection tracking",
+		Requires:    nil,
 	}
 
 	specDebug = Option{
@@ -95,27 +78,8 @@ var (
 		Format:      FormatMonitorAggregationLevel,
 	}
 
-	specNAT46 = Option{
-		Define:      "ENABLE_NAT46",
-		Description: "Enable automatic NAT46 translation",
-		Requires:    []string{Conntrack},
-		Verify: func(key string, val string) error {
-			opt, err := NormalizeBool(val)
-			if err != nil {
-				return err
-			}
-			if opt == OptionEnabled {
-				if !Config.EnableIPv4 {
-					return ErrNAT46ReqIPv4
-				}
-				if !Config.EnableIPv6 {
-					return ErrNAT46ReqIPv6
-				}
-				if Config.DatapathMode == datapathOption.DatapathModeIpvlan {
-					return ErrNAT46ReqVeth
-				}
-			}
-			return nil
-		},
+	specSourceIPVerification = Option{
+		Define:      "ENABLE_SIP_VERIFICATION",
+		Description: "Enable the check of the source IP on pod egress",
 	}
 )

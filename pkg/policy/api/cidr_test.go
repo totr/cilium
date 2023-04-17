@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package api
 
 import (
 	"regexp"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/labels"
 	cidrpkg "github.com/cilium/cilium/pkg/labels/cidr"
-
-	. "gopkg.in/check.v1"
 )
 
 func (s *PolicyAPITestSuite) TestCIDRMatchesAll(c *C) {

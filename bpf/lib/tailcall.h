@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2019-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 #ifndef TAILCALL_H
 #define TAILCALL_H
 
@@ -26,6 +26,14 @@
 #define __or3_1(y, z)  1
 #define __or3_0(y, z)  __or(y, z)
 #define __or3(x, y, z) __eval(__or3_, x)(y, z)
+
+#define __or4_1(x, y, z) 1
+#define __or4_0(x, y, z) __eval(__or3_, x)(y, z)
+#define __or4(w, x, y, z) __eval(__or4_, w)(x, y, z)
+
+#define __not_0 1
+#define __not_1 0
+#define __not(x) __eval(__not_, x)
 
 /* declare_tailcall_if() and invoke_tailcall_if() is a pair
  * of helpers which based on COND either selects to emit a

@@ -1,27 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build linux
-// +build linux
 
 package bpf
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"unsafe"
+
+	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/spanstat"
-
-	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/unix"
 )
 
 // CreateMap creates a Map of type mapType, with key size keySize, a value size of
@@ -30,24 +32,44 @@ import (
 // When mapType is the type HASH_OF_MAPS an innerID is required to point at a
 // map fd which has the same type/keySize/valueSize/maxEntries as expected map
 // entries. For all other mapTypes innerID is ignored and should be zeroed.
-func CreateMap(mapType MapType, keySize, valueSize, maxEntries, flags, innerID uint32, path string) (int, error) {
-	// This struct must be in sync with union bpf_attr's anonymous struct
-	// used by the BPF_MAP_CREATE command
-	uba := struct {
-		mapType    uint32
-		keySize    uint32
-		valueSize  uint32
-		maxEntries uint32
-		mapFlags   uint32
-		innerID    uint32
-	}{
-		uint32(mapType),
-		keySize,
-		valueSize,
-		maxEntries,
-		flags,
-		innerID,
+func CreateMap(mapType MapType, keySize, valueSize, maxEntries, flags, innerID uint32, fullPath string) (int, error) {
+	ret, err := createMap(mapType, keySize, valueSize, maxEntries, flags, innerID, fullPath)
+	if err != 0 {
+		return 0, &os.PathError{
+			Op:   "Unable to create map",
+			Path: fullPath,
+			Err:  err,
+		}
 	}
+
+	return int(ret), nil
+}
+
+func createMap(mapType MapType, keySize, valueSize, maxEntries, flags, innerID uint32, fullPath string) (int, syscall.Errno) {
+	var (
+		uba     unsafe.Pointer
+		ubaSize uintptr
+	)
+
+	var name [16]byte
+	if p := path.Base(fullPath); len(p) > 15 {
+		copy(name[:], p[:15]) // save last element for '\0'
+	} else {
+		copy(name[:], p)
+	}
+	u := ubaMapName{
+		ubaCommon: ubaCommon{
+			mapType:    uint32(mapType),
+			keySize:    keySize,
+			valueSize:  valueSize,
+			maxEntries: maxEntries,
+			mapFlags:   flags,
+			innerID:    innerID,
+		},
+		mapName: name,
+	}
+	uba = unsafe.Pointer(&u)
+	ubaSize = unsafe.Sizeof(u)
 
 	var duration *spanstat.SpanStat
 	if option.Config.MetricsConfig.BPFSyscallDurationEnabled {
@@ -56,23 +78,34 @@ func CreateMap(mapType MapType, keySize, valueSize, maxEntries, flags, innerID u
 	ret, _, err := unix.Syscall(
 		unix.SYS_BPF,
 		BPF_MAP_CREATE,
-		uintptr(unsafe.Pointer(&uba)),
-		unsafe.Sizeof(uba),
+		uintptr(uba),
+		ubaSize,
 	)
 	runtime.KeepAlive(&uba)
 	if option.Config.MetricsConfig.BPFSyscallDurationEnabled {
 		metrics.BPFSyscallDuration.WithLabelValues(metricOpCreate, metrics.Errno2Outcome(err)).Observe(duration.End(err == 0).Total().Seconds())
 	}
 
-	if err != 0 {
-		return 0, &os.PathError{
-			Op:   "Unable to create map",
-			Path: path,
-			Err:  err,
-		}
-	}
+	return int(ret), err
+}
 
-	return int(ret), nil
+// This struct must be in sync with union bpf_attr's anonymous struct
+// used by the BPF_MAP_CREATE command
+type ubaCommon struct {
+	mapType    uint32
+	keySize    uint32
+	valueSize  uint32
+	maxEntries uint32
+	mapFlags   uint32
+	innerID    uint32
+}
+
+// This struct must be in sync with union bpf_attr's anonymous struct
+// used by the BPF_MAP_CREATE command
+type ubaMapName struct {
+	ubaCommon
+	numaNode uint32
+	mapName  [16]byte
 }
 
 // This struct must be in sync with union bpf_attr's anonymous struct used by
@@ -234,7 +267,7 @@ func GetNextKeyFromPointers(fd int, structPtr unsafe.Pointer, sizeOfStruct uintp
 
 	// BPF_MAP_GET_NEXT_KEY returns ENOENT when all keys have been iterated
 	// translate that to io.EOF to signify there are no next keys
-	if err == unix.ENOENT {
+	if errors.Is(err, unix.ENOENT) {
 		return io.EOF
 	}
 
@@ -354,7 +387,7 @@ func ObjGet(pathname string) (int, error) {
 	return int(fd), nil
 }
 
-type bpfAttrFdFromId struct {
+type bpfAttrFdFromID struct {
 	ID     uint32
 	NextID uint32
 	Flags  uint32
@@ -362,7 +395,7 @@ type bpfAttrFdFromId struct {
 
 // MapFdFromID retrieves a file descriptor based on a map ID.
 func MapFdFromID(id int) (int, error) {
-	uba := bpfAttrFdFromId{
+	uba := bpfAttrFdFromID{
 		ID: uint32(id),
 	}
 
@@ -533,7 +566,7 @@ recreate:
 			maxEntries,
 			flags,
 		)
-		if redo == true {
+		if redo {
 			ObjClose(fd)
 			goto recreate
 		}
@@ -612,7 +645,6 @@ type bpfAttachProg struct {
 // whether it succeeds in doing so. This can be used to bail out early
 // in the daemon when a given type is not supported.
 func TestDummyProg(progType ProgType, attachType uint32) error {
-	var oldLim unix.Rlimit
 	insns := []byte{
 		// R0 = 1; EXIT
 		0xb7, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
@@ -626,22 +658,11 @@ func TestDummyProg(progType ProgType, attachType uint32) error {
 		Insns:      uintptr(unsafe.Pointer(&insns[0])),
 		License:    uintptr(unsafe.Pointer(&license[0])),
 	}
-	tmpLim := unix.Rlimit{
-		Cur: unix.RLIM_INFINITY,
-		Max: unix.RLIM_INFINITY,
-	}
-	err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &oldLim)
-	if err != nil {
-		return err
-	}
-	err = unix.Setrlimit(unix.RLIMIT_MEMLOCK, &tmpLim)
-	if err != nil {
-		return err
-	}
+
 	fd, _, errno := unix.Syscall(unix.SYS_BPF, BPF_PROG_LOAD,
 		uintptr(unsafe.Pointer(&bpfAttr)),
 		unsafe.Sizeof(bpfAttr))
-	unix.Setrlimit(unix.RLIMIT_MEMLOCK, &oldLim)
+
 	if errno == 0 {
 		defer unix.Close(int(fd))
 		bpfAttr := bpfAttachProg{
@@ -668,53 +689,4 @@ func TestDummyProg(progType ProgType, attachType uint32) error {
 	runtime.KeepAlive(&bpfAttr)
 
 	return errno
-}
-
-type BpfMapInfo struct {
-	Type       uint32
-	Id         uint32
-	KeySize    uint32
-	ValueSize  uint32
-	MaxEntries uint32
-	MapFlags   uint32
-}
-
-// GetMapInfoByFd returns map info for a map which is pointed by the given fd.
-func GetMapInfoByFd(fd uint32) (*BpfMapInfo, error) {
-	info := BpfMapInfo{}
-	uba := struct {
-		bpfFd   uint32
-		infoLen uint32
-		info    uint64
-	}{
-		uint32(fd),
-		uint32(unsafe.Sizeof(info)),
-		uint64(uintptr(unsafe.Pointer(&info))),
-	}
-
-	var duration *spanstat.SpanStat
-	if option.Config.MetricsConfig.BPFSyscallDurationEnabled {
-		duration = spanstat.Start()
-	}
-
-	ret, _, err := unix.Syscall(
-		unix.SYS_BPF,
-		BPF_OBJ_GET_INFO_BY_FD,
-		uintptr(unsafe.Pointer(&uba)),
-		unsafe.Sizeof(uba),
-	)
-	runtime.KeepAlive(&uba)
-
-	if option.Config.MetricsConfig.BPFSyscallDurationEnabled {
-		metrics.BPFSyscallDuration.WithLabelValues(metricOpGetMapInfoByFD, metrics.Errno2Outcome(err)).Observe(duration.End(err == 0).Total().Seconds())
-	}
-
-	if err != 0 {
-		return nil, fmt.Errorf("Unable to get BPF map info by fd %d: %w", fd, err)
-	}
-	if ret != 0 {
-		return nil, fmt.Errorf("Unable to get BPF map info by fd %d: %d", fd, ret)
-	}
-
-	return &info, nil
 }

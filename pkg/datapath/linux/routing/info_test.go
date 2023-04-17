@@ -1,28 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package linuxrouting
 
 import (
 	"net"
-	"testing"
-
-	"github.com/cilium/cilium/pkg/checker"
-	"github.com/cilium/cilium/pkg/mac"
 
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
+	"github.com/cilium/cilium/pkg/mac"
 )
-
-func Test(t *testing.T) {
-	check.TestingT(t)
-}
-
-type LinuxRoutingSuite struct{}
-
-var _ = check.Suite(&LinuxRoutingSuite{})
 
 func (e *LinuxRoutingSuite) TestParse(c *check.C) {
 	_, fakeCIDR, err := net.ParseCIDR("192.168.0.0/16")
@@ -117,6 +106,7 @@ func (e *LinuxRoutingSuite) TestParse(c *check.C) {
 				IPv4CIDRs:       validCIDRs,
 				MasterIfMAC:     fakeMAC,
 				InterfaceNumber: 1,
+				IpamMode:        ipamOption.IPAMENI,
 			},
 			wantErr: false,
 		},
@@ -131,6 +121,7 @@ func (e *LinuxRoutingSuite) TestParse(c *check.C) {
 				IPv4Gateway: net.ParseIP("192.168.1.1"),
 				IPv4CIDRs:   []net.IPNet{},
 				MasterIfMAC: fakeMAC,
+				IpamMode:    ipamOption.IPAMENI,
 			},
 			wantErr: false,
 		},
@@ -146,7 +137,7 @@ func (e *LinuxRoutingSuite) TestParse(c *check.C) {
 	}
 	for _, tt := range tests {
 		c.Log(tt.name)
-		rInfo, err := NewRoutingInfo(tt.gateway, tt.cidrs, tt.macAddr, tt.ifaceNum, tt.masq)
+		rInfo, err := NewRoutingInfo(tt.gateway, tt.cidrs, tt.macAddr, tt.ifaceNum, ipamOption.IPAMENI, tt.masq)
 		c.Assert(rInfo, checker.DeepEquals, tt.wantRInfo)
 		c.Assert((err != nil), check.Equals, tt.wantErr)
 	}

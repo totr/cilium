@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package eventsmap
 
@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/cilium/cilium/pkg/bpf"
+	"github.com/cilium/cilium/pkg/option"
 )
 
 var (
@@ -61,8 +62,8 @@ func InitMap(maxEntries int) error {
 		MaxEntries,
 		0,
 		0,
-		bpf.ConvertKeyValue,
-	)
+		bpf.ConvertKeyValue).
+		WithEvents(option.Config.GetEventBufferConfig(MapName))
 	_, err := eventsMap.Create()
 	return err
 }

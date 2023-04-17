@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package cassandra
 
@@ -10,13 +7,11 @@ import (
 	"encoding/hex"
 	"testing"
 
-	// "github.com/cilium/cilium/pkg/logging"
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/proxylib/accesslog"
 	"github.com/cilium/cilium/proxylib/proxylib"
 	"github.com/cilium/cilium/proxylib/test"
-
-	// log "github.com/sirupsen/logrus"
-	. "gopkg.in/check.v1"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -77,8 +72,8 @@ func (s *CassandraSuite) TestCassandraOnDataNoHeader(c *C) {
 
 func (s *CassandraSuite) TestCassandraOnDataOptionsReq(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp6"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -97,7 +92,7 @@ func (s *CassandraSuite) TestCassandraOnDataOptionsReq(c *C) {
 		  >
 		>
 		`})
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp6")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	data := hexData(c, "040000000500000000")
 	conn.CheckOnDataOK(c, false, false, &data, []byte{},
@@ -108,8 +103,8 @@ func (s *CassandraSuite) TestCassandraOnDataOptionsReq(c *C) {
 // this passes a large query request that is missing just the last byte
 func (s *CassandraSuite) TestCassandraOnDataPartialReq(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp5"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -128,7 +123,7 @@ func (s *CassandraSuite) TestCassandraOnDataPartialReq(c *C) {
 		  >
 		>
 		`})
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp5")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 	data := hexData(c, "0400000407000000760000006f53454c45435420636c75737465725f6e616d652c20646174615f63656e7465722c207261636b2c20746f6b656e732c20706172746974696f6e65722c20736368656d615f76657273696f6e2046524f4d2073797374656d2e6c6f63616c205748455245206b65793d276c6f63616c270001")
 	conn.CheckOnDataOK(c, false, false, &data, []byte{},
 		proxylib.MORE, 1)
@@ -136,8 +131,8 @@ func (s *CassandraSuite) TestCassandraOnDataPartialReq(c *C) {
 
 func (s *CassandraSuite) TestCassandraOnDataQueryReq(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp4"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -156,7 +151,7 @@ func (s *CassandraSuite) TestCassandraOnDataQueryReq(c *C) {
 		  >
 		>
 		`})
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp4")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 	data := hexData(c, "0400000407000000760000006f53454c45435420636c75737465725f6e616d652c20646174615f63656e7465722c207261636b2c20746f6b656e732c20706172746974696f6e65722c20736368656d615f76657273696f6e2046524f4d2073797374656d2e6c6f63616c205748455245206b65793d276c6f63616c27000100")
 	conn.CheckOnDataOK(c, false, false, &data, []byte{},
 		proxylib.PASS, len(data[0]),
@@ -165,8 +160,8 @@ func (s *CassandraSuite) TestCassandraOnDataQueryReq(c *C) {
 
 func (s *CassandraSuite) TestCassandraOnDataSplitQueryReq(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp3"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -185,7 +180,7 @@ func (s *CassandraSuite) TestCassandraOnDataSplitQueryReq(c *C) {
 		  >
 		>
 		`})
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp3")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 	data := hexData(c, "04000004070000007600", "00006f53454c45435420636c75737465725f6e616d652c20646174615f63656e7465722c207261636b2c20746f6b656e732c20706172746974696f6e65722c20736368656d615f76657273696f6e2046524f4d2073797374656d2e6c6f63616c205748455245206b65793d276c6f63616c27000100")
 	conn.CheckOnDataOK(c, false, false, &data, []byte{},
 		proxylib.PASS, len(data[0])+len(data[1]),
@@ -194,8 +189,8 @@ func (s *CassandraSuite) TestCassandraOnDataSplitQueryReq(c *C) {
 
 func (s *CassandraSuite) TestCassandraOnDataMultiReq(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp2"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -215,7 +210,7 @@ func (s *CassandraSuite) TestCassandraOnDataMultiReq(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp2")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	data := hexData(c, "040000000500000000",
 		"0400000407000000760000006f53454c45435420636c75737465725f6e616d652c20646174615f63656e7465722c207261636b2c20746f6b656e732c20706172746974696f6e65722c20736368656d615f76657273696f6e2046524f4d2073797374656d2e6c6f63616c205748455245206b65793d276c6f63616c27000100")
@@ -227,8 +222,8 @@ func (s *CassandraSuite) TestCassandraOnDataMultiReq(c *C) {
 
 func (s *CassandraSuite) TestSimpleCassandraPolicy(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -248,7 +243,7 @@ func (s *CassandraSuite) TestSimpleCassandraPolicy(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	unauthMsg := createUnauthMsg(0x4)
 	data := hexData(c, "040000000500000000",
@@ -274,8 +269,8 @@ func createUnauthMsg(streamID byte) []byte {
 // this test confirms that we correctly parse and allow a valid batch requests
 func (s *CassandraSuite) TestCassandraBatchRequestPolicy(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -295,7 +290,7 @@ func (s *CassandraSuite) TestCassandraBatchRequestPolicy(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	batchMsg := []byte{
 		0x04,     // version
@@ -335,8 +330,8 @@ func (s *CassandraSuite) TestCassandraBatchRequestPolicy(c *C) {
 // if any of the requests are denied.
 func (s *CassandraSuite) TestCassandraBatchRequestPolicyDenied(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -356,7 +351,7 @@ func (s *CassandraSuite) TestCassandraBatchRequestPolicyDenied(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	batchMsg := []byte{
 		0x04,     // version
@@ -398,8 +393,8 @@ func (s *CassandraSuite) TestCassandraBatchRequestPolicyDenied(c *C) {
 // test batch requests with prepared statements
 func (s *CassandraSuite) TestCassandraBatchRequestPreparedStatement(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -419,7 +414,7 @@ func (s *CassandraSuite) TestCassandraBatchRequestPreparedStatement(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	cassParser, ok := (conn.Parser).(*CassandraParser)
 	if !ok {
@@ -467,8 +462,8 @@ func (s *CassandraSuite) TestCassandraBatchRequestPreparedStatement(c *C) {
 // test batch requests with prepared statements, including a deny
 func (s *CassandraSuite) TestCassandraBatchRequestPreparedStatementDenied(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -488,7 +483,7 @@ func (s *CassandraSuite) TestCassandraBatchRequestPreparedStatementDenied(c *C) 
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	cassParser, ok := (conn.Parser).(*CassandraParser)
 	if !ok {
@@ -537,8 +532,8 @@ func (s *CassandraSuite) TestCassandraBatchRequestPreparedStatementDenied(c *C) 
 // test execute statement, allow request
 func (s *CassandraSuite) TestCassandraExecutePreparedStatement(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -558,7 +553,7 @@ func (s *CassandraSuite) TestCassandraExecutePreparedStatement(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	cassParser, ok := (conn.Parser).(*CassandraParser)
 	if !ok {
@@ -661,8 +656,8 @@ func (s *CassandraSuite) TestCassandraPreparedResultReply(c *C) {
 // test additional queries
 func (s *CassandraSuite) TestCassandraAdditionalQueries(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -682,7 +677,7 @@ func (s *CassandraSuite) TestCassandraAdditionalQueries(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	queries := []string{"CREATE TABLE db4.t1 (f1 varchar, f2 timeuuid, PRIMARY KEY ((f1), f2))",
 		"INSERT INTO db4.t1 (f1, f2, f3) values ('dan', now(), 'Cilium!')",
@@ -731,8 +726,8 @@ func (s *CassandraSuite) TestCassandraAdditionalQueries(c *C) {
 // test use query, following by query that does not include the keyspace
 func (s *CassandraSuite) TestCassandraUseQuery(c *C) {
 	s.ins.CheckInsertPolicyText(c, "1", []string{`
-		name: "cp1"
-		policy: 2
+		endpoint_ips: "1.1.1.1"
+		endpoint_id: 2
 		ingress_per_port_policies: <
 		  port: 80
 		  rules: <
@@ -752,7 +747,7 @@ func (s *CassandraSuite) TestCassandraUseQuery(c *C) {
 		>
 		`})
 
-	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "cp1")
+	conn := s.ins.CheckNewConnectionOK(c, "cassandra", true, 1, 2, "1.1.1.1:34567", "10.0.0.2:80", "1.1.1.1")
 
 	// note: the second insert command intentionally does not include a keyspace, so that it will only
 	// be allowed if we properly propagate the keyspace from the previous use command

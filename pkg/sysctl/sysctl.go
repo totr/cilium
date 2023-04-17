@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package sysctl
 
@@ -10,18 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
 	subsystem = "sysctl"
 
-	prefixDir = "/proc/sys"
+	procFsDefault = "/proc"
 )
 
 var (
@@ -29,6 +31,11 @@ var (
 
 	// parameterElemRx matches an element of a sysctl parameter.
 	parameterElemRx = regexp.MustCompile(`\A[-0-9_a-z]+\z`)
+
+	procFsMU lock.Mutex
+	// procFsRead is mark as true if procFs changes value.
+	procFsRead bool
+	procFs     = procFsDefault
 )
 
 // An ErrInvalidSysctlParameter is returned when a parameter is invalid.
@@ -44,6 +51,9 @@ type Setting struct {
 	Name      string
 	Val       string
 	IgnoreErr bool
+
+	// Warn if non-empty is the alternative warning log message to use when IgnoreErr is false.
+	Warn string
 }
 
 // parameterPath returns the path to the sysctl file for parameter name.
@@ -54,7 +64,28 @@ func parameterPath(name string) (string, error) {
 			return "", ErrInvalidSysctlParameter(name)
 		}
 	}
-	return filepath.Join(append([]string{prefixDir}, elems...)...), nil
+	return filepath.Join(append([]string{GetProcfs(), "sys"}, elems...)...), nil
+}
+
+// SetProcfs sets path for the root's /proc. Calling it after GetProcfs causes
+// panic.
+func SetProcfs(path string) {
+	procFsMU.Lock()
+	defer procFsMU.Unlock()
+	if procFsRead {
+		// do not change the procfs after we have gotten its value from GetProcfs
+		panic("SetProcfs called after GetProcfs")
+	}
+	procFs = path
+}
+
+// GetProcfs returns the path set in procFs. Executing SetProcFs after GetProcfs
+// might panic depending. See SetProcfs for more info.
+func GetProcfs() string {
+	procFsMU.Lock()
+	defer procFsMU.Unlock()
+	procFsRead = true
+	return procFs
 }
 
 func writeSysctl(name string, value string) error {
@@ -90,6 +121,11 @@ func Write(name string, val string) error {
 	return writeSysctl(name, val)
 }
 
+// WriteInt writes the given integer type sysctl parameter.
+func WriteInt(name string, val int64) error {
+	return writeSysctl(name, strconv.FormatInt(val, 10))
+}
+
 // Read reads the given sysctl parameter.
 func Read(name string) (string, error) {
 	path, err := parameterPath(name)
@@ -104,6 +140,21 @@ func Read(name string) (string, error) {
 	return strings.TrimRight(string(val), "\n"), nil
 }
 
+// ReadInt reads the given sysctl parameter, return an int64 value.
+func ReadInt(name string) (int64, error) {
+	s, err := Read(name)
+	if err != nil {
+		return -1, err
+	}
+
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return -1, err
+	}
+
+	return i, nil
+}
+
 // ApplySettings applies all settings in sysSettings.
 func ApplySettings(sysSettings []Setting) error {
 	for _, s := range sysSettings {
@@ -115,10 +166,15 @@ func ApplySettings(sysSettings []Setting) error {
 			if !s.IgnoreErr || errors.Is(err, ErrInvalidSysctlParameter("")) {
 				return fmt.Errorf("Failed to sysctl -w %s=%s: %s", s.Name, s.Val, err)
 			}
+
+			warn := "Failed to sysctl -w"
+			if s.Warn != "" {
+				warn = s.Warn
+			}
 			log.WithError(err).WithFields(logrus.Fields{
 				logfields.SysParamName:  s.Name,
 				logfields.SysParamValue: s.Val,
-			}).Warning("Failed to sysctl -w")
+			}).Warning(warn)
 		}
 	}
 

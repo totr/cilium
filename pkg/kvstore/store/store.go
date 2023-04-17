@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package store
 
@@ -10,15 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/controller"
-	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -54,8 +53,8 @@ type Configuration struct {
 	// are synchronized with the kvstore. This parameter is optional.
 	SynchronizationInterval time.Duration
 
-	// SharedKeyDeleteDelay is the delay before an shared key delete is
-	// handled. This parameter is optional
+	// SharedKeyDeleteDelay is the delay before a shared key delete is
+	// handled. This parameter is optional, and defaults to 0 if unset.
 	SharedKeyDeleteDelay time.Duration
 
 	// KeyCreator is called to allocate a Key instance when a new shared
@@ -85,10 +84,6 @@ func (c *Configuration) validate() error {
 
 	if c.SynchronizationInterval == 0 {
 		c.SynchronizationInterval = option.Config.KVstorePeriodicSync
-	}
-
-	if c.SharedKeyDeleteDelay == 0 {
-		c.SharedKeyDeleteDelay = defaults.NodeDeleteDelay
 	}
 
 	if c.Backend == nil {
@@ -213,7 +208,7 @@ func JoinSharedStore(c Configuration) (*SharedStore, error) {
 	controllers.UpdateController(s.controllerName,
 		controller.ControllerParams{
 			DoFunc: func(ctx context.Context) error {
-				return s.syncLocalKeys(ctx)
+				return s.syncLocalKeys(ctx, true)
 			},
 			RunInterval: s.conf.SynchronizationInterval,
 		},
@@ -277,15 +272,15 @@ func (s *SharedStore) keyPath(key NamedKey) string {
 }
 
 // syncLocalKey synchronizes a key to the kvstore
-func (s *SharedStore) syncLocalKey(ctx context.Context, key LocalKey) error {
+func (s *SharedStore) syncLocalKey(ctx context.Context, key LocalKey, lease bool) error {
 	jsonValue, err := key.Marshal()
 	if err != nil {
 		return err
 	}
 
-	// Update key in kvstore, overwrite an eventual existing key, attach
+	// Update key in kvstore, overwrite an eventual existing key. If requested, attach
 	// lease to expire entry when agent dies and never comes back up.
-	if _, err := s.backend.UpdateIfDifferent(ctx, s.keyPath(key), jsonValue, true); err != nil {
+	if _, err := s.backend.UpdateIfDifferent(ctx, s.keyPath(key), jsonValue, lease); err != nil {
 		return err
 	}
 
@@ -293,18 +288,18 @@ func (s *SharedStore) syncLocalKey(ctx context.Context, key LocalKey) error {
 }
 
 // syncLocalKeys synchronizes all local keys with the kvstore
-func (s *SharedStore) syncLocalKeys(ctx context.Context) error {
+func (s *SharedStore) syncLocalKeys(ctx context.Context, lease bool) error {
 	// Create a copy of all local keys so we can unlock and sync to kvstore
 	// without holding the lock
 	s.mutex.RLock()
-	keys := []LocalKey{}
+	keys := make([]LocalKey, 0, len(s.localKeys))
 	for _, key := range s.localKeys {
 		keys = append(keys, key)
 	}
 	s.mutex.RUnlock()
 
 	for _, key := range keys {
-		if err := s.syncLocalKey(ctx, key); err != nil {
+		if err := s.syncLocalKey(ctx, key, lease); err != nil {
 			return err
 		}
 	}
@@ -350,20 +345,13 @@ func (s *SharedStore) SharedKeysMap() map[string]Key {
 	return sharedKeysCopy
 }
 
-// UpdateLocalKey adds a key to be synchronized with the kvstore
-func (s *SharedStore) UpdateLocalKey(key LocalKey) {
-	s.mutex.Lock()
-	s.localKeys[key.GetKeyName()] = key.DeepKeyCopy()
-	s.mutex.Unlock()
-}
-
 // UpdateLocalKeySync synchronously synchronizes a local key with the kvstore
 // and adds it to the list of local keys to be synchronized if the initial
 // synchronous synchronization was successful
 func (s *SharedStore) UpdateLocalKeySync(ctx context.Context, key LocalKey) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	err := s.syncLocalKey(ctx, key)
+	err := s.syncLocalKey(ctx, key, true)
 	if err == nil {
 		s.localKeys[key.GetKeyName()] = key.DeepKeyCopy()
 	}
@@ -371,8 +359,8 @@ func (s *SharedStore) UpdateLocalKeySync(ctx context.Context, key LocalKey) erro
 }
 
 // UpdateKeySync synchronously synchronizes a key with the kvstore.
-func (s *SharedStore) UpdateKeySync(ctx context.Context, key LocalKey) error {
-	return s.syncLocalKey(ctx, key)
+func (s *SharedStore) UpdateKeySync(ctx context.Context, key LocalKey, lease bool) error {
+	return s.syncLocalKey(ctx, key, lease)
 }
 
 // DeleteLocalKey removes a key from being synchronized with the kvstore
@@ -487,7 +475,7 @@ func (s *SharedStore) watcher(listDone chan struct{}) {
 			if localKey := s.lookupLocalKey(keyName); localKey != nil {
 				logger.Warning("Received delete event for local key. Re-creating the key in the kvstore")
 
-				s.syncLocalKey(s.conf.Context, localKey)
+				s.syncLocalKey(s.conf.Context, localKey, true)
 			} else {
 				s.deleteSharedKey(keyName)
 			}

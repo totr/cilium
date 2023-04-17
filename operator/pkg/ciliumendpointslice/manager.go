@@ -1,16 +1,5 @@
-// Copyright 2021 Authors of Cilium
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package ciliumendpointslice
 
@@ -19,13 +8,13 @@ import (
 	"math/rand"
 	"time"
 
-	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
-	"github.com/cilium/cilium/pkg/lock"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-
 	"github.com/sirupsen/logrus"
 	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/workqueue"
+
+	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	"github.com/cilium/cilium/pkg/lock"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 var (
@@ -38,6 +27,10 @@ var (
 // in next sync with k8s-apiserver.
 type cesTracker struct {
 	// Mutex to protect cep insert/removal in ces and removedCEPs
+	// The identityLock and backendMutex locks always need to be acquired in the
+	// same order to avoid deadlocks. First identityLock and then backendMutex,
+	// because identityLock is a higher level lock of cesManagerIdentity which
+	// contains cesTrackers with backendMutex locks within it.
 	backendMutex lock.RWMutex
 	// The desired state of ces object
 	ces *cilium_v2.CiliumEndpointSlice
@@ -55,7 +48,9 @@ type cesTracker struct {
 type operations interface {
 	// External APIs to Insert/Remove CEP in local dataStore
 	InsertCEPInCache(cep *cilium_v2.CoreCiliumEndpoint, ns string) string
+	updateCEPToCESMapping(cepName string, cesName string)
 	RemoveCEPFromCache(cepName string, baseDelay time.Duration)
+	removeCEPFromCES(cepName string, cesName string, baseDelay time.Duration, identity int64, checkIdentity bool)
 	// Supporting APIs to Insert/Remove CEP in local dataStore and effectively
 	// manages CES's.
 	getCESFromCache(cesName string) (*cilium_v2.CiliumEndpointSlice, error)
@@ -65,15 +60,22 @@ type operations interface {
 	getRemovedCEPs(string) map[string]struct{}
 	clearRemovedCEPs(string, map[string]struct{})
 	createCES(cesName string) *cesTracker
-	addCEPtoCES(ces *cilium_v2.CoreCiliumEndpoint, cesName string)
+	addCEPtoCES(cep *cilium_v2.CoreCiliumEndpoint, ces *cesTracker)
 	insertCESInWorkQueue(ces *cesTracker, baseDelay time.Duration)
 	// APIs to collect metrics of CES and CEP
 	getTotalCEPCount() int
 	getCEPCountInCES(cesName string) int
 	getCESCount() int
+	getAllCESs() []cesOperations
 	getAllCEPNames() []string
 	getCESMetricCountersAndClear(cesName string) (cepInsert int64, cepRemove int64)
 	getCESQueueDelayInSeconds(cesName string) (diff float64)
+}
+
+type cesOperations interface {
+	getAllCEPs() []cilium_v2.CoreCiliumEndpoint
+	getCESName() string
+	getCEPNameFromCCEP(cep *cilium_v2.CoreCiliumEndpoint) string
 }
 
 // cesMgr is used to batch CEP into a CES, based on FirstComeFirstServe. If a new CEP
@@ -108,6 +110,10 @@ type cesManagerFcfs struct {
 type cesManagerIdentity struct {
 	cesMgr
 	// Mutex to protect cep insert/removal in ces and removedCEPs
+	// The identityLock and backendMutex locks always need to be acquired in the
+	// same order to avoid deadlocks. First identityLock and then backendMutex,
+	// because identityLock is a higher level lock of cesManagerIdentity which
+	// contains cesTrackers with backendMutex locks within it.
 	identityLock lock.RWMutex
 	// CEP identity to cesTracker map
 	identityToCES map[int64][]*cesTracker
@@ -143,16 +149,15 @@ func newCESManagerIdentity(workQueue workqueue.RateLimitingInterface, maxCEPsInC
 
 // addCEPtoCES inserts the CEP in a CES, if the CEP already exists in a CES
 // it replaces with new CEP.
-func (c *cesMgr) addCEPtoCES(cep *cilium_v2.CoreCiliumEndpoint, cesName string) {
-	ces := c.desiredCESs.getCESTrackerOnly(cesName)
+func (c *cesMgr) addCEPtoCES(cep *cilium_v2.CoreCiliumEndpoint, ces *cesTracker) {
 	ces.backendMutex.Lock()
 	defer ces.backendMutex.Unlock()
 	// If cep already exists in ces, compare new cep with cached cep.
 	// Update only if there is any change.
 	log.WithFields(logrus.Fields{
-		"CEPName":       cep.Name,
-		"CESName":       ces.ces.GetName(),
-		"totalCEPCount": len(ces.ces.Endpoints),
+		logfields.CEPName:  cep.Name,
+		logfields.CESName:  ces.ces.GetName(),
+		logfields.CEPCount: len(ces.ces.Endpoints),
 	}).Debug("Queueing CEP in the CES")
 
 	for i, ep := range ces.ces.Endpoints {
@@ -204,11 +209,11 @@ func uniqueCESliceName(desiredCESs *CESToCEPMapping) string {
 }
 
 // This function create a new ces and capacity to hold maximum ceps in a CES.
-//  called on 2 different scenarios.
-// 1) During runtime, when ces manager decides to create a new ces, it calls
-//    with an empty name, it generates a random unique name and assign it to the CES.
-// 2) During operator warm boot [after crash or software upgrade], slicing manager
-//    creates a CES, by passing unique name.
+// This is called in 2 different scenarios:
+//  1. During runtime, when ces manager decides to create a new ces, it calls
+//     with an empty name, it generates a random unique name and assign it to the CES.
+//  2. During operator warm boot [after crash or software upgrade], slicing manager
+//     creates a CES, by passing unique name.
 func (c *cesMgr) createCES(name string) *cesTracker {
 	var cesName string = name
 	if name == "" {
@@ -229,7 +234,7 @@ func (c *cesMgr) createCES(name string) *cesTracker {
 	}
 	c.desiredCESs.insertCES(cesName, ces)
 	log.WithFields(logrus.Fields{
-		"CESName": cesName,
+		logfields.CESName: cesName,
 	}).Debug("Generated CES")
 	return ces
 }
@@ -239,7 +244,7 @@ func (c *cesMgr) createCES(name string) *cesTracker {
 func (c *cesMgr) deleteCESFromCache(cesName string) {
 	if !c.desiredCESs.hasCESName(cesName) {
 		log.WithFields(logrus.Fields{
-			"CESName": cesName,
+			logfields.CESName: cesName,
 		}).Debug("Failed to retrieve CES object in local cache.")
 		return
 	}
@@ -266,6 +271,10 @@ func (c *cesMgr) updateCESInCache(srcCES *cilium_v2.CiliumEndpointSlice, isDeepC
 				c.desiredCESs.insertCEP(GetCEPNameFromCCEP(&cep, ces.ces.Namespace), srcCES.GetName())
 			}
 		}
+	} else {
+		log.WithFields(logrus.Fields{
+			logfields.CESName: srcCES.GetName(),
+		}).Debug("Attempted to updateCESInCache non-existent, skipping.")
 	}
 }
 
@@ -294,89 +303,133 @@ func (c *cesMgr) getCESCopyFromCache(cesName string) (*cilium_v2.CiliumEndpointS
 // CES object or updating an existing CES object.
 func (c *cesMgr) InsertCEPInCache(cep *cilium_v2.CoreCiliumEndpoint, ns string) string {
 	log.WithFields(logrus.Fields{
-		"CEPName": GetCEPNameFromCCEP(cep, ns),
+		logfields.CEPName: GetCEPNameFromCCEP(cep, ns),
 	}).Debug("Insert CEP in local cache")
 
 	// check the given cep is already exists in any of the CES.
 	// if yes, Update a ces with the given cep object.
-	if cesName, exists := c.desiredCESs.getCESName(GetCEPNameFromCCEP(cep, ns)); exists {
-		// add a cep into the ces
-		c.addCEPtoCES(cep, cesName)
-		return cesName
+	cepName := GetCEPNameFromCCEP(cep, ns)
+	if cesName, exists := c.desiredCESs.getCESName(cepName); exists {
+		if ces, ok := c.desiredCESs.getCESTracker(cesName); ok {
+			// add a cep into the ces
+			c.addCEPtoCES(cep, ces)
+			return cesName
+		} else {
+			log.WithFields(logrus.Fields{
+				logfields.CESName: cesName,
+				logfields.CEPName: cepName,
+			}).Debug("Could not insert CEP - missing CESName, skipping.")
+		}
 	}
 
 	// If given cep object isn't packed in any of the CES. find a new ces
 	// to pack this cep.
-	cb := func() *cesTracker {
-		// get first available CES
-		for _, ces := range c.desiredCESs.getAllCESs() {
+	cb, cesName := func() (*cesTracker, string) {
+		// Get the largest available CES.
+		// This ensures the minimum number of CES updates, as the CESs will be
+		// consistently filled up in order.
+		ces := c.getLargestAvailableCESForNamespace(ns)
+		if ces != nil {
 			ces.backendMutex.RLock()
-			if ces.ces.Namespace != ns || len(ces.ces.Endpoints) >= c.maxCEPsInCES || len(ces.ces.Endpoints) == 0 {
-				ces.backendMutex.RUnlock()
-				continue
-			}
-			ces.backendMutex.RUnlock()
-			return ces
+			defer ces.backendMutex.RUnlock()
+			return ces, ces.ces.GetName()
 		}
 		// allocate a new cesTracker and return
 		newCES := c.createCES("")
 		// Update the namespace to CES
 		newCES.ces.Namespace = ns
-		return newCES
+		return newCES, newCES.ces.GetName()
 	}()
 
 	// Cache CEP name with newly allocated CES.
-	c.desiredCESs.insertCEP(GetCEPNameFromCCEP(cep, ns), cb.ces.GetName())
+	c.updateCEPToCESMapping(GetCEPNameFromCCEP(cep, ns), cesName)
 
 	// Queue the CEP in CES
-	c.addCEPtoCES(cep, cb.ces.GetName())
-	return cb.ces.GetName()
+	c.addCEPtoCES(cep, cb)
+	return cesName
+}
+
+func (c *cesMgr) updateCEPToCESMapping(cepName string, cesName string) {
+	c.desiredCESs.insertCEP(cepName, cesName)
 }
 
 // RemoveCEPFromCache is used to remove the CEP from local cache, this may result in
 // Updating an existing CES object.
 func (c *cesMgr) RemoveCEPFromCache(cepName string, baseDelay time.Duration) {
 	log.WithFields(logrus.Fields{
-		"CEPName": cepName,
+		logfields.CEPName: cepName,
 	}).Debug("Remove CEP from local cache")
 
 	// Check in local cache, if a given cep is already batched in one of the ces.
 	// and if exists, delete cep from ces.
 	if cesName, exists := c.desiredCESs.getCESName(cepName); exists {
-		var ces *cesTracker
-		if ces, exists = c.desiredCESs.getCESTracker(cesName); !exists {
-			log.Info("Attempted to remove non-existent CES, skipping.")
-			return
-		}
-
-		ces.backendMutex.Lock()
-		defer ces.backendMutex.Unlock()
-		for i, ep := range ces.ces.Endpoints {
-			if GetCEPNameFromCCEP(&ep, ces.ces.Namespace) == cepName {
-				// Insert deleted CoreCEP in removedCEPs
-				ces.removedCEPs[GetCEPNameFromCCEP(&ep, ces.ces.Namespace)] = struct{}{}
-				ces.ces.Endpoints =
-					append(ces.ces.Endpoints[:i],
-						ces.ces.Endpoints[i+1:]...)
-				break
-			}
-		}
-		log.WithFields(logrus.Fields{
-			"CESName":  cesName,
-			"CEPName":  cepName,
-			"CEPCount": len(ces.ces.Endpoints),
-		}).Debug("Removed CEP from CES")
-
-		// Increment the cepRemove counter
-		ces.cepRemoved += 1
-		c.insertCESInWorkQueue(ces, baseDelay)
+		c.removeCEPFromCES(cepName, cesName, baseDelay, 0, false)
 	} else {
 		log.WithFields(logrus.Fields{
+			logfields.CESName: cesName,
 			logfields.CEPName: cepName,
-		}).Info("Attempted to retrieve non-existent CES, skip processing.")
+		}).Debug("Could not remove CEP from local cache missing CEPName.")
 	}
 
 	return
+}
+
+func (c *cesMgr) removeCEPFromCES(cepName string, cesName string, baseDelay time.Duration, identity int64, checkIdentity bool) {
+	var ces *cesTracker
+	var exists bool
+	if ces, exists = c.desiredCESs.getCESTracker(cesName); !exists {
+		log.WithFields(logrus.Fields{
+			logfields.CESName: cesName,
+			logfields.CEPName: cepName,
+		}).Info("Attempted to remove non-existent CES, skipping.")
+		return
+	}
+
+	ces.backendMutex.Lock()
+	defer ces.backendMutex.Unlock()
+	for i, ep := range ces.ces.Endpoints {
+		if GetCEPNameFromCCEP(&ep, ces.ces.Namespace) == cepName && (!checkIdentity || ep.IdentityID == identity) {
+			// Insert deleted CoreCEP in removedCEPs
+			ces.removedCEPs[GetCEPNameFromCCEP(&ep, ces.ces.Namespace)] = struct{}{}
+			ces.ces.Endpoints =
+				append(ces.ces.Endpoints[:i],
+					ces.ces.Endpoints[i+1:]...)
+			break
+		}
+	}
+	log.WithFields(logrus.Fields{
+		logfields.CESName:  cesName,
+		logfields.CEPName:  cepName,
+		logfields.CEPCount: len(ces.ces.Endpoints),
+	}).Debug("Removed CEP from CES")
+
+	// Increment the cepRemove counter
+	ces.cepRemoved += 1
+	c.insertCESInWorkQueue(ces, baseDelay)
+}
+
+// getLargestAvailableCESForNamespace returns the largest CES from cache for the
+// specified namespace that has at least 1 CEP and 1 available spot (less than
+// maximum CEPs). If it is not found, a nil is returned.
+func (c *cesMgr) getLargestAvailableCESForNamespace(ns string) *cesTracker {
+	var selectedCES *cesTracker
+	largestCEPCount := 0
+
+	for _, ces := range c.desiredCESs.getAllCESs() {
+		ces.backendMutex.RLock()
+		cepCount := len(ces.ces.Endpoints)
+		ces.backendMutex.RUnlock()
+
+		if cepCount < c.maxCEPsInCES && cepCount > largestCEPCount && ces.ces.Namespace == ns {
+			selectedCES = ces
+			largestCEPCount = cepCount
+			if largestCEPCount == c.maxCEPsInCES-1 {
+				break
+			}
+		}
+	}
+
+	return selectedCES
 }
 
 // Returns the total number of CEPs in the cluster
@@ -396,13 +449,38 @@ func (c *cesMgr) getCEPCountInCES(cesName string) (cnt int) {
 		ces.backendMutex.RLock()
 		cnt = len(ces.ces.Endpoints)
 		ces.backendMutex.RUnlock()
+	} else {
+		log.WithFields(logrus.Fields{
+			logfields.CESName: cesName,
+		}).Debug("Attempted to getCEPCountInCES non-existent CES ,skipping.")
 	}
 	return
 }
 
 // Returns the total count of CESs in local cache
 func (c *cesMgr) getCESCount() int {
-	return (c.desiredCESs.getCESCount())
+	return c.desiredCESs.getCESCount()
+}
+
+func (c *cesMgr) getAllCESs() []cesOperations {
+	allCESs := c.desiredCESs.getAllCESs()
+	cess := make([]cesOperations, len(allCESs))
+	for i, ces := range allCESs {
+		cess[i] = ces
+	}
+	return cess
+}
+
+func (ces *cesTracker) getAllCEPs() []cilium_v2.CoreCiliumEndpoint {
+	return ces.ces.Endpoints
+}
+
+func (ces *cesTracker) getCESName() string {
+	return ces.ces.Name
+}
+
+func (ces *cesTracker) getCEPNameFromCCEP(cep *cilium_v2.CoreCiliumEndpoint) string {
+	return GetCEPNameFromCCEP(cep, ces.ces.Namespace)
 }
 
 // Returns the list of cep names
@@ -422,12 +500,16 @@ func (c *cesMgr) getAllCEPNames() []string {
 // Returns the list of removed Core CEPs
 func (c *cesMgr) getRemovedCEPs(cesName string) map[string]struct{} {
 	cepNames := make(map[string]struct{})
-	if ces := c.desiredCESs.getCESTrackerOnly(cesName); ces != nil {
+	if ces, ok := c.desiredCESs.getCESTracker(cesName); ok {
 		ces.backendMutex.RLock()
 		for cepName := range ces.removedCEPs {
 			cepNames[cepName] = struct{}{}
 		}
 		ces.backendMutex.RUnlock()
+	} else {
+		log.WithFields(logrus.Fields{
+			logfields.CESName: cesName,
+		}).Debug("Attempted to getRemovedCEPs non-existent cesName,skipping.")
 	}
 
 	return cepNames
@@ -468,7 +550,7 @@ func (c *cesMgr) clearRemovedCEPs(cesName string, remCEPs map[string]struct{}) {
 	// If there are no CEPs are packed in CES, mark for delete.
 	if len(ces.ces.Endpoints) == 0 && len(ces.removedCEPs) == 0 {
 		log.WithFields(logrus.Fields{
-			"CESName": cesName,
+			logfields.CESName: cesName,
 		}).Debug("Remove CES from local cache")
 		// On next DeleteSync, Delete this CES with api-server.
 		c.insertCESInWorkQueue(ces, DefaultCESSyncTime)
@@ -476,14 +558,17 @@ func (c *cesMgr) clearRemovedCEPs(cesName string, remCEPs map[string]struct{}) {
 }
 
 func (c *cesMgr) getCESMetricCountersAndClear(cesName string) (cepInsert int64, cepRemove int64) {
-	if ces, exists := c.desiredCESs.getCESTracker(cesName); exists {
-		ces.backendMutex.Lock()
-		defer ces.backendMutex.Unlock()
-		cepInsert = ces.cepInserted
-		cepRemove = ces.cepRemoved
-		ces.cepInserted = 0
-		ces.cepRemoved = 0
+	ces, exists := c.desiredCESs.getCESTracker(cesName)
+	if !exists {
+		return
 	}
+
+	ces.backendMutex.Lock()
+	defer ces.backendMutex.Unlock()
+	cepInsert = ces.cepInserted
+	cepRemove = ces.cepRemoved
+	ces.cepInserted = 0
+	ces.cepRemoved = 0
 
 	return
 }
@@ -493,7 +578,7 @@ func (c *cesMgr) getCESMetricCountersAndClear(cesName string) (cepInsert int64, 
 func (c *cesManagerIdentity) deleteCESFromCache(cesName string) {
 	if !c.desiredCESs.hasCESName(cesName) {
 		log.WithFields(logrus.Fields{
-			"CESName": cesName,
+			logfields.CESName: cesName,
 		}).Debug("Failed to retrieve CES object in local cache.")
 		return
 	}
@@ -531,15 +616,26 @@ func (c *cesManagerIdentity) InsertCEPInCache(cep *cilium_v2.CoreCiliumEndpoint,
 		if c.cesToIdentity[cesName] != cep.IdentityID {
 			c.RemoveCEPFromCache(GetCEPNameFromCCEP(cep, ns), DelayedCESSyncTime)
 		} else {
-			// add a cep into the ces
-			c.addCEPtoCES(cep, cesName)
-			return cesName
+			if ces, ok := c.desiredCESs.getCESTracker(cesName); ok {
+				// add a cep into the ces
+				c.addCEPtoCES(cep, ces)
+				return cesName
+			} else {
+				log.WithFields(logrus.Fields{
+					logfields.CESName: cesName,
+				}).Debug("Attempted to InsertCEPInCache non-existent cesName,skipping")
+			}
 		}
 	}
 
 	// If given cep object isn't packed in any of the CES. find a new ces
 	// to pack this cep.
-	cb := func() *cesTracker {
+	cb, cesName := func() (*cesTracker, string) {
+		// The identityLock and backendMutex locks always need to be acquired in the
+		// same order to avoid deadlocks. First identityLock and then backendMutex,
+		// because identityLock is a higher level lock of cesManagerIdentity which
+		// contains cesTrackers with backendMutex locks within it.
+		c.identityLock.RLock()
 		// get first available CES
 		if cess, exist := c.identityToCES[cep.IdentityID]; exist {
 			for _, ces := range cess {
@@ -548,10 +644,13 @@ func (c *cesManagerIdentity) InsertCEPInCache(cep *cilium_v2.CoreCiliumEndpoint,
 					ces.backendMutex.RUnlock()
 					continue
 				}
-				ces.backendMutex.RUnlock()
-				return ces
+				defer ces.backendMutex.RUnlock()
+				defer c.identityLock.RUnlock()
+				return ces, ces.ces.GetName()
 			}
 		}
+		c.identityLock.RUnlock()
+
 		// allocate a new cesTracker and return
 		ces := c.createCES("")
 		// Update the namespace to CES
@@ -563,15 +662,15 @@ func (c *cesManagerIdentity) InsertCEPInCache(cep *cilium_v2.CoreCiliumEndpoint,
 		c.cesToIdentity[ces.ces.GetName()] = cep.IdentityID
 		c.identityLock.Unlock()
 
-		return ces
+		return ces, ces.ces.GetName()
 	}()
 
 	// Cache CEP name with newly allocated CES.
-	c.desiredCESs.insertCEP(GetCEPNameFromCCEP(cep, ns), cb.ces.GetName())
+	c.desiredCESs.insertCEP(GetCEPNameFromCCEP(cep, ns), cesName)
 
 	// Queue the CEP in CES
-	c.addCEPtoCES(cep, cb.ces.GetName())
-	return cb.ces.GetName()
+	c.addCEPtoCES(cep, cb)
+	return cesName
 }
 
 // updateCESInCache function copies the ciliumEndpoint object in local cache. if isDeepCopy flag is set,
@@ -583,6 +682,12 @@ func (c *cesManagerIdentity) InsertCEPInCache(cep *cilium_v2.CoreCiliumEndpoint,
 // isDeepCopy flag is set to false.
 func (c *cesManagerIdentity) updateCESInCache(srcCES *cilium_v2.CiliumEndpointSlice, isDeepCopy bool) {
 	if ces, ok := c.desiredCESs.getCESTracker(srcCES.GetName()); ok {
+		// The identityLock and backendMutex locks always need to be acquired in the
+		// same order to avoid deadlocks. First identityLock and then backendMutex,
+		// because identityLock is a higher level lock of cesManagerIdentity which
+		// contains cesTrackers with backendMutex locks within it.
+		c.identityLock.Lock()
+		defer c.identityLock.Unlock()
 		ces.backendMutex.Lock()
 		defer ces.backendMutex.Unlock()
 		if !isDeepCopy {
@@ -593,16 +698,18 @@ func (c *cesManagerIdentity) updateCESInCache(srcCES *cilium_v2.CiliumEndpointSl
 			for _, cep := range ces.ces.Endpoints {
 				// Update the identityToCES and cesToIdentity maps respectively.
 				if !exist {
-					c.identityLock.Lock()
 					c.identityToCES[cep.IdentityID] = append(c.identityToCES[cep.IdentityID], ces)
 					c.cesToIdentity[srcCES.GetName()] = cep.IdentityID
-					c.identityLock.Unlock()
 					exist = true
 				}
 				// Update the desiredCESs, to reflect all CEPs are packed in a CES
 				c.desiredCESs.insertCEP(GetCEPNameFromCCEP(&cep, ces.ces.Namespace), srcCES.GetName())
 			}
 		}
+	} else {
+		log.WithFields(logrus.Fields{
+			logfields.CESName: srcCES.GetName(),
+		}).Debug("Attempted to updateCESInCache non-existent cesName , skipping")
 	}
 }
 
@@ -612,16 +719,17 @@ func (c *cesMgr) insertCESInWorkQueue(ces *cesTracker, baseDelay time.Duration) 
 	if ces.cesInsertedAt.IsZero() {
 		ces.cesInsertedAt = time.Now()
 	}
-	if baseDelay == DefaultCESSyncTime {
-		c.queue.Add(ces.ces.GetName())
-	} else {
-		c.queue.AddAfter(ces.ces.GetName(), baseDelay)
-	}
+
+	c.queue.AddAfter(ces.ces.GetName(), baseDelay)
 }
 
 // Return the CES queue delay in seconds and reset cesInsert time.
 func (c *cesMgr) getCESQueueDelayInSeconds(cesName string) (diff float64) {
-	ces := c.desiredCESs.getCESTrackerOnly(cesName)
+	ces, exists := c.desiredCESs.getCESTracker(cesName)
+	if !exists {
+		return
+	}
+
 	ces.backendMutex.Lock()
 	defer ces.backendMutex.Unlock()
 	timeSinceCESQueued := time.Since(ces.cesInsertedAt)
@@ -631,5 +739,6 @@ func (c *cesMgr) getCESQueueDelayInSeconds(cesName string) (diff float64) {
 		ces.cesInsertedAt = t
 		diff = timeSinceCESQueued.Seconds()
 	}
+
 	return
 }

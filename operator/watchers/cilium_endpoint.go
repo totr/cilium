@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package watchers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
 	"sync"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
+
 	ces "github.com/cilium/cilium/operator/pkg/ciliumendpointslice"
 	"github.com/cilium/cilium/pkg/k8s"
 	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	cilium_cli "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned/typed/cilium.io/v2"
+	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/k8s/informer"
+	"github.com/cilium/cilium/pkg/k8s/utils"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
-
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/tools/cache"
 )
 
 const identityIndex = "identity"
@@ -52,10 +51,10 @@ var (
 )
 
 // CiliumEndpointsSliceInit starts a CiliumEndpointWatcher and caches cesController locally.
-func CiliumEndpointsSliceInit(ciliumNPClient cilium_cli.CiliumV2Interface,
+func CiliumEndpointsSliceInit(ctx context.Context, wg *sync.WaitGroup, clientset k8sClient.Clientset,
 	cbController *ces.CiliumEndpointSliceController) {
 	cesController = cbController
-	CiliumEndpointsInit(ciliumNPClient, wait.NeverStop)
+	CiliumEndpointsInit(ctx, wg, clientset)
 }
 
 // identityIndexFunc index identities by ID.
@@ -72,7 +71,7 @@ func identityIndexFunc(obj interface{}) ([]string, error) {
 }
 
 // CiliumEndpointsInit starts a CiliumEndpointWatcher
-func CiliumEndpointsInit(ciliumNPClient cilium_cli.CiliumV2Interface, stopCh <-chan struct{}) {
+func CiliumEndpointsInit(ctx context.Context, wg *sync.WaitGroup, clientset k8sClient.Clientset) {
 	once.Do(func() {
 		CiliumEndpointStore = cache.NewIndexer(cache.DeletionHandlingMetaNamespaceKeyFunc, indexers)
 
@@ -105,17 +104,21 @@ func CiliumEndpointsInit(ciliumNPClient cilium_cli.CiliumV2Interface, stopCh <-c
 		}
 
 		ciliumEndpointInformer := informer.NewInformerWithStore(
-			cache.NewListWatchFromClient(ciliumNPClient.RESTClient(),
-				cilium_api_v2.CEPPluralName, v1.NamespaceAll, fields.Everything()),
+			utils.ListerWatcherFromTyped[*cilium_api_v2.CiliumEndpointList](clientset.CiliumV2().CiliumEndpoints("")),
 			&cilium_api_v2.CiliumEndpoint{},
 			0,
 			cacheResourceHandler,
 			convertToCiliumEndpoint,
 			CiliumEndpointStore,
 		)
-		go ciliumEndpointInformer.Run(stopCh)
 
-		cache.WaitForCacheSync(stopCh, ciliumEndpointInformer.HasSynced)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ciliumEndpointInformer.Run(ctx.Done())
+		}()
+
+		cache.WaitForCacheSync(ctx.Done(), ciliumEndpointInformer.HasSynced)
 		close(CiliumEndpointsSynced)
 	})
 }
@@ -134,6 +137,7 @@ func convertToCiliumEndpoint(obj interface{}) interface{} {
 				Namespace:       concreteObj.Namespace,
 				ResourceVersion: concreteObj.ResourceVersion,
 				OwnerReferences: concreteObj.OwnerReferences,
+				UID:             concreteObj.UID,
 			},
 			Status: cilium_api_v2.EndpointStatus{
 				Identity:   concreteObj.Status.Identity,
@@ -158,6 +162,7 @@ func convertToCiliumEndpoint(obj interface{}) interface{} {
 					Namespace:       ciliumEndpoint.Namespace,
 					ResourceVersion: ciliumEndpoint.ResourceVersion,
 					OwnerReferences: ciliumEndpoint.OwnerReferences,
+					UID:             ciliumEndpoint.UID,
 				},
 				Status: cilium_api_v2.EndpointStatus{
 					Identity:   ciliumEndpoint.Status.Identity,

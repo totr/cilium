@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package errors
 
@@ -15,6 +15,9 @@ var (
 	ErrUnknownEventType = errors.New("unknown event type")
 	// ErrInvalidAgentMessageType is returned if an agent message is of invalid type
 	ErrInvalidAgentMessageType = errors.New("invalid agent message type")
+	// ErrEventSkipped is returned when an event was skipped (e.g. due to configuration
+	// or incomplete data)
+	ErrEventSkipped = errors.New("event was skipped")
 )
 
 // ErrInvalidType specifies when it was given a packet type that was not

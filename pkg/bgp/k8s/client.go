@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 // Package k8s provides a Kubernetes client to be used with MetalLB
 // integration.
@@ -8,25 +8,24 @@ package k8s
 import (
 	"context"
 
-	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/sirupsen/logrus"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cilium/cilium/pkg/k8s/client"
 )
 
-func New(l *logrus.Logger) *Client {
+func New(l *logrus.Logger, cs client.Clientset) *Client {
 	return &Client{
-		K8sClient: k8s.Client(),
-
-		log: l,
+		Clientset: cs,
+		log:       l,
 	}
 }
 
 // Client wraps the K8s client so that it can conform to the client from
 // MetalLB.
 type Client struct {
-	*k8s.K8sClient
+	client.Clientset
 
 	log *logrus.Logger
 }

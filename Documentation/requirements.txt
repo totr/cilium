@@ -1,34 +1,72 @@
-alabaster==0.7.12
-Babel==2.9.1
-certifi==2018.10.15
-chardet==3.0.4
-docutils==0.14
-idna==2.7
-imagesize==1.1.0
-Jinja2==2.11.3
-jsonschema==2.6.0
-MarkupSafe==1.1.1
-pyenchant==2.0.0
-Pygments==2.7.4
-pytz==2018.7
-PyYAML==5.4
-recommonmark==0.4.0
-requests==2.25.1
-semver==2.9.0
-six==1.15.0
-snowballstemmer==1.2.1
-Sphinx==1.8.1
-sphinx-autobuild==0.7.1
-# forked read the docs themez
-git+https://github.com/cilium/sphinx_rtd_theme.git@v0.7; platform_machine != "aarch64"
-sphinx-rtd-theme==0.2.4; platform_machine == "aarch64"
-sphinxcontrib-httpdomain==1.7.0
-sphinxcontrib-openapi==0.3.2
-sphinxcontrib-spelling==4.2.1
-sphinxcontrib-websupport==1.1.0
-sphinx-tabs==1.1.13
+## Auto-generated from requirements-min/requirements.txt with "make update-requirements"
+sphinx==5.3.0
+sphinx-autobuild==2021.3.14
+
+# Custom theme, forked from Read the Docs
+sphinx-rtd-theme-cilium @ git+https://github.com/cilium/sphinx_rtd_theme.git@3bd69f33e7b2af2d0173fd997ec7ad21ce19ae3b
+# We use semver to parse Cilium's version in the config file
+semver==2.13.0
+# Sphinx extensions
+myst-parser==0.18.1
+sphinx-tabs==3.4.0
 sphinx-version-warning==1.1.2
-typing==3.6.6
-urllib3==1.26.5
-yamllint==1.22.0
-rstcheck==3.3.1
+sphinxcontrib-googleanalytics==0.4
+sphinxcontrib-openapi==0.8.1
+sphinxcontrib-spelling==8.0.0
+sphinxcontrib-websupport==1.2.4
+# Linters
+rstcheck==6.1.1
+yamllint==1.29.0
+## The following requirements were added by pip freeze:
+alabaster==0.7.13
+attrs==22.2.0
+Babel==2.12.1
+certifi==2022.12.7
+charset-normalizer==3.0.1
+click==8.1.3
+colorama==0.4.6
+commonmark==0.9.1
+deepmerge==1.1.0
+docutils==0.17.1
+idna==3.4
+imagesize==1.4.1
+importlib-metadata==4.13.0
+importlib-resources==5.12.0
+Jinja2==3.0.3
+jsonschema==4.17.3
+livereload==2.6.3
+markdown-it-py==2.2.0
+MarkupSafe==2.1.2
+mdit-py-plugins==0.3.4
+mdurl==0.1.2
+mistune==2.0.5
+packaging==23.0
+pathspec==0.11.0
+picobox==2.2.0
+pkgutil-resolve-name==1.3.10
+pydantic==1.10.5
+pyenchant==3.2.2
+Pygments==2.14.0
+pyrsistent==0.19.3
+pytz==2022.7.1
+PyYAML==6.0
+requests==2.28.2
+rich==12.6.0
+rstcheck-core==1.0.3
+shellingham==1.5.0.post1
+six==1.16.0
+snowballstemmer==2.2.0
+sphinx-mdinclude==0.5.3
+sphinxcontrib-applehelp==1.0.2
+sphinxcontrib-devhelp==1.0.2
+sphinxcontrib-htmlhelp==2.0.0
+sphinxcontrib-httpdomain==1.8.1
+sphinxcontrib-jsmath==1.0.1
+sphinxcontrib-qthelp==1.0.3
+sphinxcontrib-serializinghtml==1.1.5
+tornado==6.2
+typer==0.7.0
+types-docutils==0.19.1.6
+typing-extensions==4.5.0
+urllib3==1.26.14
+zipp==3.15.0

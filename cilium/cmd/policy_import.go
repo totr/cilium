@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-
-	"github.com/spf13/cobra"
 )
 
 var printPolicy bool
@@ -48,7 +48,7 @@ var policyImportCmd = &cobra.Command{
 			}
 			if resp, err := client.PolicyPut(string(jsonPolicy)); err != nil {
 				Fatalf("Cannot import policy: %s\n", err)
-			} else if command.OutputJSON() {
+			} else if command.OutputOption() {
 				if err := command.PrintOutput(resp); err != nil {
 					os.Exit(1)
 				}
@@ -64,5 +64,5 @@ var policyImportCmd = &cobra.Command{
 func init() {
 	policyCmd.AddCommand(policyImportCmd)
 	policyImportCmd.Flags().BoolVarP(&printPolicy, "print", "", false, "Print policy after import")
-	command.AddJSONOutput(policyImportCmd)
+	command.AddOutputOption(policyImportCmd)
 }

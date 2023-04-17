@@ -1,19 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package k8s
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
 
 	"github.com/cilium/cilium/pkg/annotation"
 	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/controller"
-	ciliumio "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node/addressing"
@@ -22,15 +18,6 @@ import (
 	"github.com/cilium/cilium/pkg/source"
 
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-)
-
-const (
-	// ciliumNodeConditionReason is the condition name used by Cilium to set
-	// when the Network is setup in the node.
-	ciliumNodeConditionReason = "CiliumIsUp"
 )
 
 // ParseNodeAddressType converts a Kubernetes NodeAddressType to a Cilium
@@ -90,38 +77,11 @@ func ParseNode(k8sNode *slim_corev1.Node, source source.Source) *nodeTypes.Node 
 		}
 		addrs = append(addrs, na)
 	}
-
-	k8sNodeAddHostIP := func(annotation string) {
-		if ciliumInternalIP, ok := k8sNode.Annotations[annotation]; !ok || ciliumInternalIP == "" {
-			scopedLog.Debugf("Missing %s. Annotation required when IPSec Enabled", annotation)
-		} else if ip := net.ParseIP(ciliumInternalIP); ip == nil {
-			scopedLog.Debugf("ParseIP %s error", ciliumInternalIP)
-		} else {
-			na := nodeTypes.Address{
-				Type: addressing.NodeCiliumInternalIP,
-				IP:   ip,
-			}
-			addrs = append(addrs, na)
-			scopedLog.Debugf("Add NodeCiliumInternalIP: %s", ip)
-		}
-	}
-
-	k8sNodeAddHostIP(annotation.CiliumHostIP)
-	k8sNodeAddHostIP(annotation.CiliumHostIPv6)
-
-	encryptKey := uint8(0)
-	if key, ok := k8sNode.Annotations[annotation.CiliumEncryptionKey]; ok {
-		if u, err := strconv.ParseUint(key, 10, 8); err == nil {
-			encryptKey = uint8(u)
-		}
-	}
-
 	newNode := &nodeTypes.Node{
-		Name:          k8sNode.Name,
-		Cluster:       option.Config.ClusterName,
-		IPAddresses:   addrs,
-		Source:        source,
-		EncryptionKey: encryptKey,
+		Name:        k8sNode.Name,
+		Cluster:     option.Config.ClusterName,
+		IPAddresses: addrs,
+		Source:      source,
 	}
 
 	if len(k8sNode.Spec.PodCIDRs) != 0 {
@@ -151,11 +111,46 @@ func ParseNode(k8sNode *slim_corev1.Node, source source.Source) *nodeTypes.Node 
 			}
 		}
 	}
+
+	newNode.Labels = k8sNode.GetLabels()
+	newNode.Annotations = k8sNode.GetAnnotations()
+
+	if !option.Config.AnnotateK8sNode {
+		return newNode
+	}
+
+	// Any code bellow this line will depend on k8s node annotations. If we are
+	// not annotating the node then we should not use any annotations.
+
+	k8sNodeAddHostIP := func(key string, alias string) {
+		if ciliumInternalIP, ok := annotation.Get(k8sNode, key, alias); !ok || ciliumInternalIP == "" {
+			scopedLog.Debugf("Missing %s (or %s). Annotation required when IPSec Enabled", key, alias)
+		} else if ip := net.ParseIP(ciliumInternalIP); ip == nil {
+			scopedLog.Debugf("ParseIP %s error", ciliumInternalIP)
+		} else {
+			na := nodeTypes.Address{
+				Type: addressing.NodeCiliumInternalIP,
+				IP:   ip,
+			}
+			addrs = append(addrs, na)
+			scopedLog.Debugf("Add NodeCiliumInternalIP: %s", ip)
+		}
+	}
+
+	k8sNodeAddHostIP(annotation.CiliumHostIP, annotation.CiliumHostIPAlias)
+	k8sNodeAddHostIP(annotation.CiliumHostIPv6, annotation.CiliumHostIPv6Alias)
+
+	if key, ok := annotation.Get(k8sNode, annotation.CiliumEncryptionKey, annotation.CiliumEncryptionKeyAlias); ok {
+		if u, err := strconv.ParseUint(key, 10, 8); err == nil {
+			newNode.EncryptionKey = uint8(u)
+		}
+	}
+
 	// Spec.PodCIDR takes precedence since it's
 	// the CIDR assigned by k8s controller manager
 	// In case it's invalid or empty then we fall back to our annotations.
 	if newNode.IPv4AllocCIDR == nil {
-		if ipv4CIDR, ok := k8sNode.Annotations[annotation.V4CIDRName]; !ok || ipv4CIDR == "" {
+		if ipv4CIDR, ok := annotation.Get(k8sNode, annotation.V4CIDRName, annotation.V4CIDRNameAlias); !ok || ipv4CIDR == "" {
 			scopedLog.Debug("Empty IPv4 CIDR annotation in node")
 		} else {
 			allocCIDR, err := cidr.ParseCIDR(ipv4CIDR)
@@ -168,7 +163,7 @@ func ParseNode(k8sNode *slim_corev1.Node, source source.Source) *nodeTypes.Node 
 	}
 
 	if newNode.IPv6AllocCIDR == nil {
-		if ipv6CIDR, ok := k8sNode.Annotations[annotation.V6CIDRName]; !ok || ipv6CIDR == "" {
+		if ipv6CIDR, ok := annotation.Get(k8sNode, annotation.V6CIDRName, annotation.V6CIDRNameAlias); !ok || ipv6CIDR == "" {
 			scopedLog.Debug("Empty IPv6 CIDR annotation in node")
 		} else {
 			allocCIDR, err := cidr.ParseCIDR(ipv6CIDR)
@@ -181,7 +176,7 @@ func ParseNode(k8sNode *slim_corev1.Node, source source.Source) *nodeTypes.Node 
 	}
 
 	if newNode.IPv4HealthIP == nil {
-		if healthIP, ok := k8sNode.Annotations[annotation.V4HealthName]; !ok || healthIP == "" {
+		if healthIP, ok := annotation.Get(k8sNode, annotation.V4HealthName, annotation.V4HealthNameAlias); !ok || healthIP == "" {
 			scopedLog.Debug("Empty IPv4 health endpoint annotation in node")
 		} else if ip := net.ParseIP(healthIP); ip == nil {
 			scopedLog.WithField(logfields.V4HealthIP, healthIP).Error("BUG, invalid IPv4 health endpoint annotation in node")
@@ -191,7 +186,7 @@ func ParseNode(k8sNode *slim_corev1.Node, source source.Source) *nodeTypes.Node 
 	}
 
 	if newNode.IPv6HealthIP == nil {
-		if healthIP, ok := k8sNode.Annotations[annotation.V6HealthName]; !ok || healthIP == "" {
+		if healthIP, ok := annotation.Get(k8sNode, annotation.V6HealthName, annotation.V6HealthNameAlias); !ok || healthIP == "" {
 			scopedLog.Debug("Empty IPv6 health endpoint annotation in node")
 		} else if ip := net.ParseIP(healthIP); ip == nil {
 			scopedLog.WithField(logfields.V6HealthIP, healthIP).Error("BUG, invalid IPv6 health endpoint annotation in node")
@@ -200,116 +195,25 @@ func ParseNode(k8sNode *slim_corev1.Node, source source.Source) *nodeTypes.Node 
 		}
 	}
 
-	newNode.Labels = k8sNode.GetLabels()
+	if newNode.IPv4IngressIP == nil {
+		if ingressIP, ok := annotation.Get(k8sNode, annotation.V4IngressName, annotation.V4IngressNameAlias); !ok || ingressIP == "" {
+			scopedLog.Debug("Empty IPv4 Ingress annotation in node")
+		} else if ip := net.ParseIP(ingressIP); ip == nil {
+			scopedLog.WithField(logfields.V4IngressIP, ingressIP).Error("BUG, invalid IPv4 Ingress annotation in node")
+		} else {
+			newNode.IPv4IngressIP = ip
+		}
+	}
+
+	if newNode.IPv6IngressIP == nil {
+		if ingressIP, ok := annotation.Get(k8sNode, annotation.V6IngressName, annotation.V6IngressNameAlias); !ok || ingressIP == "" {
+			scopedLog.Debug("Empty IPv6 Ingress annotation in node")
+		} else if ip := net.ParseIP(ingressIP); ip == nil {
+			scopedLog.WithField(logfields.V6IngressIP, ingressIP).Error("BUG, invalid IPv6 Ingress annotation in node")
+		} else {
+			newNode.IPv6IngressIP = ip
+		}
+	}
 
 	return newNode
-}
-
-// setNodeNetworkUnavailableFalse sets Kubernetes NodeNetworkUnavailable to
-// false as Cilium is managing the network connectivity.
-// https://kubernetes.io/docs/concepts/architecture/nodes/#condition
-func setNodeNetworkUnavailableFalse(ctx context.Context, c kubernetes.Interface, nodeGetter nodeGetter, nodeName string) error {
-	n, err := nodeGetter.GetK8sNode(ctx, nodeName)
-	if err != nil {
-		return err
-	}
-
-	if HasCiliumIsUpCondition(n) {
-		return nil
-	}
-
-	condition := corev1.NodeCondition{
-		Type:               corev1.NodeNetworkUnavailable,
-		Status:             corev1.ConditionFalse,
-		Reason:             ciliumNodeConditionReason,
-		Message:            "Cilium is running on this node",
-		LastTransitionTime: metav1.Now(),
-		LastHeartbeatTime:  metav1.Now(),
-	}
-	raw, err := json.Marshal(&[]corev1.NodeCondition{condition})
-	if err != nil {
-		return err
-	}
-	patch := []byte(fmt.Sprintf(`{"status":{"conditions":%s}}`, raw))
-	_, err = c.CoreV1().Nodes().PatchStatus(context.TODO(), nodeName, patch)
-	return err
-}
-
-// HasCiliumIsUpCondition returns true if the given k8s node has the cilium node
-// condition set.
-func HasCiliumIsUpCondition(n *corev1.Node) bool {
-	for _, condition := range n.Status.Conditions {
-		if condition.Type == corev1.NodeNetworkUnavailable &&
-			condition.Status == corev1.ConditionFalse &&
-			condition.Reason == ciliumNodeConditionReason {
-			return true
-		}
-	}
-	return false
-}
-
-// removeNodeTaint removes the AgentNotReadyNodeTaint allowing for pods to be
-// scheduled once Cilium is setup. Mostly used in cloud providers to prevent
-// existing CNI plugins from managing pods.
-func removeNodeTaint(ctx context.Context, c kubernetes.Interface, nodeGetter nodeGetter, nodeName string) error {
-	k8sNode, err := nodeGetter.GetK8sNode(ctx, nodeName)
-	if err != nil {
-		return err
-	}
-
-	var taintFound bool
-
-	var taints []corev1.Taint
-	for _, taint := range k8sNode.Spec.Taints {
-		if taint.Key != ciliumio.AgentNotReadyNodeTaint {
-			taints = append(taints, taint)
-		} else {
-			taintFound = true
-		}
-	}
-
-	// No cilium taints found
-	if !taintFound {
-		log.WithFields(logrus.Fields{
-			logfields.NodeName: nodeName,
-			"taint":            ciliumio.AgentNotReadyNodeTaint,
-		}).Debug("Taint not found in node")
-		return nil
-	}
-	log.WithFields(logrus.Fields{
-		logfields.NodeName: nodeName,
-		"taint":            ciliumio.AgentNotReadyNodeTaint,
-	}).Debug("Removing Node Taint")
-
-	k8sNode.Spec.Taints = taints
-
-	_, err = c.CoreV1().Nodes().Update(ctx, k8sNode, metav1.UpdateOptions{})
-	return err
-}
-
-const (
-	markK8sNodeReadyControllerName = "mark-k8s-node-as-available"
-)
-
-// MarkNodeReady marks the Kubernetes node resource as ready from a networking
-// perspective
-func (k8sCli K8sClient) MarkNodeReady(nodeGetter nodeGetter, nodeName string) {
-	log.WithField(logfields.NodeName, nodeName).Debug("Setting NetworkUnavailable=false")
-
-	k8sCli.ctrlMgr.UpdateController(markK8sNodeReadyControllerName,
-		controller.ControllerParams{
-			DoFunc: func(ctx context.Context) error {
-				err := removeNodeTaint(ctx, k8sCli, nodeGetter, nodeName)
-				if err != nil {
-					return err
-				}
-				return setNodeNetworkUnavailableFalse(ctx, k8sCli, nodeGetter, nodeName)
-			},
-		})
-}
-
-// ReMarkNodeReady re-triggers the controller set by 'MarkNodeReady'. If
-// 'MarkNodeReady' has not been executed yet, calling this function be a no-op.
-func (k8sCli K8sClient) ReMarkNodeReady() {
-	k8sCli.ctrlMgr.TriggerController(markK8sNodeReadyControllerName)
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
+
 // Copyright 2017 Google Inc.
 
 package speaker
@@ -8,12 +9,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cilium/cilium/pkg/bgp/fence"
-	"github.com/cilium/cilium/pkg/k8s"
-
 	"github.com/sirupsen/logrus"
 	"go.universe.tf/metallb/pkg/k8s/types"
 	metallbspr "go.universe.tf/metallb/pkg/speaker"
+
+	"github.com/cilium/cilium/pkg/bgp/fence"
+	"github.com/cilium/cilium/pkg/k8s"
 )
 
 // Op enumerates the operation an event

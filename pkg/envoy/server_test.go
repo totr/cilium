@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package envoy
 
 import (
+	"reflect"
+	"testing"
+
+	cilium "github.com/cilium/proxy/go/cilium/api"
+	envoy_config_core "github.com/cilium/proxy/go/envoy/config/core/v3"
+	envoy_config_listener "github.com/cilium/proxy/go/envoy/config/listener/v3"
+	envoy_config_route "github.com/cilium/proxy/go/envoy/config/route/v3"
+	envoy_type_matcher "github.com/cilium/proxy/go/envoy/type/matcher/v3"
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
@@ -18,13 +25,6 @@ import (
 	"github.com/cilium/cilium/pkg/proxy/logger/test"
 	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	cilium "github.com/cilium/proxy/go/cilium/api"
-	envoy_config_core "github.com/cilium/proxy/go/envoy/config/core/v3"
-	envoy_config_route "github.com/cilium/proxy/go/envoy/config/route/v3"
-	envoy_type_matcher "github.com/cilium/proxy/go/envoy/type/matcher/v3"
-
-	. "gopkg.in/check.v1"
 )
 
 type ServerSuite struct{}
@@ -71,59 +71,83 @@ var PortRuleHTTP3 = &api.PortRuleHTTP{
 	Method: "GET",
 }
 
-var googleRe2 = &envoy_type_matcher.RegexMatcher_GoogleRe2{GoogleRe2: &envoy_type_matcher.RegexMatcher_GoogleRE2{}}
-
 var ExpectedHeaders1 = []*envoy_config_route.HeaderMatcher{
 	{
 		Name: ":authority",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "foo.cilium.io",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "foo.cilium.io",
+					},
+				},
+			},
+		},
 	},
 	{
 		Name: ":method",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "GET",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "GET",
+					},
+				},
+			},
+		},
 	},
 	{
 		Name: ":path",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "/foo",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "/foo",
+					},
+				},
+			},
+		},
 	},
 	{
 		Name:                 "header1",
 		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_PresentMatch{PresentMatch: true},
 	},
 	{
-		Name:                 "header2",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_ExactMatch{ExactMatch: "value"},
+		Name: "header2",
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_Exact{
+					Exact: "value",
+				},
+			},
+		},
 	},
 }
 
 var ExpectedHeaders2 = []*envoy_config_route.HeaderMatcher{
 	{
 		Name: ":method",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "PUT",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "PUT",
+					},
+				},
+			},
+		},
 	},
 	{
 		Name: ":path",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "/bar",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "/bar",
+					},
+				},
+			},
+		},
 	},
 }
 
@@ -138,19 +162,27 @@ var ExpectedHeaderMatches2 = []*cilium.HeaderMatch{
 var ExpectedHeaders3 = []*envoy_config_route.HeaderMatcher{
 	{
 		Name: ":method",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "GET",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "GET",
+					},
+				},
+			},
+		},
 	},
 	{
 		Name: ":path",
-		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_SafeRegexMatch{
-			SafeRegexMatch: &envoy_type_matcher.RegexMatcher{
-				EngineType: googleRe2,
-				Regex:      "/bar",
-			}},
+		HeaderMatchSpecifier: &envoy_config_route.HeaderMatcher_StringMatch{
+			StringMatch: &envoy_type_matcher.StringMatcher{
+				MatchPattern: &envoy_type_matcher.StringMatcher_SafeRegex{
+					SafeRegex: &envoy_type_matcher.RegexMatcher{
+						Regex: "/bar",
+					},
+				},
+			},
+		},
 	},
 }
 
@@ -258,7 +290,7 @@ var L4PolicyMap1 = map[string]*policy.L4Filter{
 		Port:     80,
 		Protocol: api.ProtoTCP,
 		L7Parser: policy.ParserTypeHTTP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			cachedSelector1: L7Rules12,
 		},
 	},
@@ -269,7 +301,7 @@ var L4PolicyMap1HeaderMatch = map[string]*policy.L4Filter{
 		Port:     80,
 		Protocol: api.ProtoTCP,
 		L7Parser: policy.ParserTypeHTTP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			cachedSelector1: L7Rules12HeaderMatch,
 		},
 	},
@@ -280,7 +312,7 @@ var L4PolicyMap1RequiresV2 = map[string]*policy.L4Filter{
 		Port:     80,
 		Protocol: api.ProtoTCP,
 		L7Parser: policy.ParserTypeHTTP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			cachedSelector1:           L7Rules1,
 			cachedRequiresV2Selector1: L7Rules12,
 		},
@@ -292,7 +324,7 @@ var L4PolicyMap2 = map[string]*policy.L4Filter{
 		Port:     8080,
 		Protocol: api.ProtoTCP,
 		L7Parser: policy.ParserTypeHTTP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			cachedSelector2: L7Rules1,
 		},
 	},
@@ -303,7 +335,7 @@ var L4PolicyMap3 = map[string]*policy.L4Filter{
 		Port:     80,
 		Protocol: api.ProtoTCP,
 		L7Parser: policy.ParserTypeHTTP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			wildcardCachedSelector: L7Rules12,
 		},
 	},
@@ -314,7 +346,7 @@ var L4PolicyMap4 = map[string]*policy.L4Filter{
 	"80/TCP": {
 		Port:     80,
 		Protocol: api.ProtoTCP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			cachedSelector1: &policy.PerSelectorPolicy{L7Rules: api.L7Rules{}},
 		},
 	},
@@ -325,8 +357,36 @@ var L4PolicyMap5 = map[string]*policy.L4Filter{
 	"80/TCP": {
 		Port:     80,
 		Protocol: api.ProtoTCP,
-		L7RulesPerSelector: policy.L7DataMap{
+		PerSelectorPolicies: policy.L7DataMap{
 			wildcardCachedSelector: &policy.PerSelectorPolicy{L7Rules: api.L7Rules{}},
+		},
+	},
+}
+
+// L4PolicyMapSNI is an L4-only policy, with SNI enforcement
+var L4PolicyMapSNI = map[string]*policy.L4Filter{
+	"443/TCP": {
+		Port:     443,
+		Protocol: api.ProtoTCP,
+		PerSelectorPolicies: policy.L7DataMap{
+			wildcardCachedSelector: &policy.PerSelectorPolicy{
+				ServerNames: policy.NewStringSet([]string{
+					"jarno.cilium.rocks",
+					"ab.cd.com",
+				}),
+			},
+		},
+	},
+}
+
+var ExpectedPerPortPoliciesSNI = []*cilium.PortNetworkPolicy{
+	{
+		Port:     443,
+		Protocol: envoy_config_core.SocketAddress_TCP,
+		Rules: []*cilium.PortNetworkPolicyRule{
+			{
+				ServerNames: []string{"ab.cd.com", "jarno.cilium.rocks"},
+			},
 		},
 	},
 }
@@ -419,31 +479,35 @@ func (s *ServerSuite) TestGetPortNetworkPolicyRule(c *C) {
 
 func (s *ServerSuite) TestGetDirectionNetworkPolicy(c *C) {
 	// L4+L7
-	obtained := getDirectionNetworkPolicy(ep, L4PolicyMap1, true)
+	obtained := getDirectionNetworkPolicy(ep, L4PolicyMap1, true, nil)
 	c.Assert(obtained, checker.ExportedEquals, ExpectedPerPortPolicies12Wildcard)
 
 	// L4+L7 with header mods
-	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap1HeaderMatch, true)
+	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap1HeaderMatch, true, nil)
 	c.Assert(obtained, checker.ExportedEquals, ExpectedPerPortPolicies122HeaderMatchWildcard)
 
 	// L4+L7
-	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap2, true)
+	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap2, true, nil)
 	c.Assert(obtained, checker.ExportedEquals, ExpectedPerPortPolicies1Wildcard)
 
 	// L4-only
-	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap4, true)
+	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap4, true, nil)
 	c.Assert(obtained, checker.ExportedEquals, ExpectedPerPortPoliciesWildcard)
 
 	// L4-only
-	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap5, true)
+	obtained = getDirectionNetworkPolicy(ep, L4PolicyMap5, true, nil)
 	c.Assert(obtained, checker.ExportedEquals, ExpectedPerPortPoliciesWildcard)
+
+	// L4-only with SNI
+	obtained = getDirectionNetworkPolicy(ep, L4PolicyMapSNI, true, nil)
+	c.Assert(obtained, checker.ExportedEquals, ExpectedPerPortPoliciesSNI)
 }
 
 func (s *ServerSuite) TestGetNetworkPolicy(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4Policy1, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4Policy1, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPolicies12Wildcard,
 		EgressPerPortPolicies:  ExpectedPerPortPolicies1Wildcard,
 		ConntrackMapName:       "global",
@@ -452,10 +516,10 @@ func (s *ServerSuite) TestGetNetworkPolicy(c *C) {
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyWildcard(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4Policy2, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4Policy2, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPolicies12Wildcard,
 		EgressPerPortPolicies:  ExpectedPerPortPolicies1Wildcard,
 		ConntrackMapName:       "global",
@@ -464,10 +528,10 @@ func (s *ServerSuite) TestGetNetworkPolicyWildcard(c *C) {
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyDeny(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4Policy1RequiresV2, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4Policy1RequiresV2, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPolicies12RequiresV2,
 		EgressPerPortPolicies:  ExpectedPerPortPolicies1Wildcard,
 		ConntrackMapName:       "global",
@@ -476,10 +540,10 @@ func (s *ServerSuite) TestGetNetworkPolicyDeny(c *C) {
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyWildcardDeny(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4Policy1RequiresV2, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4Policy1RequiresV2, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPolicies12RequiresV2,
 		EgressPerPortPolicies:  ExpectedPerPortPolicies1Wildcard,
 		ConntrackMapName:       "global",
@@ -488,10 +552,10 @@ func (s *ServerSuite) TestGetNetworkPolicyWildcardDeny(c *C) {
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyNil(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, nil, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, nil, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: nil,
 		EgressPerPortPolicies:  nil,
 		ConntrackMapName:       "global",
@@ -500,10 +564,10 @@ func (s *ServerSuite) TestGetNetworkPolicyNil(c *C) {
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyIngressNotEnforced(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4Policy2, false, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4Policy2, false, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: allowAllPortNetworkPolicy,
 		EgressPerPortPolicies:  ExpectedPerPortPolicies1Wildcard,
 		ConntrackMapName:       "global",
@@ -512,10 +576,10 @@ func (s *ServerSuite) TestGetNetworkPolicyIngressNotEnforced(c *C) {
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyEgressNotEnforced(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4Policy1RequiresV2, true, false)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4Policy1RequiresV2, true, false)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPolicies12RequiresV2,
 		EgressPerPortPolicies:  allowAllPortNetworkPolicy,
 		ConntrackMapName:       "global",
@@ -528,7 +592,7 @@ var L4PolicyL7 = &policy.L4Policy{
 		"9090/TCP": {
 			Port: 9090, Protocol: api.ProtoTCP,
 			L7Parser: "tester",
-			L7RulesPerSelector: policy.L7DataMap{
+			PerSelectorPolicies: policy.L7DataMap{
 				cachedSelector1: &policy.PerSelectorPolicy{L7Rules: api.L7Rules{
 					L7Proto: "tester",
 					L7: []api.PortRuleL7{
@@ -570,10 +634,10 @@ var ExpectedPerPortPoliciesL7 = []*cilium.PortNetworkPolicy{
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyL7(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4PolicyL7, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4PolicyL7, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPoliciesL7,
 		ConntrackMapName:       "global",
 	}
@@ -585,7 +649,7 @@ var L4PolicyKafka = &policy.L4Policy{
 		"9090/TCP": {
 			Port: 9092, Protocol: api.ProtoTCP,
 			L7Parser: "kafka",
-			L7RulesPerSelector: policy.L7DataMap{
+			PerSelectorPolicies: policy.L7DataMap{
 				cachedSelector1: &policy.PerSelectorPolicy{L7Rules: api.L7Rules{
 					Kafka: []kafka.PortRule{{
 						Role:  "consume",
@@ -625,10 +689,10 @@ var ExpectedPerPortPoliciesKafka = []*cilium.PortNetworkPolicy{
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyKafka(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4PolicyKafka, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4PolicyKafka, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
 		IngressPerPortPolicies: ExpectedPerPortPoliciesKafka,
 		ConntrackMapName:       "global",
 	}
@@ -640,7 +704,7 @@ var L4PolicyMySQL = &policy.L4Policy{
 		"3306/TCP": {
 			Port: 3306, Protocol: api.ProtoTCP,
 			L7Parser: "envoy.filters.network.mysql_proxy",
-			L7RulesPerSelector: policy.L7DataMap{
+			PerSelectorPolicies: policy.L7DataMap{
 				cachedSelector1: &policy.PerSelectorPolicy{L7Rules: api.L7Rules{
 					L7Proto: "envoy.filters.network.mysql_proxy",
 					L7: []api.PortRuleL7{
@@ -696,55 +760,294 @@ var ExpectedPerPortPoliciesMySQL = []*cilium.PortNetworkPolicy{
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyMySQL(c *C) {
-	obtained := getNetworkPolicy(ep, nil, IPv4Addr, L4PolicyMySQL, true, true)
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4PolicyMySQL, true, true)
 	expected := &cilium.NetworkPolicy{
-		Name:                  IPv4Addr,
-		Policy:                uint64(Identity),
+		EndpointIps:           []string{IPv4Addr},
+		EndpointId:            uint64(ep.GetID()),
 		EgressPerPortPolicies: ExpectedPerPortPoliciesMySQL,
 		ConntrackMapName:      "global",
 	}
 	c.Assert(obtained, checker.ExportedEquals, expected)
 }
 
-var L4PolicyL7Kafka = &policy.L4Policy{}
+var emptyL4Policy = &policy.L4Policy{}
 
-var nvp = &policy.VisibilityPolicy{
-	Ingress: make(policy.DirectionalVisibilityPolicy),
+var kafkaIngressVisibilityPolicy = &policy.VisibilityPolicy{
+	Ingress: policy.DirectionalVisibilityPolicy{
+		"9092/TCP": &policy.VisibilityMetadata{ //"<Ingress/9092/TCP/Kafka>"
+			Port:       9092,
+			Parser:     "Kafka",
+			Proto:      u8proto.TCP,
+			Ingress:    true,
+			L7Metadata: make(policy.L7DataMap),
+		},
+	},
 }
 
 func (s *ServerSuite) TestGetNetworkPolicyProxylibVisibility(c *C) {
-
-	dvp := nvp.Ingress
-
-	pp := "9092/TCP"
-
-	dvp[pp] = &policy.VisibilityMetadata{ //"<Ingress/9092/TCP/Kafka>"
-		Port:       9092,
-		Parser:     "Kafka",
-		Proto:      u8proto.TCP,
-		Ingress:    true,
-		L7Metadata: make(policy.L7DataMap),
-	}
-
-	pnp := []*cilium.PortNetworkPolicy{
-		{
-			Port:     uint32(nvp.Ingress[pp].Port),
-			Protocol: envoy_config_core.SocketAddress_TCP,
-			Rules: []*cilium.PortNetworkPolicyRule{
-				{
-					L7Proto: nvp.Ingress[pp].Parser.String(),
-				},
-			},
-		},
-	}
-	obtained := getNetworkPolicy(ep, nvp, IPv4Addr, L4PolicyL7Kafka, false, false)
+	// No visibility gets allow-all policies
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, emptyL4Policy, false, false)
 
 	expected := &cilium.NetworkPolicy{
-		Name:                   IPv4Addr,
-		Policy:                 uint64(Identity),
-		IngressPerPortPolicies: pnp,
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
+		IngressPerPortPolicies: allowAllPortNetworkPolicy,
+		EgressPerPortPolicies:  allowAllPortNetworkPolicy,
 		ConntrackMapName:       "global",
 	}
 
 	c.Assert(obtained, checker.ExportedEquals, expected)
+
+	obtained = getNetworkPolicy(ep, kafkaIngressVisibilityPolicy, []string{IPv4Addr}, emptyL4Policy, false, false)
+
+	// Visibility policies still contain the allow-all policies, when policy is not enforced
+	expected = &cilium.NetworkPolicy{
+		EndpointIps: []string{IPv4Addr},
+		EndpointId:  uint64(ep.GetID()),
+		IngressPerPortPolicies: []*cilium.PortNetworkPolicy{
+			allowAllTCPPortNetworkPolicy,
+			{
+				Port:     uint32(9092),
+				Protocol: envoy_config_core.SocketAddress_TCP,
+				Rules: []*cilium.PortNetworkPolicyRule{
+					{
+						L7Proto: "Kafka",
+					},
+				},
+			},
+		},
+		EgressPerPortPolicies: allowAllPortNetworkPolicy,
+		ConntrackMapName:      "global",
+	}
+
+	c.Assert(obtained, checker.ExportedEquals, expected)
+}
+
+var L4PolicyTLSEgress = &policy.L4Policy{
+	Egress: map[string]*policy.L4Filter{
+		"443/TCP": {
+			Port: 443, Protocol: api.ProtoTCP,
+			L7Parser: "tls",
+			PerSelectorPolicies: policy.L7DataMap{
+				cachedSelector1: &policy.PerSelectorPolicy{
+					OriginatingTLS: &policy.TLSContext{
+						TrustedCA: "foo",
+					},
+				},
+			},
+		},
+	},
+}
+
+var ExpectedPerPortPoliciesTLSEgress = []*cilium.PortNetworkPolicy{
+	{
+		Port:     443,
+		Protocol: envoy_config_core.SocketAddress_TCP,
+		Rules: []*cilium.PortNetworkPolicyRule{{
+			UpstreamTlsContext: &cilium.TLSContext{
+				TrustedCa: "foo",
+			},
+		}},
+	},
+}
+
+func (s *ServerSuite) TestGetNetworkPolicyTLSEgress(c *C) {
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4PolicyTLSEgress, true, true)
+	expected := &cilium.NetworkPolicy{
+		EndpointIps:           []string{IPv4Addr},
+		EndpointId:            uint64(ep.GetID()),
+		EgressPerPortPolicies: ExpectedPerPortPoliciesTLSEgress,
+		ConntrackMapName:      "global",
+	}
+	c.Assert(obtained, checker.ExportedEquals, expected)
+}
+
+var L4PolicyTLSIngress = &policy.L4Policy{
+	Ingress: map[string]*policy.L4Filter{
+		"443/TCP": {
+			Port: 443, Protocol: api.ProtoTCP,
+			L7Parser: "tls",
+			PerSelectorPolicies: policy.L7DataMap{
+				cachedSelector1: &policy.PerSelectorPolicy{
+					OriginatingTLS: &policy.TLSContext{
+						CertificateChain: "certchain",
+						PrivateKey:       "key",
+					},
+				},
+			},
+			Ingress: true,
+		},
+	},
+}
+
+var ExpectedPerPortPoliciesTLSIngress = []*cilium.PortNetworkPolicy{
+	{
+		Port:     443,
+		Protocol: envoy_config_core.SocketAddress_TCP,
+		Rules: []*cilium.PortNetworkPolicyRule{{
+			UpstreamTlsContext: &cilium.TLSContext{
+				CertificateChain: "certchain",
+				PrivateKey:       "key",
+			},
+		}},
+	},
+}
+
+func (s *ServerSuite) TestGetNetworkPolicyTLSIngress(c *C) {
+	obtained := getNetworkPolicy(ep, nil, []string{IPv4Addr}, L4PolicyTLSIngress, true, true)
+	expected := &cilium.NetworkPolicy{
+		EndpointIps:            []string{IPv4Addr},
+		EndpointId:             uint64(ep.GetID()),
+		IngressPerPortPolicies: ExpectedPerPortPoliciesTLSIngress,
+		ConntrackMapName:       "global",
+	}
+	c.Assert(obtained, checker.ExportedEquals, expected)
+}
+
+func Test_getPublicListenerAddress(t *testing.T) {
+	type args struct {
+		port uint16
+		ipv4 bool
+		ipv6 bool
+	}
+	tests := []struct {
+		name string
+		args args
+		want *envoy_config_core.Address
+	}{
+		{
+			name: "IPv4 only",
+			args: args{
+				port: 80,
+				ipv4: true,
+				ipv6: false,
+			},
+			want: &envoy_config_core.Address{
+				Address: &envoy_config_core.Address_SocketAddress{
+					SocketAddress: &envoy_config_core.SocketAddress{
+						Protocol:      envoy_config_core.SocketAddress_TCP,
+						Address:       "0.0.0.0",
+						PortSpecifier: &envoy_config_core.SocketAddress_PortValue{PortValue: uint32(80)},
+					},
+				},
+			},
+		},
+		{
+			name: "IPv6 only",
+			args: args{
+				port: 80,
+				ipv4: false,
+				ipv6: true,
+			},
+			want: &envoy_config_core.Address{
+				Address: &envoy_config_core.Address_SocketAddress{
+					SocketAddress: &envoy_config_core.SocketAddress{
+						Protocol:      envoy_config_core.SocketAddress_TCP,
+						Address:       "::",
+						PortSpecifier: &envoy_config_core.SocketAddress_PortValue{PortValue: uint32(80)},
+					},
+				},
+			},
+		},
+		{
+			name: "IPv4 and IPv6",
+			args: args{
+				port: 80,
+				ipv4: true,
+				ipv6: true,
+			},
+			want: &envoy_config_core.Address{
+				Address: &envoy_config_core.Address_SocketAddress{
+					SocketAddress: &envoy_config_core.SocketAddress{
+						Protocol:      envoy_config_core.SocketAddress_TCP,
+						Address:       "::",
+						PortSpecifier: &envoy_config_core.SocketAddress_PortValue{PortValue: uint32(80)},
+						Ipv4Compat:    true,
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getPublicListenerAddress(tt.args.port, tt.args.ipv4, tt.args.ipv6); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("getPublicListenerAddress() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_getLocalListenerAddresses(t *testing.T) {
+	v4Local := &envoy_config_core.Address_SocketAddress{
+		SocketAddress: &envoy_config_core.SocketAddress{
+			Protocol:      envoy_config_core.SocketAddress_TCP,
+			Address:       "127.0.0.1",
+			PortSpecifier: &envoy_config_core.SocketAddress_PortValue{PortValue: uint32(80)},
+		},
+	}
+
+	v6Local := &envoy_config_core.Address_SocketAddress{
+		SocketAddress: &envoy_config_core.SocketAddress{
+			Protocol:      envoy_config_core.SocketAddress_TCP,
+			Address:       "::1",
+			PortSpecifier: &envoy_config_core.SocketAddress_PortValue{PortValue: uint32(80)},
+		},
+	}
+	type args struct {
+		port uint16
+		ipv4 bool
+		ipv6 bool
+	}
+	tests := []struct {
+		name           string
+		args           args
+		want           *envoy_config_core.Address
+		wantAdditional []*envoy_config_listener.AdditionalAddress
+	}{
+		{
+			name: "IPv4 only",
+			args: args{
+				port: 80,
+				ipv4: true,
+				ipv6: false,
+			},
+			want: &envoy_config_core.Address{
+				Address: v4Local,
+			},
+		},
+		{
+			name: "IPv6 only",
+			args: args{
+				port: 80,
+				ipv4: false,
+				ipv6: true,
+			},
+			want: &envoy_config_core.Address{
+				Address: v6Local,
+			},
+		},
+		{
+			name: "IPv4 and IPv6",
+			args: args{
+				port: 80,
+				ipv4: true,
+				ipv6: true,
+			},
+			want: &envoy_config_core.Address{
+				Address: v4Local,
+			},
+			wantAdditional: []*envoy_config_listener.AdditionalAddress{{Address: &envoy_config_core.Address{Address: v6Local}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, gotAdditional := getLocalListenerAddresses(tt.args.port, tt.args.ipv4, tt.args.ipv6)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("getLocalListenerAddresses() got = %v, want %v", got, tt.want)
+			}
+			if !reflect.DeepEqual(gotAdditional, tt.wantAdditional) {
+				t.Errorf("getLocalListenerAddresses() got1 = %v, want %v", gotAdditional, tt.wantAdditional)
+			}
+		})
+	}
 }

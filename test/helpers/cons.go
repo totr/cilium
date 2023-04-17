@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -37,11 +37,11 @@ var (
 
 const (
 
-	//CiliumPath is the path where cilium test code is located.
+	// CiliumPath is the path where cilium test code is located.
 	CiliumPath = "/src/github.com/cilium/cilium/test"
 
 	// K8sManifestBase tells ginkgo suite where to look for manifests
-	K8sManifestBase = "k8sT/manifests"
+	K8sManifestBase = "k8s/manifests"
 
 	// VM / Test suite constants.
 	K8s     = "k8s"
@@ -124,11 +124,9 @@ const (
 
 	OptionConntrackAccounting = "ConntrackAccounting"
 	OptionConntrackLocal      = "ConntrackLocal"
-	OptionConntrack           = "Conntrack"
 	OptionDebug               = "Debug"
 	OptionDropNotify          = "DropNotification"
 	OptionTraceNotify         = "TraceNotification"
-	OptionNAT46               = "NAT46"
 	OptionIngressPolicy       = "IngressPolicy"
 	OptionEgressPolicy        = "EgressPolicy"
 	OptionIngress             = "ingress"
@@ -164,6 +162,7 @@ const (
 
 	DaemonName             = "cilium"
 	CiliumBugtool          = "cilium-bugtool"
+	CiliumBugtoolArgs      = "--exclude-object-files"
 	CiliumDockerDaemonName = "cilium-docker"
 	AgentDaemon            = "cilium-agent"
 
@@ -176,9 +175,9 @@ const (
 
 	// CiliumStableHelmChartVersion should be the chart version that points
 	// to the v1.X branch
-	CiliumStableHelmChartVersion = "1.10"
+	CiliumStableHelmChartVersion = "1.13"
 	CiliumStableVersion          = "v" + CiliumStableHelmChartVersion
-	CiliumLatestHelmChartVersion = "1.10.90"
+	CiliumLatestHelmChartVersion = "1.13.90"
 
 	MonitorLogFileName = "monitor.log"
 
@@ -230,16 +229,21 @@ const (
 	unstableStat        = "BUG: stat() has unstable behavior"                        // from https://github.com/cilium/cilium/pull/11028
 	removeTransientRule = "Unable to process chain CILIUM_TRANSIENT_FORWARD with ip" // from https://github.com/cilium/cilium/issues/11276
 	missingIptablesWait = "Missing iptables wait arg (-w):"
+	localIDRestoreFail  = "Could not restore all CIDR identities" // from https://github.com/cilium/cilium/pull/19556
+	routerIPMismatch    = "Mismatch of router IPs found during restoration"
+	emptyIPNodeIDAlloc  = "Attempt to allocate a node ID for an empty node IP address"
 
 	// ...and their exceptions.
-	lrpExists                = "local-redirect service exists for frontend"                         // cf. https://github.com/cilium/cilium/issues/16400
-	opCantBeFulfilled        = "Operation cannot be fulfilled on leases.coordination.k8s.io"        // cf. https://github.com/cilium/cilium/issues/16402
-	initLeaderElection       = "error initially creating leader election record: leases."           // cf. https://github.com/cilium/cilium/issues/16402#issuecomment-861544964
-	globalDataSupport        = "kernel doesn't support global data"                                 // cf. https://github.com/cilium/cilium/issues/16418
-	removeInexistentID       = "removing identity not added to the identity manager!"               // cf. https://github.com/cilium/cilium/issues/16419
-	failedToListCRDs         = "the server could not find the requested resource"                   // cf. https://github.com/cilium/cilium/issues/16425
-	retrieveResLock          = "retrieving resource lock kube-system/cilium-operator-resource-lock" // cf. https://github.com/cilium/cilium/issues/16402#issuecomment-871155492
-	failedToRelLockEmptyName = "Failed to release lock: resource name may not be empty"             // cf. https://github.com/cilium/cilium/issues/16402#issuecomment-985819560
+	opCantBeFulfilled          = "Operation cannot be fulfilled on leases.coordination.k8s.io"        // cf. https://github.com/cilium/cilium/issues/16402
+	initLeaderElection         = "error initially creating leader election record: leases."           // cf. https://github.com/cilium/cilium/issues/16402#issuecomment-861544964
+	globalDataSupport          = "kernel doesn't support global data"                                 // cf. https://github.com/cilium/cilium/issues/16418
+	removeInexistentID         = "removing identity not added to the identity manager!"               // cf. https://github.com/cilium/cilium/issues/16419
+	failedToListCRDs           = "the server could not find the requested resource"                   // cf. https://github.com/cilium/cilium/issues/16425
+	retrieveResLock            = "retrieving resource lock kube-system/cilium-operator-resource-lock" // cf. https://github.com/cilium/cilium/issues/16402#issuecomment-871155492
+	failedToRelLockEmptyName   = "Failed to release lock: resource name may not be empty"             // cf. https://github.com/cilium/cilium/issues/16402#issuecomment-985819560
+	failedToUpdateLock         = "Failed to update lock:"
+	failedToReleaseLock        = "Failed to release lock:"
+	errorCreatingInitialLeader = "error initially creating leader election record:"
 
 	// HelmTemplate is the location of the Helm templates to install Cilium
 	HelmTemplate = "../install/kubernetes/cilium"
@@ -249,9 +253,8 @@ const (
 )
 
 var (
-	// CiliumNamespace is where cilium should run. In some deployments this cannot
-	// be kube-system.
-	CiliumNamespace = GetCiliumNamespace(GetCurrentIntegration())
+	// CiliumNamespace is where cilium should run.
+	CiliumNamespace = CiliumNamespaceDefault
 
 	// LogGathererNamespace is where log-gatherer should run. It follows cilium
 	// for simplicity.
@@ -268,19 +271,14 @@ const (
 	ReservedIdentityHost = 1
 )
 
-// NightlyStableUpgradesFrom maps the cilium image versions to the helm charts
-// that will be used to run update tests in the Nightly test.
-var NightlyStableUpgradesFrom = map[string]string{
-	"v1.8": "1.8-dev",
-	"v1.9": "1.9-dev",
-}
-
 var (
 	IsCiliumV1_8  = versioncheck.MustCompile(">=1.7.90 <1.9.0")
 	IsCiliumV1_9  = versioncheck.MustCompile(">=1.8.90 <1.10.0")
 	IsCiliumV1_10 = versioncheck.MustCompile(">=1.9.90 <1.11.0")
 	IsCiliumV1_11 = versioncheck.MustCompile(">=1.10.90 <1.12.0")
 	IsCiliumV1_12 = versioncheck.MustCompile(">=1.11.90 <1.13.0")
+	IsCiliumV1_13 = versioncheck.MustCompile(">=1.12.90 <1.14.0")
+	IsCiliumV1_14 = versioncheck.MustCompile(">=1.13.90 <1.15.0")
 )
 
 // badLogMessages is a map which key is a part of a log message which indicates
@@ -302,10 +300,13 @@ var badLogMessages = map[string][]string{
 	unstableStat:        nil,
 	removeTransientRule: nil,
 	missingIptablesWait: nil,
+	localIDRestoreFail:  nil,
+	routerIPMismatch:    nil,
+	emptyIPNodeIDAlloc:  nil,
 	"DATA RACE":         nil,
 	// Exceptions for level=error should only be added as a last resort, if the
 	// error cannot be fixed in Cilium or in the test.
-	"level=error": {lrpExists, opCantBeFulfilled, initLeaderElection, globalDataSupport, removeInexistentID, failedToListCRDs, retrieveResLock, failedToRelLockEmptyName},
+	"level=error": {opCantBeFulfilled, initLeaderElection, globalDataSupport, removeInexistentID, failedToListCRDs, retrieveResLock, failedToRelLockEmptyName, failedToUpdateLock, failedToReleaseLock, errorCreatingInitialLeader},
 }
 
 var ciliumCLICommands = map[string]string{

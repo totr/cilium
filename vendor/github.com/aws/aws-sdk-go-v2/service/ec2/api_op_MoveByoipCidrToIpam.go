@@ -11,7 +11,12 @@ import (
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
-// Move an BYOIP IPv4 CIDR to IPAM from a public IPv4 pool.
+// Move an BYOIP IPv4 CIDR to IPAM from a public IPv4 pool. If you already have an
+// IPv4 BYOIP CIDR with Amazon Web Services, you can move the CIDR to IPAM from a
+// public IPv4 pool. You cannot move an IPv6 CIDR to IPAM. If you are bringing a
+// new IP address to Amazon Web Services for the first time, complete the steps in
+// Tutorial: BYOIP address CIDRs to IPAM
+// (https://docs.aws.amazon.com/vpc/latest/ipam/tutorials-byoip-ipam.html).
 func (c *Client) MoveByoipCidrToIpam(ctx context.Context, params *MoveByoipCidrToIpamInput, optFns ...func(*Options)) (*MoveByoipCidrToIpamOutput, error) {
 	if params == nil {
 		params = &MoveByoipCidrToIpamInput{}
@@ -30,7 +35,19 @@ func (c *Client) MoveByoipCidrToIpam(ctx context.Context, params *MoveByoipCidrT
 type MoveByoipCidrToIpamInput struct {
 
 	// The BYOIP CIDR.
+	//
+	// This member is required.
 	Cidr *string
+
+	// The IPAM pool ID.
+	//
+	// This member is required.
+	IpamPoolId *string
+
+	// The Amazon Web Services account ID of the owner of the IPAM pool.
+	//
+	// This member is required.
+	IpamPoolOwner *string
 
 	// A check for whether you have the required permissions for the action without
 	// actually making the request and provides an error response. If you have the
@@ -38,19 +55,12 @@ type MoveByoipCidrToIpamInput struct {
 	// UnauthorizedOperation.
 	DryRun *bool
 
-	// The IPAM pool ID.
-	IpamPoolId *string
-
-	// The Amazon Web Services account ID of the owner of the IPAM pool.
-	IpamPoolOwner *string
-
 	noSmithyDocumentSerde
 }
 
 type MoveByoipCidrToIpamOutput struct {
 
-	// Information about an address range that is provisioned for use with your Amazon
-	// Web Services resources through bring your own IP addresses (BYOIP).
+	// The BYOIP CIDR.
 	ByoipCidr *types.ByoipCidr
 
 	// Metadata pertaining to the operation's result.
@@ -102,6 +112,9 @@ func (c *Client) addOperationMoveByoipCidrToIpamMiddlewares(stack *middleware.St
 		return err
 	}
 	if err = smithyhttp.AddCloseResponseBodyMiddleware(stack); err != nil {
+		return err
+	}
+	if err = addOpMoveByoipCidrToIpamValidationMiddleware(stack); err != nil {
 		return err
 	}
 	if err = stack.Initialize.Add(newServiceMetadataMiddleware_opMoveByoipCidrToIpam(options.Region), middleware.Before); err != nil {

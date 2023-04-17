@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package logging
 
@@ -12,11 +12,12 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
-
-	"github.com/cilium/cilium/pkg/logging/logfields"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"k8s.io/klog/v2"
+
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 type LogFormat string
@@ -26,8 +27,9 @@ const (
 	LevelOpt  = "level"
 	FormatOpt = "format"
 
-	LogFormatText LogFormat = "text"
-	LogFormatJSON LogFormat = "json"
+	LogFormatText          LogFormat = "text"
+	LogFormatJSON          LogFormat = "json"
+	LogFormatJSONTimestamp LogFormat = "json-ts"
 
 	// DefaultLogFormat is the string representation of the default logrus.Formatter
 	// we want to use (possible values: text or json)
@@ -41,7 +43,7 @@ const (
 // default to avoid external dependencies from writing out unexpectedly
 var DefaultLogger = InitializeDefaultLogger()
 
-func init() {
+func initializeKLog() {
 	log := DefaultLogger.WithField(logfields.LogSubsys, "klog")
 
 	//Create a new flag set and set error handler
@@ -105,10 +107,10 @@ func (o LogOptions) GetLogFormat() LogFormat {
 	}
 
 	formatOpt = strings.ToLower(formatOpt)
-	re := regexp.MustCompile(`^(text|json)$`)
+	re := regexp.MustCompile(`^(text|json|json-ts)$`)
 	if !re.MatchString(formatOpt) {
 		logrus.WithError(
-			fmt.Errorf("incorrect log format configured '%s', expected 'text' or 'json'", formatOpt),
+			fmt.Errorf("incorrect log format configured '%s', expected 'text', 'json' or 'json-ts'", formatOpt),
 		).Warning("Ignoring user-configured log format")
 		return DefaultLogFormat
 	}
@@ -136,14 +138,25 @@ func SetLogFormat(logFormat LogFormat) {
 	DefaultLogger.SetFormatter(GetFormatter(logFormat))
 }
 
-// SetLogLevel updates the DefaultLogger with the DefaultLogFormat
+// SetDefaultLogFormat updates the DefaultLogger with the DefaultLogFormat
 func SetDefaultLogFormat() {
 	DefaultLogger.SetFormatter(GetFormatter(DefaultLogFormat))
+}
+
+// AddHooks adds additional logrus hook to default logger
+func AddHooks(hooks ...logrus.Hook) {
+	for _, hook := range hooks {
+		DefaultLogger.AddHook(hook)
+	}
 }
 
 // SetupLogging sets up each logging service provided in loggers and configures
 // each logger with the provided logOpts.
 func SetupLogging(loggers []string, logOpts LogOptions, tag string, debug bool) error {
+	// Bridge klog to logrus. Note that this will open multiple pipes and fork
+	// background goroutines that are not cleaned up.
+	initializeKLog()
+
 	// Updating the default log format
 	SetLogFormat(logOpts.GetLogFormat())
 
@@ -191,6 +204,11 @@ func GetFormatter(format LogFormat) logrus.Formatter {
 	case LogFormatJSON:
 		return &logrus.JSONFormatter{
 			DisableTimestamp: true,
+		}
+	case LogFormatJSONTimestamp:
+		return &logrus.JSONFormatter{
+			DisableTimestamp: false,
+			TimestampFormat:  time.RFC3339Nano,
 		}
 	}
 

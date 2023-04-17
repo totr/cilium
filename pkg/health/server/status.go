@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package server
 
 import (
+	"github.com/go-openapi/runtime/middleware"
+
 	. "github.com/cilium/cilium/api/v1/health/server/restapi/connectivity"
 	"github.com/cilium/cilium/pkg/api"
-
-	"github.com/go-openapi/runtime/middleware"
 )
 
 type getStatusCache struct {

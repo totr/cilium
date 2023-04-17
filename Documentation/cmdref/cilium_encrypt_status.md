@@ -12,18 +12,18 @@ cilium encrypt status [flags]
 
 ```
   -h, --help            help for status
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium encrypt](../cilium_encrypt)	 - Manage transparent encryption
+* [cilium encrypt](cilium_encrypt.md)	 - Manage transparent encryption
 

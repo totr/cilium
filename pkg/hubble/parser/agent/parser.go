@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Hubble
+// Copyright Authors of Hubble
 
 package agent
 
@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	flowpb "github.com/cilium/cilium/api/v1/flow"
-	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	flowpb "github.com/cilium/cilium/api/v1/flow"
+	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 )
 
 func notifyTimeNotificationToProto(typ flowpb.AgentEventType, n monitorAPI.TimeNotification) *flowpb.AgentEvent {
@@ -126,7 +126,9 @@ func notifyServiceUpsertedToProto(typ flowpb.AgentEventType, n monitorAPI.Servic
 				FrontendAddress:  feAddr,
 				BackendAddresses: beAddrs,
 				Type:             n.Type,
-				TrafficPolicy:    n.TrafficPolicy,
+				TrafficPolicy:    n.ExtTrafficPolicy,
+				ExtTrafficPolicy: n.ExtTrafficPolicy,
+				IntTrafficPolicy: n.IntTrafficPolicy,
 				Name:             n.Name,
 				Namespace:        n.Namespace,
 			},

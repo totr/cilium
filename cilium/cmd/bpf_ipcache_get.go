@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -9,11 +9,11 @@ import (
 	"os"
 	"strings"
 
+	iradix "github.com/hashicorp/go-immutable-radix/v2"
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/maps/ipcache"
-
-	"github.com/hashicorp/go-immutable-radix"
-	"github.com/spf13/cobra"
 )
 
 const usage = "IP address must be in dotted decimal (192.168.1.1) or IPv6 (feab::f02b) form"
@@ -67,7 +67,7 @@ func init() {
 func dumpIPCache() map[string][]string {
 	bpfIPCache := make(map[string][]string)
 
-	if err := ipcache.IPCache.Dump(bpfIPCache); err != nil {
+	if err := ipcache.IPCacheMap().Dump(bpfIPCache); err != nil {
 		Fatalf("unable to dump IPCache: %s\n", err)
 	}
 
@@ -116,7 +116,7 @@ func getLPMValue(ip net.IP, entries map[string][]string) (interface{}, bool) {
 		lpmEntries = append(lpmEntries, lpmEntry{prefix, identity})
 	}
 
-	r := iradix.New()
+	r := iradix.New[[]string]()
 	for _, e := range lpmEntries {
 		r, _, _ = r.Insert(e.prefix, e.identity)
 	}

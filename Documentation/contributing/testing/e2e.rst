@@ -33,7 +33,6 @@ determine which VMs are necessary to run particular tests. All test names
 * ``Runtime``: Test cilium in a runtime environment running on a single node.
 * ``K8s``: Create a small multi-node kubernetes environment for testing
   features beyond a single host, and for testing kubernetes-specific features.
-* ``Nightly``: sets up a multinode Kubernetes cluster to run scale, performance, and chaos testing for Cilium.
 
 .. _Ginkgo: https://onsi.github.io/ginkgo/
 .. _focus: `Focused Specs`_
@@ -138,6 +137,9 @@ The Kubernetes tests support the following Kubernetes versions:
 * 1.21
 * 1.22
 * 1.23
+* 1.24
+* 1.25
+* 1.26
 
 By default, the Vagrant VMs are provisioned with Kubernetes 1.23. To run with any other
 supported version of Kubernetes, run the test suite with the following format:
@@ -170,20 +172,6 @@ supported version of Kubernetes, run the test suite with the following format:
         end
       end
 
-Running Nightly Tests
-^^^^^^^^^^^^^^^^^^^^^
-
-To run all of the Nightly tests, run the following command from the ``test`` directory:
-
-.. code-block:: shell-session
-
-    ginkgo --focus="Nightly" --tags=integration_tests
-
-Similar to the other test suites, Ginkgo searches for all tests in all
-subdirectories that are "named" beginning with the string "Nightly" and contain
-any characters after it. The default version of running Nightly test are 1.8,
-but can be changed using the environment variable ``K8S_VERSION``.
-
 Available CLI Options
 ^^^^^^^^^^^^^^^^^^^^^
 
@@ -196,8 +184,6 @@ framework in the ``test/`` directory and interact with ginkgo directly:
     $ ginkgo . -- -cilium.help
       -cilium.SSHConfig string
             Specify a custom command to fetch SSH configuration (eg: 'vagrant ssh-config')
-      -cilium.benchmarks
-            Specifies benchmark tests should be run which may increase test time
       -cilium.help
             Display this help message.
       -cilium.holdEnvironment
@@ -231,7 +217,7 @@ framework in the ``test/`` directory and interact with ginkgo directly:
       -cilium.tag string
             Specifies which tag of cilium to use during tests
       -cilium.testScope string
-            Specifies scope of test to be ran (k8s, Nightly, runtime)
+            Specifies scope of test to be ran (k8s, runtime)
       -cilium.timeout duration
             Specifies timeout for test run (default 24h0m0s)
 
@@ -486,6 +472,7 @@ This mode expects:
 - The current directory is ``cilium/test``
 
 - A test focus with ``--focus``. ``--focus="K8s"`` selects all kubernetes tests.
+  If not passing ``--focus=K8s`` then you must pass ``-cilium.testScope=K8s``.
 
 - Cilium images as full URLs specified with the ``--cilium.image`` and
   ``--cilium.operator-image`` options.
@@ -507,6 +494,14 @@ An example invocation is
 .. code-block:: shell-session
 
   CNI_INTEGRATION=eks K8S_VERSION=1.16 ginkgo --focus="K8s" --tags=integration_tests -- -cilium.provision=false -cilium.kubeconfig=`echo ~/.kube/config` -cilium.image="quay.io/cilium/cilium-ci" -cilium.operator-image="quay.io/cilium/operator" -cilium.operator-suffix="-ci" -cilium.passCLIEnvironment=true
+
+
+To run tests with Kind, try
+
+.. code-block:: shell-session
+
+  K8S_VERSION=1.25 ginkgo --focus=K8s -- -cilium.provision=false --cilium.image=localhost:5000/cilium/cilium-dev -cilium.tag=local  --cilium.operator-image=localhost:5000/cilium/operator -cilium.operator-tag=local -cilium.kubeconfig=`echo ~/.kube/config` -cilium.provision-k8s=false  -cilium.testScope=K8s -cilium.operator-suffix=
+
 
 Running in GKE
 ^^^^^^^^^^^^^^
@@ -539,6 +534,24 @@ cluster.
 .. note:: The kubernetes version defaults to 1.23 but can be configured with
           versions between 1.16 and 1.23. Version should match the server
           version reported by ``kubectl version``.
+
+AKS (experimental)
+^^^^^^^^^^^^^^^^^^
+
+.. note:: The tests require the ``NATIVE_CIDR`` environment variable to be set to
+          the value of the cluster IPv4 CIDR.
+
+1. Setup a cluster as in :ref:`k8s_install_quick` or utilize an existing
+   cluster. You do not need to deploy Cilium in this step, as the End-To-End
+   Testing Framework handles the deployment of Cilium.
+
+2. Invoke the tests from ``cilium/test`` with options set as explained in
+`Running End-To-End Tests In Other Environments via kubeconfig`_
+
+.. code-block:: shell-session
+
+    export NATIVE_CIDR="10.241.0.0/16"
+    CNI_INTEGRATION=aks K8S_VERSION=1.17 ginkgo --focus="K8s" --tags=integration_tests -- -cilium.provision=false -cilium.kubeconfig=`echo ~/.kube/config` -cilium.passCLIEnvironment=true -cilium.image="mcr.microsoft.com/oss/cilium/cilium" -cilium.tag="1.12.1" -cilium.operator-image="mcr.microsoft.com/oss/cilium/operator" -cilium.operator-suffix=""  -cilium.operator-tag="1.12.1"
 
 AWS EKS (experimental)
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -637,6 +650,8 @@ configuration options that can be passed as environment variables:
 +======================+===================+==============+==================================================================+
 | K8S\_NODES           | 2                 | 0..100       | Number of Kubernetes nodes in the cluster                        |
 +----------------------+-------------------+--------------+------------------------------------------------------------------+
+| NO_CILIUM_ON_NODE[S] | none              | \*           | Comma-separated list of K8s nodes that should not run Cilium     |
++----------------------+-------------------+--------------+------------------------------------------------------------------+
 | NFS                  | 0                 | 1            | If Cilium folder needs to be shared using NFS                    |
 +----------------------+-------------------+--------------+------------------------------------------------------------------+
 | IPv6                 | 0                 | 0-1          | If 1 the Kubernetes cluster will use IPv6                        |
@@ -647,7 +662,7 @@ configuration options that can be passed as environment variables:
 +----------------------+-------------------+--------------+------------------------------------------------------------------+
 | KUBEPROXY            | 1                 | 0-1          | If 0 the Kubernetes' kube-proxy won't be installed               |
 +----------------------+-------------------+--------------+------------------------------------------------------------------+
-| SERVER\_BOX          | cilium/ubuntu-dev | *            | Vagrantcloud base image                                          |
+| SERVER\_BOX          | cilium/ubuntu-dev | \*           | Vagrantcloud base image                                          |
 +----------------------+-------------------+--------------+------------------------------------------------------------------+
 | VM\_CPUS             | 2                 | 0..100       | Number of CPUs that need to have the VM                          |
 +----------------------+-------------------+--------------+------------------------------------------------------------------+
@@ -661,19 +676,19 @@ The test suite relies on Vagrant to automatically download the required VM
 image, if it is not already available on the system. VM images weight several
 gigabytes so this may take some time, but faster tools such as `aria2`_ can
 speed up the process by opening multiple connections. The script
-`test/packet/scripts/add_vagrant_box.sh`_ can be useful to manually download
+`contrib/scripts/add_vagrant_box.sh`_ can be useful to manually download
 selected images with aria2 prior to launching the test suite, or to
 periodically update images in a ``cron`` job::
 
-    $ bash test/packet/scripts/add_vagrant_box.sh -h
+    $ bash contrib/scripts/add_vagrant_box.sh -h
     usage: add_vagrant_box.sh [options] [vagrant_box_defaults.rb path]
             path to vagrant_box_defaults.rb defaults to ./vagrant_box_defaults.rb
 
     options:
             -a              use aria2c instead of curl
             -b <box>        download selected box (defaults: ubuntu ubuntu-next)
+            -d <dir>        download to dir instead of /tmp/
             -l              download latest versions instead of using vagrant_box_defaults
-            -t              download to /tmp/ instead of current directory
             -h              display this help
 
     examples:
@@ -681,12 +696,12 @@ periodically update images in a ``cron`` job::
             $ add-vagrant-boxes.sh $HOME/go/src/github.com/cilium/cilium/vagrant_box_defaults.rb
             download latest version for ubuntu-dev and ubuntu-next:
             $ add-vagrant-boxes.sh -l -b ubuntu-dev -b ubuntu-next
-            same as above, downloading into /tmp/ and using aria2c:
-            $ add-vagrant-boxes.sh -alt -b ubuntu-dev -b ubuntu-next
+            same as above, downloading into /tmp/foo and using aria2c:
+            $ add-vagrant-boxes.sh -al -d /tmp/foo -b ubuntu-dev -b ubuntu-next
 
 .. _aria2: https://aria2.github.io/
-.. _test/packet/scripts/add_vagrant_box.sh:
-   https://github.com/cilium/cilium/blob/master/test/packet/scripts/add_vagrant_box.sh
+.. _contrib/scripts/add_vagrant_box.sh:
+   https://github.com/cilium/cilium/blob/master/contrib/scripts/add_vagrant_box.sh
 
 Known Issues and Workarounds
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

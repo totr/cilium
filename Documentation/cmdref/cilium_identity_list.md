@@ -13,18 +13,18 @@ cilium identity list [LABELS] [flags]
 ```
       --endpoints       list identities of locally managed endpoints
   -h, --help            help for list
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium identity](../cilium_identity)	 - Manage security identities
+* [cilium identity](cilium_identity.md)	 - Manage security identities
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package pool
 
@@ -9,14 +9,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/connectivity"
+
 	peerpb "github.com/cilium/cilium/api/v1/peer"
 	peerTypes "github.com/cilium/cilium/pkg/hubble/peer/types"
 	poolTypes "github.com/cilium/cilium/pkg/hubble/relay/pool/types"
 	"github.com/cilium/cilium/pkg/inctimer"
 	"github.com/cilium/cilium/pkg/lock"
-
-	"github.com/sirupsen/logrus"
-	"google.golang.org/grpc/connectivity"
 )
 
 type peer struct {
@@ -152,11 +152,11 @@ func (m *PeerManager) manageConnections() {
 			p := m.peers[name]
 			m.mu.RUnlock()
 			m.wg.Add(1)
-			go func() {
+			go func(p *peer) {
 				defer m.wg.Done()
 				// a connection request has been made, make sure to attempt a connection
 				m.connect(p, true)
-			}()
+			}(p)
 		case <-connTimer.After(m.opts.connCheckInterval):
 			m.mu.RLock()
 			now := time.Now()
@@ -173,10 +173,10 @@ func (m *PeerManager) manageConnections() {
 				case p.nextConnAttempt.IsZero(), p.nextConnAttempt.Before(now):
 					p.mu.Unlock()
 					m.wg.Add(1)
-					go func() {
+					go func(p *peer) {
 						defer m.wg.Done()
 						m.connect(p, false)
-					}()
+					}(p)
 				default:
 					p.mu.Unlock()
 				}
@@ -186,7 +186,7 @@ func (m *PeerManager) manageConnections() {
 	}
 }
 
-// Stop stops the manaager.
+// Stop stops the manager.
 func (m *PeerManager) Stop() {
 	close(m.stop)
 	m.wg.Wait()

@@ -44,6 +44,21 @@ class VagrantPlugins::ProviderVirtualBox::Action::Network
   end
 end
 
+$cleanup = <<SCRIPT
+i=1
+while [ "$i" -le "$((num_workers+1))" ]; do
+    VBoxManage natnetwork add --netname natnet$i --network 192.168.0.0/16 --ipv6 on --enable
+    i=$((i+1))
+done 2>/dev/null
+
+res=0
+while [ "$res" == "0" ]; do
+    VBoxManage natnetwork remove --netname natnet$i
+    res=$?
+    i=$((i+1))
+done 2>/dev/null
+SCRIPT
+
 $bootstrap = <<SCRIPT
 set -o errexit
 set -o nounset
@@ -93,6 +108,11 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Add an exception for the cilium repo for the root user to fix the
+# "fatal: unsafe repository ('/home/vagrant/go/src/github.com/cilium/cilium' is owned by someone else)"
+# error condition when running `sudo make install`
+git config --global --add safe.directory /home/vagrant/go/src/github.com/cilium/cilium
+
 sudo -E make -C /home/vagrant/go/src/github.com/cilium/cilium/ install
 
 sudo mkdir -p /etc/sysconfig
@@ -105,10 +125,6 @@ sudo cp /home/vagrant/go/src/github.com/cilium/cilium/contrib/systemd/cilium /et
 
 getent group cilium >/dev/null || sudo groupadd -r cilium
 sudo usermod -a -G cilium vagrant
-SCRIPT
-
-$testsuite = <<SCRIPT
-sudo -E env PATH="${PATH}" make -C ~/go/src/github.com/cilium/cilium/ runtime-tests
 SCRIPT
 
 $node_ip_base = ENV['IPV4_BASE_ADDR'] || ""
@@ -154,6 +170,10 @@ if ENV['CILIUM_SCRIPT'] != 'true' then
 end
 
 Vagrant.configure(2) do |config|
+    config.trigger.before :up, :provision, :reload do |trigger|
+        trigger.run = {inline: "bash -c '#{$cleanup}'"}
+    end
+
     config.vm.provision "bootstrap", type: "shell", inline: $bootstrap
     if $NO_BUILD == "0" then
         config.vm.provision "build", type: "shell", run: "always", privileged: false, inline: $build
@@ -169,6 +189,9 @@ Vagrant.configure(2) do |config|
         # Prevent VirtualBox from interfering with host audio stack
         vb.customize ["modifyvm", :id, "--audio", "none"]
 
+        # Enable HPET, the Go scheduler heavily relies on accurate timers.
+        vb.customize ["modifyvm", :id, "--hpet", "on"]
+
         config.vm.box = $SERVER_BOX
         config.vm.box_version = $SERVER_VERSION
         vb.memory = ENV['VM_MEMORY'].to_i
@@ -178,6 +201,7 @@ Vagrant.configure(2) do |config|
     master_vm_name = "#{$vm_base_name}1#{$build_id_name}#{$vm_kernel}"
     config.vm.define master_vm_name, primary: true do |cm|
         node_ip = "#{$master_ip}"
+        node_ipv6 = "#{$master_ipv6}"
         cm.vm.network "forwarded_port", guest: 6443, host: 7443, auto_correct: true
         cm.vm.network "forwarded_port", guest: 9081, host: 9081, auto_correct: true
         # 2345 is the default delv server port
@@ -196,6 +220,21 @@ Vagrant.configure(2) do |config|
         if ENV["IPV6_EXT"] then
             node_ip = "#{$master_ipv6}"
         end
+
+        # Interface for the IPv6 NAT Service. The IP address doesn't matter as
+        # it won't be used. We use an IPv4 address as newer versions of VBox
+        # reject all IPv6 addresses.
+        cm.vm.network "private_network",
+            ip: "192.168.59.15"
+        cm.vm.provider "virtualbox" do |vb|
+            vb.customize ["modifyvm", :id, "--nic4", "natnetwork"]
+            vb.customize ["modifyvm", :id, "--nat-network4", "natnet1"]
+        end
+        cm.vm.provision "ipv6-nat-config",
+            type: "shell",
+            run: "always",
+            inline: "ip -6 r a default via fd17:625c:f037:2::1 dev enp0s10 || true"
+
         cm.vm.hostname = "#{$vm_base_name}1"
         if ENV['CILIUM_TEMP'] then
            if ENV["K8S"] then
@@ -203,7 +242,7 @@ Vagrant.configure(2) do |config|
                cm.vm.provision "k8s-install-master-part-1",
                    type: "shell",
                    run: "always",
-                   env: {"node_ip" => node_ip},
+                   env: {"node_ip" => node_ip, "node_ipv6" => node_ipv6},
                    privileged: true,
                    path: k8sinstall
            end
@@ -217,13 +256,10 @@ Vagrant.configure(2) do |config|
                cm.vm.provision "k8s-install-master-part-2",
                    type: "shell",
                    run: "always",
-                   env: {"node_ip" => node_ip},
+                   env: {"node_ip" => node_ip, "node_ipv6" => node_ipv6},
                    privileged: true,
                    path: k8sinstall
            end
-        end
-        if ENV['RUN_TEST_SUITE'] then
-           cm.vm.provision "testsuite", run: "always", type: "shell", privileged: false, inline: $testsuite
         end
     end
 
@@ -233,18 +269,33 @@ Vagrant.configure(2) do |config|
         node_hostname = "#{$vm_base_name}#{n+2}"
         config.vm.define node_vm_name do |node|
             node_ip = $workers_ipv4_addrs[n]
+            node_ipv6 = $workers_ipv6_addrs[n]
             node.vm.network "private_network", ip: "#{node_ip}",
                 virtualbox__intnet: "cilium-test-#{$build_id}"
             nfs_ipv4_addr = $workers_ipv4_addrs_nfs[n]
-            ipv6_addr = $workers_ipv6_addrs[n]
             node.vm.network "private_network", ip: "#{nfs_ipv4_addr}", bridge: "enp0s9"
             # Add IPv6 address this way or we get hit by a virtualbox bug
             node.vm.provision "ipv6-config",
                 type: "shell",
                 run: "always",
-                inline: "ip -6 a a #{ipv6_addr}/16 dev enp0s9"
+                inline: "ip -6 a a #{node_ipv6}/16 dev enp0s9"
+
+            # Interface for the IPv6 NAT Service. The IP address doesn't matter
+            # as it won't be used. We use an IPv4 address as newer versions of
+            # VBox reject all IPv6 addresses.
+            node.vm.network "private_network",
+                ip: "192.168.59.15"
+            node.vm.provider "virtualbox" do |vb|
+                vb.customize ["modifyvm", :id, "--nic4", "natnetwork"]
+                vb.customize ["modifyvm", :id, "--nat-network4", "natnet#{n+2}"]
+            end
+            node.vm.provision "ipv6-nat-config",
+                type: "shell",
+                run: "always",
+                inline: "ip -6 r a default via fd17:625c:f037:2::1 dev enp0s10 || true"
+
             if ENV["IPV6_EXT"] then
-                node_ip = "#{ipv6_addr}"
+                node_ip = "#{node_ipv6}"
             end
             node.vm.hostname = "#{node_hostname}"
             if ENV['CILIUM_TEMP'] then
@@ -253,7 +304,7 @@ Vagrant.configure(2) do |config|
                     node.vm.provision "k8s-install-node-part-1",
                         type: "shell",
                         run: "always",
-                        env: {"node_ip" => node_ip},
+                        env: {"node_ip" => node_ip, "node_ipv6" => node_ipv6},
                         privileged: true,
                         path: k8sinstall
                 end
@@ -264,7 +315,7 @@ Vagrant.configure(2) do |config|
                     node.vm.provision "k8s-install-node-part-2",
                         type: "shell",
                         run: "always",
-                        env: {"node_ip" => node_ip},
+                        env: {"node_ip" => node_ip, "node_ipv6" => node_ipv6},
                         privileged: true,
                         path: k8sinstall
                 end
@@ -283,9 +334,7 @@ Vagrant.configure(2) do |config|
     config.vm.synced_folder cilium_dir, cilium_path, type: "nfs", nfs_udp: false
     # Don't forget to enable this ports on your host before starting the VM
     # in order to have nfs working
-    # iptables -I INPUT -p tcp -s 192.168.61.0/24 --dport 111 -j ACCEPT
-    # iptables -I INPUT -p tcp -s 192.168.61.0/24 --dport 2049 -j ACCEPT
-    # iptables -I INPUT -p tcp -s 192.168.61.0/24 --dport 20048 -j ACCEPT
+    # iptables -I INPUT -s 192.168.61.0/24 -j ACCEPT"
     # if using nftables, in Fedora (with firewalld), use:
     # nft -f ./contrib/vagrant/nftables.rules
 

@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2017-2021 Authors of Cilium */
+// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+/* Copyright Authors of Cilium */
 
 #include <bpf/ctx/xdp.h>
 #include <bpf/api.h>
@@ -26,6 +26,10 @@
  */
 #define SKIP_ICMPV6_ECHO_HANDLING
 
+/* Controls the inclusion of the CILIUM_CALL_SRV6 section in the object file.
+ */
+#define SKIP_SRV6_HANDLING
+
 /* The XDP datapath does not take care of health probes from the local node,
  * thus do not compile it in.
  */
@@ -38,11 +42,6 @@
 #include "lib/nodeport.h"
 
 #ifdef ENABLE_PREFILTER
-#ifndef HAVE_LPM_TRIE_MAP_TYPE
-# undef CIDR4_LPM_PREFILTER
-# undef CIDR6_LPM_PREFILTER
-#endif
-
 #ifdef CIDR4_FILTER
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -92,38 +91,30 @@ struct {
 static __always_inline __maybe_unused int
 bpf_xdp_exit(struct __ctx_buff *ctx, const int verdict)
 {
-	if (verdict == CTX_ACT_OK) {
-		__u32 meta_xfer = ctx_load_meta(ctx, XFER_MARKER);
-
-		/* We transfer data from XFER_MARKER. This specifically
-		 * does not break packet trains in GRO.
-		 */
-		if (meta_xfer) {
-			if (!ctx_adjust_meta(ctx, -(int)sizeof(meta_xfer))) {
-				__u32 *data_meta = ctx_data_meta(ctx);
-				__u32 *data = ctx_data(ctx);
-
-				if (!ctx_no_room(data_meta + 1, data))
-					data_meta[0] = meta_xfer;
-			}
-		}
-	}
+	if (verdict == CTX_ACT_OK)
+		ctx_move_xfer(ctx);
 
 	return verdict;
 }
 
 #ifdef ENABLE_IPV4
 #ifdef ENABLE_NODEPORT_ACCELERATION
-__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV4_FROM_LXC)
+__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV4_FROM_NETDEV)
 int tail_lb_ipv4(struct __ctx_buff *ctx)
 {
 	int ret = CTX_ACT_OK;
 
-	if (!bpf_skip_nodeport(ctx)) {
+	if (!ctx_skip_nodeport(ctx)) {
 		ret = nodeport_lb4(ctx, 0);
-		if (IS_ERR(ret))
+		if (ret == NAT_46X64_RECIRC) {
+			ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_NETDEV);
+			return send_drop_notify_error(ctx, 0, DROP_MISSED_TAIL_CALL,
+						      CTX_ACT_DROP,
+						      METRIC_INGRESS);
+		} else if (IS_ERR(ret)) {
 			return send_drop_notify_error(ctx, 0, ret, CTX_ACT_DROP,
 						      METRIC_INGRESS);
+		}
 	}
 
 	return bpf_xdp_exit(ctx, ret);
@@ -131,7 +122,7 @@ int tail_lb_ipv4(struct __ctx_buff *ctx)
 
 static __always_inline int check_v4_lb(struct __ctx_buff *ctx)
 {
-	ep_tail_call(ctx, CILIUM_CALL_IPV4_FROM_LXC);
+	ep_tail_call(ctx, CILIUM_CALL_IPV4_FROM_NETDEV);
 	return send_drop_notify_error(ctx, 0, DROP_MISSED_TAIL_CALL, CTX_ACT_DROP,
 				      METRIC_INGRESS);
 }
@@ -176,13 +167,13 @@ static __always_inline int check_v4(struct __ctx_buff *ctx)
 #endif /* ENABLE_IPV4 */
 
 #ifdef ENABLE_IPV6
-#ifdef ENABLE_NODEPORT
-__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV6_FROM_LXC)
+#ifdef ENABLE_NODEPORT_ACCELERATION
+__section_tail(CILIUM_MAP_CALLS, CILIUM_CALL_IPV6_FROM_NETDEV)
 int tail_lb_ipv6(struct __ctx_buff *ctx)
 {
 	int ret = CTX_ACT_OK;
 
-	if (!bpf_skip_nodeport(ctx)) {
+	if (!ctx_skip_nodeport(ctx)) {
 		ret = nodeport_lb6(ctx, 0);
 		if (IS_ERR(ret))
 			return send_drop_notify_error(ctx, 0, ret, CTX_ACT_DROP,
@@ -194,7 +185,7 @@ int tail_lb_ipv6(struct __ctx_buff *ctx)
 
 static __always_inline int check_v6_lb(struct __ctx_buff *ctx)
 {
-	ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_LXC);
+	ep_tail_call(ctx, CILIUM_CALL_IPV6_FROM_NETDEV);
 	return send_drop_notify_error(ctx, 0, DROP_MISSED_TAIL_CALL, CTX_ACT_DROP,
 				      METRIC_INGRESS);
 }
@@ -203,7 +194,7 @@ static __always_inline int check_v6_lb(struct __ctx_buff *ctx __maybe_unused)
 {
 	return CTX_ACT_OK;
 }
-#endif /* ENABLE_NODEPORT */
+#endif /* ENABLE_NODEPORT_ACCELERATION */
 
 #ifdef ENABLE_PREFILTER
 static __always_inline int check_v6(struct __ctx_buff *ctx)
@@ -247,7 +238,7 @@ static __always_inline int check_filters(struct __ctx_buff *ctx)
 		return CTX_ACT_OK;
 
 	ctx_store_meta(ctx, XFER_MARKER, 0);
-	bpf_skip_nodeport_clear(ctx);
+	ctx_skip_nodeport_clear(ctx);
 
 	switch (proto) {
 #ifdef ENABLE_IPV4
@@ -268,9 +259,9 @@ static __always_inline int check_filters(struct __ctx_buff *ctx)
 }
 
 __section("from-netdev")
-int bpf_xdp_entry(struct __ctx_buff *ctx)
+int cil_xdp_entry(struct __ctx_buff *ctx)
 {
 	return check_filters(ctx);
 }
 
-BPF_LICENSE("GPL");
+BPF_LICENSE("Dual BSD/GPL");

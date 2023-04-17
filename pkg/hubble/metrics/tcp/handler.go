@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package tcp
 
 import (
 	"context"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	"github.com/cilium/cilium/pkg/hubble/metrics/api"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 type tcpHandler struct {
@@ -23,7 +23,6 @@ func (h *tcpHandler) Init(registry *prometheus.Registry, options api.Options) er
 		return err
 	}
 	h.context = c
-
 	labels := []string{"flag", "family"}
 	labels = append(labels, h.context.GetLabelNames()...)
 
@@ -41,19 +40,31 @@ func (h *tcpHandler) Status() string {
 	return h.context.Status()
 }
 
-func (h *tcpHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
+func (h *tcpHandler) Context() *api.ContextOptions {
+	return h.context
+}
+
+func (h *tcpHandler) ListMetricVec() []*prometheus.MetricVec {
+	return []*prometheus.MetricVec{h.tcpFlags.MetricVec}
+}
+
+func (h *tcpHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) error {
 	if (flow.GetVerdict() != flowpb.Verdict_FORWARDED && flow.GetVerdict() != flowpb.Verdict_REDIRECTED) ||
 		flow.GetL4() == nil {
-		return
+		return nil
 	}
 
 	ip := flow.GetIP()
 	tcp := flow.GetL4().GetTCP()
 	if ip == nil || tcp == nil || tcp.Flags == nil {
-		return
+		return nil
 	}
 
-	labels := append([]string{"", ip.IpVersion.String()}, h.context.GetLabelValues(flow)...)
+	contextLabels, err := h.context.GetLabelValues(flow)
+	if err != nil {
+		return err
+	}
+	labels := append([]string{"", ip.IpVersion.String()}, contextLabels...)
 
 	if tcp.Flags.FIN {
 		labels[0] = "FIN"
@@ -74,4 +85,6 @@ func (h *tcpHandler) ProcessFlow(ctx context.Context, flow *flowpb.Flow) {
 		labels[0] = "RST"
 		h.tcpFlags.WithLabelValues(labels...).Inc()
 	}
+
+	return nil
 }

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"strconv"
-
-	"github.com/cilium/cilium/pkg/command"
-	"github.com/cilium/cilium/pkg/loadbalancer"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+
+	"github.com/cilium/cilium/api/v1/models"
+	"github.com/cilium/cilium/pkg/command"
 )
 
 // serviceGetCmd represents the service_get command
@@ -34,35 +34,19 @@ var serviceGetCmd = &cobra.Command{
 			Fatalf("Cannot get service '%v': empty response\n", id)
 		}
 
-		slice := []string{}
-		for _, be := range svc.Status.Realized.BackendAddresses {
-			if bea, err := loadbalancer.NewL3n4AddrFromBackendModel(be); err != nil {
-				slice = append(slice, fmt.Sprintf("invalid backend: %+v", be))
-			} else {
-				slice = append(slice, bea.String())
-			}
-		}
-
-		if command.OutputJSON() {
+		if command.OutputOption() {
 			if err := command.PrintOutput(svc); err != nil {
 				os.Exit(1)
 			}
 			return
 		}
 
-		if fea, err := loadbalancer.NewL3n4AddrFromModel(svc.Status.Realized.FrontendAddress); err != nil {
-			fmt.Fprintf(os.Stderr, "invalid frontend model: %s", err)
-		} else {
-			fmt.Printf("%s =>\n", fea.String())
-		}
-
-		for i, be := range slice {
-			fmt.Printf("\t\t%d => %s (%d)\n", i+1, be, svc.Status.Realized.ID)
-		}
+		w := tabwriter.NewWriter(os.Stdout, 5, 0, 3, ' ', 0)
+		printServiceList(w, []*models.Service{svc})
 	},
 }
 
 func init() {
 	serviceCmd.AddCommand(serviceGetCmd)
-	command.AddJSONOutput(serviceGetCmd)
+	command.AddOutputOption(serviceGetCmd)
 }

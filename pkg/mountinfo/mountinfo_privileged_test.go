@@ -1,22 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build linux && privileged_tests
-// +build linux,privileged_tests
+//go:build linux
 
 package mountinfo
 
 import (
 	"os"
 
-	"golang.org/x/sys/unix"
+	"github.com/cilium/cilium/pkg/testutils"
 
+	"golang.org/x/sys/unix"
 	. "gopkg.in/check.v1"
 )
 
 type MountInfoPrivilegedTestSuite struct{}
 
 var _ = Suite(&MountInfoPrivilegedTestSuite{})
+
+func (s *MountInfoPrivilegedTestSuite) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
+}
 
 // TestIsMountFSbyMount tests the public function IsMountFS by performing
 // an actual mount.

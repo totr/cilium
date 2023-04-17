@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2018-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 /*
  * Data metrics collection functions
@@ -47,7 +47,7 @@ static __always_inline void update_metrics(__u64 bytes, __u8 direction,
  * @direction:	1: Ingress 2: Egress 3: Service
  * Convert a CT direction into the corresponding one for metrics.
  */
-static __always_inline __u8 ct_to_metrics_dir(__u8 ct_dir)
+static __always_inline enum metric_dir ct_to_metrics_dir(enum ct_dir ct_dir)
 {
 	switch (ct_dir) {
 	case CT_INGRESS:

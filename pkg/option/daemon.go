@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package option
 
@@ -15,18 +15,17 @@ var (
 	}
 
 	DaemonMutableOptionLibrary = OptionLibrary{
-		ConntrackAccounting: &specConntrackAccounting,
-		ConntrackLocal:      &specConntrackLocal,
-		Conntrack:           &specConntrack,
-		Debug:               &specDebug,
-		DebugLB:             &specDebugLB,
-		DebugPolicy:         &specDebugPolicy,
-		DropNotify:          &specDropNotify,
-		TraceNotify:         &specTraceNotify,
-		PolicyVerdictNotify: &specPolicyVerdictNotify,
-		PolicyAuditMode:     &specPolicyAuditMode,
-		MonitorAggregation:  &specMonitorAggregation,
-		NAT46:               &specNAT46,
+		ConntrackAccounting:  &specConntrackAccounting,
+		ConntrackLocal:       &specConntrackLocal,
+		Debug:                &specDebug,
+		DebugLB:              &specDebugLB,
+		DebugPolicy:          &specDebugPolicy,
+		DropNotify:           &specDropNotify,
+		TraceNotify:          &specTraceNotify,
+		PolicyVerdictNotify:  &specPolicyVerdictNotify,
+		PolicyAuditMode:      &specPolicyAuditMode,
+		MonitorAggregation:   &specMonitorAggregation,
+		SourceIPVerification: &specSourceIPVerification,
 	}
 )
 

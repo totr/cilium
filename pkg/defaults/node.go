@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package defaults
 
@@ -16,14 +16,21 @@ const (
 	// DefaultIPv4PrefixLen is the length used to allocate container IPv4 addresses from.
 	DefaultIPv4PrefixLen = 16
 
-	// DefaultNAT46Prefix is the IPv6 prefix to represent NATed IPv4 addresses.
-	DefaultNAT46Prefix = "0:0:0:0:0:FFFF::/96"
-
 	// HostDevice is the name of the device that connects the cilium IP
 	// space with the host's networking model
 	HostDevice = "cilium_host"
+
 	// SecondHostDevice is the name of the second interface of the host veth pair.
 	SecondHostDevice = "cilium_net"
+
+	// CiliumK8sAnnotationPrefix is the prefix key for the annotations used in kubernetes.
+	CiliumK8sAnnotationPrefix = "cilium.io/"
+
+	// AgentNotReadyNodeTaint is a node taint which prevents pods from being
+	// scheduled. Once cilium is setup it is removed from the node. Mostly
+	// used in cloud providers to prevent existing CNI plugins from managing
+	// pods.
+	AgentNotReadyNodeTaint = "node." + CiliumK8sAnnotationPrefix + "agent-not-ready"
 )
 
 var (

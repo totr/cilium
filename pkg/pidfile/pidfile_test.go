@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package pidfile
 
@@ -12,9 +9,9 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 const (
@@ -77,15 +74,6 @@ func (s *PidfileTestSuite) TestKillAlreadyFinished(c *C) {
 func (s *PidfileTestSuite) TestKillPidfileNotExist(c *C) {
 	_, err := Kill("/tmp/cilium-foo-bar-some-not-existing-file")
 	c.Assert(err, IsNil)
-}
-
-func (s *PidfileTestSuite) TestKillPidfilePermissionDenied(c *C) {
-	err := os.WriteFile(path, []byte("foobar\n"), 0000)
-	c.Assert(err, IsNil)
-	defer Remove(path)
-
-	_, err = Kill(path)
-	c.Assert(err, ErrorMatches, ".* permission denied")
 }
 
 func (s *PidfileTestSuite) TestKillFailedParsePid(c *C) {

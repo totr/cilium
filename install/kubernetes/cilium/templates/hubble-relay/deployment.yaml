@@ -1,4 +1,5 @@
 {{- if and .Values.hubble.enabled .Values.hubble.relay.enabled }}
+{{- $mountSocket := not .Values.hubble.peerService.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,6 +7,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     k8s-app: hubble-relay
+    app.kubernetes.io/name: hubble-relay
+    app.kubernetes.io/part-of: cilium
 spec:
   replicas: {{ .Values.hubble.relay.replicas }}
   selector:
@@ -27,26 +30,26 @@ spec:
         {{- end }}
       labels:
         k8s-app: hubble-relay
+        app.kubernetes.io/name: hubble-relay
+        app.kubernetes.io/part-of: cilium
         {{- with .Values.hubble.relay.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      affinity:
-        podAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchExpressions:
-                - key: "k8s-app"
-                  operator: In
-                  values:
-                    - cilium
-            topologyKey: "kubernetes.io/hostname"
+      {{- with .Values.hubble.relay.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: hubble-relay
+          {{- with .Values.hubble.relay.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           image: {{ include "cilium.image" .Values.hubble.relay.image | quote }}
           imagePullPolicy: {{ .Values.hubble.relay.image.pullPolicy }}
           command:
@@ -59,20 +62,31 @@ spec:
           ports:
             - name: grpc
               containerPort: {{ .Values.hubble.relay.listenPort }}
+            {{- if .Values.hubble.relay.prometheus.enabled }}
+            - name: prometheus
+              containerPort: {{ .Values.hubble.relay.prometheus.port }}
+              protocol: TCP
+            {{- end }}
           readinessProbe:
             tcpSocket:
               port: grpc
           livenessProbe:
             tcpSocket:
               port: grpc
+          {{- with .Values.hubble.relay.extraEnv }}
+          env:
+            {{- toYaml . | trim | nindent 12 }}
+          {{- end }}
           {{- with .Values.hubble.relay.resources }}
           resources:
             {{- toYaml . | trim | nindent 12 }}
           {{- end }}
           volumeMounts:
+          {{- if $mountSocket }}
           - name: hubble-sock-dir
             mountPath: {{ dir .Values.hubble.socketPath }}
             readOnly: true
+          {{- end }}
           - name: config
             mountPath: /etc/hubble-relay
             readOnly: true
@@ -81,12 +95,28 @@ spec:
             mountPath: /var/lib/hubble-relay/tls
             readOnly: true
           {{- end }}
+          terminationMessagePolicy: FallbackToLogsOnError
       restartPolicy: Always
       priorityClassName: {{ .Values.hubble.relay.priorityClassName }}
       serviceAccount: {{ .Values.serviceAccounts.relay.name | quote }}
       serviceAccountName: {{ .Values.serviceAccounts.relay.name | quote }}
-      automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 0
+      automountServiceAccountToken: {{ .Values.serviceAccounts.relay.automount }}
+      terminationGracePeriodSeconds: {{ .Values.hubble.relay.terminationGracePeriodSeconds }}
+      {{- with .Values.hubble.relay.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hubble.relay.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- range $constraint := . }}
+      - {{ toYaml $constraint | nindent 8 | trim }}
+          {{- if not $constraint.labelSelector }}
+        labelSelector:
+          matchLabels:
+            k8s-app: hubble-relay
+          {{- end }}
+        {{- end }}
+      {{- end }}
       {{- with .Values.hubble.relay.nodeSelector }}
       nodeSelector:
         {{- toYaml . | trim | nindent 8 }}
@@ -102,10 +132,12 @@ spec:
           items:
           - key: config.yaml
             path: config.yaml
+      {{- if $mountSocket }}
       - name: hubble-sock-dir
         hostPath:
           path: {{ dir .Values.hubble.socketPath }}
           type: Directory
+      {{- end }}
       {{- if .Values.hubble.tls.enabled }}
       - name: tls
         projected:

@@ -13,13 +13,13 @@ ip-masq-agent CIDRs
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf](../cilium_bpf)	 - Direct access to local BPF maps
-* [cilium bpf ipmasq list](../cilium_bpf_ipmasq_list)	 - List ip-masq-agent CIDRs
+* [cilium bpf](cilium_bpf.md)	 - Direct access to local BPF maps
+* [cilium bpf ipmasq list](cilium_bpf_ipmasq_list.md)	 - List ip-masq-agent CIDRs
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package allocator
 
@@ -12,8 +12,8 @@ import (
 // Allocator provides an IP allocator based on a list of Pools
 //
 // Implementations:
-//  - PoolGroupAllocator
-//  - NoOpAllocator
+//   - PoolGroupAllocator
+//   - NoOpAllocator
 type Allocator interface {
 	GetPoolQuota() types.PoolQuotaMap
 	FirstPoolWithAvailableQuota(preferredPoolIDs []types.PoolID) (types.PoolID, int)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package podcidr
 
@@ -10,19 +10,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cilium/cilium/pkg/ipam/allocator/clusterpool/cidralloc"
+
+	"github.com/sirupsen/logrus"
+	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/cilium/cilium/pkg/cidr"
 	"github.com/cilium/cilium/pkg/controller"
 	ipPkg "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipam"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/revert"
 	"github.com/cilium/cilium/pkg/trigger"
-
-	"github.com/sirupsen/logrus"
-	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 type allocatorType string
@@ -165,9 +169,9 @@ type NodesPodCIDRManager struct {
 	// map to allocate podCIDRs for the missing nodes.
 	nodesToAllocate map[string]*v2.CiliumNode
 	// v4CIDRAllocators contains the CIDRs for IPv4 addresses
-	v4CIDRAllocators []CIDRAllocator
+	v4CIDRAllocators []cidralloc.CIDRAllocator
 	// v6CIDRAllocators contains the CIDRs for IPv6 addresses
-	v6CIDRAllocators []CIDRAllocator
+	v6CIDRAllocators []cidralloc.CIDRAllocator
 	// nodes maps a node name to the CIDRs allocated for that node
 	nodes map[string]*nodeCIDRs
 	// maps a node name to the operation that needs to be performed in
@@ -175,24 +179,12 @@ type NodesPodCIDRManager struct {
 	ciliumNodesToK8s map[string]*ciliumNodeK8sOp
 }
 
-type CIDRAllocator interface {
-	fmt.Stringer
-
-	Occupy(cidr *net.IPNet) error
-	AllocateNext() (*net.IPNet, error)
-	Release(cidr *net.IPNet) error
-	IsAllocated(cidr *net.IPNet) (bool, error)
-	IsIPv6() bool
-	IsFull() bool
-	InRange(cidr *net.IPNet) bool
-}
-
 // NewNodesPodCIDRManager will create a node podCIDR manager.
 // Both v4Allocators and v6Allocators can be nil, but not at the same time.
 // nodeGetter will be used to populate synced node status / spec with
 // kubernetes.
 func NewNodesPodCIDRManager(
-	v4Allocators, v6Allocators []CIDRAllocator,
+	v4Allocators, v6Allocators []cidralloc.CIDRAllocator,
 	nodeGetter ipam.CiliumNodeGetterUpdater,
 	triggerMetrics trigger.MetricsObserver) *NodesPodCIDRManager {
 
@@ -358,13 +350,36 @@ func (n *NodesPodCIDRManager) Update(node *v2.CiliumNode) bool {
 
 // Needs n.Mutex to be held.
 func (n *NodesPodCIDRManager) update(node *v2.CiliumNode) bool {
-	cn, allocated, updateStatus, err := n.allocateNode(node)
-	if err != nil {
-		return false
+	var (
+		updateStatus, updateSpec bool
+		cn                       *v2.CiliumNode
+		err                      error
+	)
+	if option.Config.IPAMMode() == ipamOption.IPAMClusterPoolV2 {
+		cn, updateSpec, updateStatus, err = n.allocateNodeV2(node)
+		if err != nil {
+			return false
+		}
+	} else {
+		// FIXME: This code block falls back to the old behavior of clusterpool,
+		// where we only assign one pod CIDR for IPv4 and IPv6. Once v2 becomes
+		// fully backwards compatible with v1, we can remove this else block.
+		var allocated bool
+		cn, allocated, updateStatus, err = n.allocateNode(node)
+		if err != nil {
+			return false
+		}
+		// if allocated is false it means that we were unable to allocate
+		// a CIDR so we need to update the status of the node into k8s.
+		updateStatus = !allocated && updateStatus
+		// ClusterPool v1 never updates both the spec and the status
+		updateSpec = !updateStatus
 	}
-	// if allocated is false it means that we were unable to allocate
-	// a CIDR so we need to update the status of the node into k8s.
-	if !allocated && updateStatus {
+	if cn == nil {
+		// no-op
+		return true
+	}
+	if updateStatus {
 		// the n.syncNode will never fail because it's only adding elements to a
 		// map.
 		// NodesPodCIDRManager will later on sync the node into k8s by the
@@ -378,37 +393,34 @@ func (n *NodesPodCIDRManager) update(node *v2.CiliumNode) bool {
 		} else {
 			n.syncNode(k8sOpCreate, cn)
 		}
-		return true
 	}
-	if cn == nil {
-		// no-op
-		return true
-	}
-	// If the resource version is != "" it means the object already exists
-	// in kubernetes so we should perform an update instead of a create.
-	if cn.GetResourceVersion() != "" {
-		n.syncNode(k8sOpUpdate, cn)
-	} else {
-		n.syncNode(k8sOpCreate, cn)
+	if updateSpec {
+		// If the resource version is != "" it means the object already exists
+		// in kubernetes so we should perform an update instead of a create.
+		if cn.GetResourceVersion() != "" {
+			n.syncNode(k8sOpUpdate, cn)
+		} else {
+			n.syncNode(k8sOpCreate, cn)
+		}
 	}
 	return true
 }
 
 // Delete deletes the node from the allocator and releases the associated
 // CIDRs of that node.
-func (n *NodesPodCIDRManager) Delete(nodeName string) {
+func (n *NodesPodCIDRManager) Delete(node *v2.CiliumNode) {
 	n.Mutex.Lock()
 	defer n.Mutex.Unlock()
 	if !n.canAllocatePodCIDRs {
-		delete(n.nodesToAllocate, nodeName)
+		delete(n.nodesToAllocate, node.Name)
 	}
 
-	found := n.releaseIPNets(nodeName)
+	found := n.releaseIPNets(node.Name)
 	if !found {
 		return
 	}
 	// Mark the node to be deleted in k8s.
-	n.ciliumNodesToK8s[nodeName] = &ciliumNodeK8sOp{
+	n.ciliumNodesToK8s[node.Name] = &ciliumNodeK8sOp{
 		op: k8sOpDelete,
 	}
 	n.k8sReSync.Trigger()
@@ -570,7 +582,7 @@ func (n *NodesPodCIDRManager) releaseIPNets(nodeName string) bool {
 	return true
 }
 
-func releaseCIDRs(cidrAllocators []CIDRAllocator, cidrsToRelease []*net.IPNet) {
+func releaseCIDRs(cidrAllocators []cidralloc.CIDRAllocator, cidrsToRelease []*net.IPNet) {
 	if len(cidrAllocators) == 0 {
 		return
 	}
@@ -741,7 +753,7 @@ func (n *NodesPodCIDRManager) reuseIPNets(
 // modified to the given cidrSets.
 // allocateIPNet iterates over cidrSet so a mutex must be held when calling
 // this function.
-func allocateIPNet(allType allocatorType, cidrSets []CIDRAllocator, newCidrs []*net.IPNet) (revertFunc revert.RevertFunc, err error) {
+func allocateIPNet(allType allocatorType, cidrSets []cidralloc.CIDRAllocator, newCidrs []*net.IPNet) (revertFunc revert.RevertFunc, err error) {
 	if len(cidrSets) == 0 {
 		// Return an error if the node tries to allocate a CIDR and
 		// we don't have a CIDR set for this CIDR type.
@@ -878,7 +890,7 @@ func (n *NodesPodCIDRManager) allocateNext(nodeName string) (*nodeCIDRs, bool, e
 	return &cidrs, true, nil
 }
 
-func getCIDRAllocatorsInfo(cidrAllocators []CIDRAllocator, netTypes string) string {
+func getCIDRAllocatorsInfo(cidrAllocators []cidralloc.CIDRAllocator, netTypes string) string {
 	var sb strings.Builder
 	sb.WriteByte('[')
 	for i, cidrAllocator := range cidrAllocators {
@@ -893,9 +905,9 @@ func getCIDRAllocatorsInfo(cidrAllocators []CIDRAllocator, netTypes string) stri
 
 // allocateFirstFreeCIDR allocates the first CIDR available from the slice of
 // cidrAllocators.
-func allocateFirstFreeCIDR(cidrAllocators []CIDRAllocator) (revertFunc revert.RevertFunc, cidr *net.IPNet, err error) {
+func allocateFirstFreeCIDR(cidrAllocators []cidralloc.CIDRAllocator) (revertFunc revert.RevertFunc, cidr *net.IPNet, err error) {
 	var (
-		firstFreeAllocator *CIDRAllocator
+		firstFreeAllocator *cidralloc.CIDRAllocator
 		revertStack        revert.RevertStack
 	)
 	for _, cidrAllocator := range cidrAllocators {

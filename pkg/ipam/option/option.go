@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package option
 
@@ -23,8 +23,16 @@ const (
 	// option.IPAM
 	IPAMClusterPool = "cluster-pool"
 
+	// IPAMClusterPoolV2 is the value to select cluster pool version 2
+	IPAMClusterPoolV2 = "cluster-pool-v2beta"
+
 	// IPAMAlibabaCloud is the value to select the AlibabaCloud ENI IPAM plugin for option.IPAM
 	IPAMAlibabaCloud = "alibabacloud"
+
+	// IPAMDelegatedPlugin is the value to select CNI delegated IPAM plugin mode.
+	// In this mode, Cilium CNI invokes another CNI binary (the delegated plugin) for IPAM.
+	// See https://www.cni.dev/docs/spec/#section-4-plugin-delegation
+	IPAMDelegatedPlugin = "delegated-plugin"
 )
 
 const (
@@ -33,3 +41,11 @@ const (
 	IPAMDoNotRelease    = "do-not-release"
 	IPAMReleased        = "released"
 )
+
+// ENIPDBlockSizeIPv4 is the number of IPs available on an ENI IPv4 prefix. Currently, AWS only supports /28 fixed size
+// prefixes. Every /28 prefix contains 16 IP addresses.
+// See https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-prefix-eni.html#ec2-prefix-basics for more details
+const ENIPDBlockSizeIPv4 = 16
+
+// PoolDefault is the default IP pool from which to allocate.
+const PoolDefault = "default"

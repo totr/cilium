@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/version"
-
-	"github.com/spf13/cobra"
 )
 
 const notResponding = "Not responding"
@@ -25,12 +25,12 @@ var versionCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(versionCmd)
-	command.AddJSONOutput(versionCmd)
+	command.AddOutputOption(versionCmd)
 }
 
 func getVersion(cmd *cobra.Command, args []string) {
 	// -o argument is set
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		data := struct {
 			Client version.CiliumVersion
 			Daemon version.CiliumVersion

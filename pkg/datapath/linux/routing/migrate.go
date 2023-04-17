@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package linuxrouting
 
 import (
 	"fmt"
 
+	"github.com/vishvananda/netlink"
+
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/revert"
-
-	"github.com/vishvananda/netlink"
 )
 
 // MigrateENIDatapath migrates the egress rules inside the Linux routing policy

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package eni
 
@@ -7,12 +7,12 @@ import (
 	"context"
 	"fmt"
 
-	enitypes "github.com/cilium/cilium/pkg/aws/eni/types"
-	"github.com/cilium/cilium/pkg/k8s"
-	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	nodetypes "github.com/cilium/cilium/pkg/node/types"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	enitypes "github.com/cilium/cilium/pkg/aws/eni/types"
+	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/k8s/client"
+	nodetypes "github.com/cilium/cilium/pkg/node/types"
 )
 
 // GetInterfaceNumberByMAC implements the linuxrouting.interfaceDB interface.
@@ -84,10 +84,10 @@ func (in *InterfaceDB) GetMACByInterfaceNumber(ifaceNum int) (string, error) {
 }
 
 func (in *InterfaceDB) fetchFromK8s(name string) (*v2.CiliumNode, error) {
-	return k8s.CiliumClient().CiliumV2().CiliumNodes().Get(
+	return in.Clientset.CiliumV2().CiliumNodes().Get(
 		context.TODO(),
 		nodetypes.GetName(),
-		v1.GetOptions{},
+		metav1.GetOptions{},
 	)
 }
 
@@ -95,5 +95,6 @@ func (in *InterfaceDB) fetchFromK8s(name string) (*v2.CiliumNode, error) {
 // MAC addrs from interface numbers and vice versa, needed for the ENI
 // migration. See https://github.com/cilium/cilium/issues/14336.
 type InterfaceDB struct {
-	cache enitypes.ENIStatus
+	cache     enitypes.ENIStatus
+	Clientset client.Clientset
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package fence
 
@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strconv"
 
-	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
-
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 )
 
 // Fencer provides a method set to prevent processing out of order events.

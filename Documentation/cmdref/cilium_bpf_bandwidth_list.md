@@ -12,18 +12,18 @@ cilium bpf bandwidth list [flags]
 
 ```
   -h, --help            help for list
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf bandwidth](../cilium_bpf_bandwidth)	 - BPF datapath bandwidth settings
+* [cilium bpf bandwidth](cilium_bpf_bandwidth.md)	 - BPF datapath bandwidth settings
 

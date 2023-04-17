@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build linux && privileged_tests
-// +build linux,privileged_tests
+//go:build linux
 
 package loader
 
 import (
 	"fmt"
 
-	"github.com/cilium/cilium/pkg/option"
-	"github.com/cilium/cilium/pkg/sysctl"
-
 	"github.com/vishvananda/netlink"
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/option"
+	"github.com/cilium/cilium/pkg/sysctl"
+	"github.com/cilium/cilium/pkg/testutils"
 )
 
 type NetlinkTestSuite struct {
@@ -24,6 +24,8 @@ type NetlinkTestSuite struct {
 var _ = Suite(&NetlinkTestSuite{})
 
 func (s *NetlinkTestSuite) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
+
 	s.prevConfigEnableIPv4 = option.Config.EnableIPv4
 	s.prevConfigEnableIPv6 = option.Config.EnableIPv6
 

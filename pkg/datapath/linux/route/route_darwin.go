@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build darwin
-// +build darwin
 
 package route
 
 import (
 	"fmt"
 
-	"github.com/cilium/cilium/pkg/mtu"
-
 	"github.com/vishvananda/netlink"
+
+	"github.com/cilium/cilium/pkg/mtu"
 )
 
 // errUnsupportedOp is a common error

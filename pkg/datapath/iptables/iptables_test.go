@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2021 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package iptables
 
@@ -11,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/option"
-
 	"github.com/blang/semver/v4"
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/option"
 )
 
 func Test(t *testing.T) {
@@ -39,10 +36,6 @@ type mockIptables struct {
 	index        int
 }
 
-func (ipt *mockIptables) addExpectation(args string, out []byte, err error) {
-	ipt.expectations = append(ipt.expectations, expectation{args: args, out: out, err: err})
-}
-
 func (ipt *mockIptables) getProg() string {
 	return ipt.prog
 }
@@ -55,27 +48,27 @@ func (ipt *mockIptables) getVersion() (semver.Version, error) {
 	return semver.Version{}, nil
 }
 
-func (ipt *mockIptables) runProgCombinedOutput(args []string, quiet bool) (out []byte, err error) {
+func (ipt *mockIptables) runProgOutput(args []string) (out string, err error) {
 	a := strings.Join(args, " ")
 	i := ipt.index
 	ipt.index++
 
 	if len(ipt.expectations) < ipt.index {
 		ipt.c.Errorf("%d: Unexpected %s %s", i, ipt.prog, a)
-		return nil, fmt.Errorf("Unexpected %s %s", ipt.prog, a)
+		return "", fmt.Errorf("Unexpected %s %s", ipt.prog, a)
 	}
 	if a != ipt.expectations[i].args {
 		ipt.c.Errorf("%d: Unexpected %s (%q != %q)", i, ipt.prog, a, ipt.expectations[i].args)
-		return nil, fmt.Errorf("Unexpected %s %s", ipt.prog, a)
+		return "", fmt.Errorf("Unexpected %s %s", ipt.prog, a)
 	}
-	out = ipt.expectations[i].out
+	out = string(ipt.expectations[i].out)
 	err = ipt.expectations[i].err
 
 	return out, err
 }
 
-func (ipt *mockIptables) runProg(args []string, quiet bool) error {
-	out, err := ipt.runProgCombinedOutput(args, quiet)
+func (ipt *mockIptables) runProg(args []string) error {
+	out, err := ipt.runProgOutput(args)
 	if len(out) > 0 {
 		ipt.c.Errorf("%d: Unexpected output for %s %s", ipt.index-1, ipt.prog, strings.Join(args, " "))
 	}
@@ -109,6 +102,9 @@ func (s *iptablesTestSuite) TestRenameCustomChain(c *check.C) {
 	mockIp4tables := &mockIptables{c: c, prog: "iptables"}
 	mockIp4tables.expectations = []expectation{
 		{
+			args: "-t mangle -S CILIUM_PRE_mangle",
+		},
+		{
 			args: "-t mangle -E CILIUM_PRE_mangle OLD_CILIUM_PRE_mangle",
 		},
 	}
@@ -116,13 +112,13 @@ func (s *iptablesTestSuite) TestRenameCustomChain(c *check.C) {
 		table: "mangle",
 		name:  "CILIUM_PRE_mangle",
 	}
-	chain.doRename(mockIp4tables, "OLD_CILIUM_PRE_mangle", false)
+	chain.doRename(mockIp4tables, "OLD_CILIUM_PRE_mangle")
 	err := mockIp4tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 
 	mockIp6tables := &mockIptables{c: c, prog: "ip6tables"}
 	mockIp6tables.expectations = mockIp4tables.expectations
-	chain.doRename(mockIp6tables, "OLD_CILIUM_PRE_mangle", false)
+	chain.doRename(mockIp6tables, "OLD_CILIUM_PRE_mangle")
 	err = mockIp6tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 }
@@ -223,14 +219,14 @@ func (s *iptablesTestSuite) TestAddProxyRulesv4(c *check.C) {
 -A OLD_CILIUM_PRE_mangle -p udp -m mark --mark 0x3920200 -m comment --comment "cilium: TPROXY to host cilium-dns-egress proxy" -j TPROXY --on-port 37379 --on-ip 0.0.0.0 --tproxy-mark 0x200/0xffffffff
 `),
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 37379",
+			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip 0.0.0.0 --on-port 37379",
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 37379",
+			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip 0.0.0.0 --on-port 37379",
 		},
 	}
 
 	// Adds new proxy rules
-	mockManager.addProxyRules(mockIp4tables, 37379, false, "cilium-dns-egress")
+	mockManager.addProxyRules(mockIp4tables, "0.0.0.0", 37379, false, "cilium-dns-egress")
 	err := mockIp4tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 
@@ -263,7 +259,7 @@ func (s *iptablesTestSuite) TestAddProxyRulesv4(c *check.C) {
 	}
 
 	// Nothing to add
-	mockManager.addProxyRules(mockIp4tables, 37379, false, "cilium-dns-egress")
+	mockManager.addProxyRules(mockIp4tables, "0.0.0.0", 37379, false, "cilium-dns-egress")
 	err = mockIp4tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 
@@ -291,14 +287,14 @@ func (s *iptablesTestSuite) TestAddProxyRulesv4(c *check.C) {
 -A OLD_CILIUM_PRE_mangle -p udp -m mark --mark 0x3920200 -m comment --comment "cilium: TPROXY to host cilium-dns-egress proxy" -j TPROXY --on-port 37379 --on-ip 0.0.0.0 --tproxy-mark 0x200/0xffffffff
 `),
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 37379",
+			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip 0.0.0.0 --on-port 37379",
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 37379",
+			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0x3920200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip 0.0.0.0 --on-port 37379",
 		},
 	}
 
 	// New port number, adds new ones, deletes stale rules. Does not touch OLD_ chains
-	mockManager.addProxyRules(mockIp4tables, 37379, false, "cilium-dns-egress")
+	mockManager.addProxyRules(mockIp4tables, "0.0.0.0", 37379, false, "cilium-dns-egress")
 	err = mockIp4tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 }
@@ -353,14 +349,14 @@ func (s *iptablesTestSuite) TestAddProxyRulesv6(c *check.C) {
 -A OLD_CILIUM_PRE_mangle -p udp -m mark --mark 0xd5a90200 -m comment --comment "cilium: TPROXY to host cilium-dns-egress proxy" -j TPROXY --on-port 43477 --on-ip :: --tproxy-mark 0x200/0xffffffff
 `),
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0xd5a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 43477",
+			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0xd5a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip :: --on-port 43477",
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0xd5a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 43477",
+			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0xd5a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip :: --on-port 43477",
 		},
 	}
 
 	// Adds new proxy rules
-	mockManager.addProxyRules(mockIp6tables, 43477, false, "cilium-dns-egress")
+	mockManager.addProxyRules(mockIp6tables, "::", 43477, false, "cilium-dns-egress")
 	err := mockIp6tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 
@@ -393,7 +389,7 @@ func (s *iptablesTestSuite) TestAddProxyRulesv6(c *check.C) {
 	}
 
 	// Nothing to add
-	mockManager.addProxyRules(mockIp6tables, 43477, false, "cilium-dns-egress")
+	mockManager.addProxyRules(mockIp6tables, "::", 43477, false, "cilium-dns-egress")
 	err = mockIp6tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 
@@ -421,14 +417,14 @@ func (s *iptablesTestSuite) TestAddProxyRulesv6(c *check.C) {
 -A OLD_CILIUM_PRE_mangle -p udp -m mark --mark 0xd5a90200 -m comment --comment "cilium: TPROXY to host cilium-dns-egress proxy" -j TPROXY --on-port 43477 --on-ip :: --tproxy-mark 0x200/0xffffffff
 `),
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0xd7a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 43479",
+			args: "-t mangle -A CILIUM_PRE_mangle -p tcp -m mark --mark 0xd7a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip :: --on-port 43479",
 		}, {
-			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0xd7a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-port 43479",
+			args: "-t mangle -A CILIUM_PRE_mangle -p udp -m mark --mark 0xd7a90200 -m comment --comment cilium: TPROXY to host cilium-dns-egress proxy -j TPROXY --tproxy-mark 0x200 --on-ip :: --on-port 43479",
 		},
 	}
 
 	// New port number, adds new ones, deletes stale rules. Does not touch OLD_ chains
-	mockManager.addProxyRules(mockIp6tables, 43479, false, "cilium-dns-egress")
+	mockManager.addProxyRules(mockIp6tables, "::", 43479, false, "cilium-dns-egress")
 	err = mockIp6tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 }
@@ -475,7 +471,7 @@ func (s *iptablesTestSuite) TestRemoveCiliumRulesv4(c *check.C) {
 	}
 
 	// Only removes Cilium chains with the OLD_ prefix
-	mockManager.removeCiliumRules("mangle", mockIp4tables, oldCiliumPrefix)
+	mockManager.removeCiliumRules("mangle", mockIp4tables, oldCiliumPrefix+"CILIUM_")
 	err := mockIp4tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 }
@@ -522,7 +518,7 @@ func (s *iptablesTestSuite) TestRemoveCiliumRulesv6(c *check.C) {
 	}
 
 	// Only removes Cilium chains with the OLD_ prefix
-	mockManager.removeCiliumRules("mangle", mockIp6tables, oldCiliumPrefix)
+	mockManager.removeCiliumRules("mangle", mockIp6tables, oldCiliumPrefix+"CILIUM_")
 	err := mockIp6tables.checkExpectations()
 	c.Assert(err, check.IsNil)
 }

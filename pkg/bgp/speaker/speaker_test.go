@@ -1,19 +1,5 @@
-// Copyright 2016-2021 Authors of Cilium
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package speaker
 
@@ -24,17 +10,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cilium/cilium/pkg/bgp/fence"
-	"github.com/cilium/cilium/pkg/bgp/mock"
-	"github.com/cilium/cilium/pkg/k8s"
-	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
-	"github.com/cilium/cilium/pkg/lock"
-
 	"github.com/google/go-cmp/cmp"
 	metallbbgp "go.universe.tf/metallb/pkg/bgp"
 	"go.universe.tf/metallb/pkg/k8s/types"
 	metallbspr "go.universe.tf/metallb/pkg/speaker"
 	"k8s.io/client-go/util/workqueue"
+
+	"github.com/cilium/cilium/pkg/bgp/fence"
+	"github.com/cilium/cilium/pkg/bgp/mock"
+	"github.com/cilium/cilium/pkg/k8s"
+	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
+	"github.com/cilium/cilium/pkg/lock"
 )
 
 const (
@@ -106,7 +92,7 @@ func TestSpeakerOnUpdateService(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 
@@ -190,7 +176,7 @@ func TestSpeakerOnDeleteService(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 
@@ -212,15 +198,10 @@ func TestSpeakerOnDeleteService(t *testing.T) {
 		t.Fatalf("got: %v, want: nil", rr.eps)
 	}
 
-	// confirm spkr appended service to map
+	// confirm spkr removed service to map
 	_, ok := spkr.services[serviceID]
 	if ok {
 		t.Fatalf("speaker did not delete slim_corev1.Service object to its services map.")
-	}
-
-	// confirm fence is empty
-	if len(spkr.Fencer) != 0 {
-		t.Fatalf("expected fence to be empty. got: %v", spkr.Fencer)
 	}
 }
 
@@ -281,7 +262,7 @@ func TestSpeakerOnUpdateEndpoints(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 
@@ -368,9 +349,16 @@ func TestSpeakerOnUpdateNode(t *testing.T) {
 			atomic.AddInt32(&callCount, 1)
 			return types.SyncStateSuccess
 		},
-		PeerSession_: func() []metallbspr.Session {
+		GetBGPController_: func() *metallbspr.BGPController {
 			atomic.AddInt32(&callCount, 1)
-			return []metallbspr.Session{mockSession}
+			return &metallbspr.BGPController{
+				SvcAds: make(map[string][]*metallbbgp.Advertisement),
+				Peers: []*metallbspr.Peer{
+					{
+						BGP: mockSession,
+					},
+				},
+			}
 		},
 	}
 
@@ -390,7 +378,7 @@ func TestSpeakerOnUpdateNode(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 
@@ -466,6 +454,16 @@ func TestSpeakerOnDeleteNode(t *testing.T) {
 			atomic.AddInt32(&callCount, 1)
 			return []metallbspr.Session{mockSession}
 		},
+		GetBGPController_: func() *metallbspr.BGPController {
+			return &metallbspr.BGPController{
+				SvcAds: make(map[string][]*metallbbgp.Advertisement),
+				Peers: []*metallbspr.Peer{
+					{
+						BGP: mockSession,
+					},
+				},
+			}
+		},
 	}
 
 	spkr := &MetalLBSpeaker{
@@ -484,7 +482,7 @@ func TestSpeakerOnDeleteNode(t *testing.T) {
 	}
 
 	<-ctx.Done()
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal(errTimeout)
 	}
 
@@ -498,31 +496,31 @@ func TestSpeakerOnDeleteNode(t *testing.T) {
 	}
 
 	// confirm speaker rejects any further events.
-	if spkr.shutDown() != true {
+	if !spkr.shutDown() {
 		t.Fatalf("wanted speaker to be shutdown")
 	}
-	if err := spkr.OnAddNode(nil, nil); err != ErrShutDown {
+	if err := spkr.OnAddNode(nil, nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnDeleteNode(nil, nil); err != ErrShutDown {
+	if err := spkr.OnDeleteNode(nil, nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnAddCiliumNode(nil, nil); err != ErrShutDown {
+	if err := spkr.OnAddCiliumNode(nil, nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnDeleteCiliumNode(nil, nil); err != ErrShutDown {
+	if err := spkr.OnDeleteCiliumNode(nil, nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnDeleteService(nil); err != ErrShutDown {
+	if err := spkr.OnDeleteService(nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnUpdateEndpoints(nil); err != ErrShutDown {
+	if err := spkr.OnUpdateEndpoints(nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnUpdateNode(nil, nil, nil); err != ErrShutDown {
+	if err := spkr.OnUpdateNode(nil, nil, nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
-	if err := spkr.OnUpdateService(nil); err != ErrShutDown {
+	if err := spkr.OnUpdateService(nil); !errors.Is(err, ErrShutDown) {
 		t.Fatalf("got: %v, want: %v", err, ErrShutDown)
 	}
 }
@@ -548,6 +546,16 @@ func TestSpeakerOnUpdateAndDeleteCiliumNode(t *testing.T) {
 		},
 		PeerSession_: func() []metallbspr.Session {
 			return []metallbspr.Session{mockSession}
+		},
+		GetBGPController_: func() *metallbspr.BGPController {
+			return &metallbspr.BGPController{
+				SvcAds: make(map[string][]*metallbbgp.Advertisement),
+				Peers: []*metallbspr.Peer{
+					{
+						BGP: mockSession,
+					},
+				},
+			}
 		},
 	}
 

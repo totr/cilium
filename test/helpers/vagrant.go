@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -11,11 +11,11 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/cilium/cilium/test/config"
-	ginkgoext "github.com/cilium/cilium/test/ginkgo-ext"
-
 	"github.com/onsi/ginkgo"
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/test/config"
+	ginkgoext "github.com/cilium/cilium/test/ginkgo-ext"
 )
 
 // CreateVM creates a new vagrant server.Receives a scope which indicates the
@@ -95,8 +95,8 @@ func GetVagrantSSHMetadata(vmName string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-//DestroyVM destroys all running Vagrant VMs in the provided scope. It returns an
-//error if deletion of either the VMs fails
+// DestroyVM destroys all running Vagrant VMs in the provided scope. It returns an
+// error if deletion of either the VMs fails
 func DestroyVM(scope string) error {
 	command := fmt.Sprintf("vagrant destroy -f %s ", scope)
 	cmd := getCmd(command)
@@ -130,7 +130,7 @@ func getPath(prog string) string {
 	return path
 }
 
-//Status returns a mapping of Vagrant VM name to its status
+// Status returns a mapping of Vagrant VM name to its status
 func Status(key string) map[string]string {
 	result := map[string]string{}
 

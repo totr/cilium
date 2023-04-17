@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package utils
 
@@ -7,13 +7,13 @@ import (
 	"net"
 	"sort"
 
+	v1 "k8s.io/api/core/v1"
+	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/cilium/cilium/pkg/ip"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/labels"
 	"github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/selection"
-
-	v1 "k8s.io/api/core/v1"
-	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -64,6 +64,24 @@ type ServiceConfiguration interface {
 	// K8sServiceProxyNameValue must return the value of the proxy name
 	// annotation. If set, only services with this label will be handled.
 	K8sServiceProxyNameValue() string
+}
+
+// IngressConfiguration is the required configuration for GetServiceListOptionsModifier
+type IngressConfiguration interface {
+	// K8sIngressControllerEnabled returns true if ingress controller feature is enabled in Cilium
+	K8sIngressControllerEnabled() bool
+}
+
+// GatewayAPIConfiguration is the required configuration for GetServiceListOptionsModifier
+type GatewayAPIConfiguration interface {
+	// K8sGatewayAPIEnabled returns true if gateway API is enabled in Cilium
+	K8sGatewayAPIEnabled() bool
+}
+
+// PolicyConfiguration is the required configuration for K8s NetworkPolicy
+type PolicyConfiguration interface {
+	// K8sNetworkPolicyEnabled returns true if cilium agent needs to support K8s NetworkPolicy
+	K8sNetworkPolicyEnabled() bool
 }
 
 // GetServiceListOptionsModifier returns the options modifier for service object list.

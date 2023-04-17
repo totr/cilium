@@ -12,7 +12,8 @@ import (
 )
 
 // Provision a CIDR to a public IPv4 pool. For more information about IPAM, see
-// What is IPAM? in the Amazon VPC IPAM User Guide.
+// What is IPAM? (https://docs.aws.amazon.com/vpc/latest/ipam/what-is-it-ipam.html)
+// in the Amazon VPC IPAM User Guide.
 func (c *Client) ProvisionPublicIpv4PoolCidr(ctx context.Context, params *ProvisionPublicIpv4PoolCidrInput, optFns ...func(*Options)) (*ProvisionPublicIpv4PoolCidrOutput, error) {
 	if params == nil {
 		params = &ProvisionPublicIpv4PoolCidrInput{}
@@ -57,7 +58,7 @@ type ProvisionPublicIpv4PoolCidrInput struct {
 
 type ProvisionPublicIpv4PoolCidrOutput struct {
 
-	// Describes an address range of an IPv4 address pool.
+	// Information about the address range of the public IPv4 pool.
 	PoolAddressRange *types.PublicIpv4PoolRange
 
 	// The ID of the pool that you want to provision the CIDR to.

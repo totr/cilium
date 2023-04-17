@@ -4,7 +4,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.6.2
+    controller-gen.kubebuilder.io/version: v0.7.0
   creationTimestamp: null
   name: ciliumclusterwidenetworkpolicies.cilium.io
 spec:
@@ -63,17 +63,32 @@ spec:
                 items:
                   description: "EgressRule contains all rule types which can be applied
                     at egress, i.e. network traffic that originates inside the endpoint
-                    and exits the endpoint selected by the endpointSelector. \n -
+                    and exits the endpoint selected by the endpointSelector. \n   -
                     All members of this structure are optional. If omitted or empty,
-                    the   member will have no effect on the rule. \n - If multiple
-                    members of the structure are specified, then all members   must
+                    the     member will have no effect on the rule. \n   - If multiple
+                    members of the structure are specified, then all members     must
                     match in order for the rule to take effect. The exception to this
-                    \  rule is the ToRequires member; the effects of any Requires
-                    field in any   rule will apply to all other rules as well. \n
-                    - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and ToGroups
-                    are   mutually exclusive. Only one of these members may be present
-                    within an   individual rule."
+                    \    rule is the ToRequires member; the effects of any Requires
+                    field in any     rule will apply to all other rules as well. \n
+                    \  - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and
+                    ToGroups are     mutually exclusive. Only one of these members
+                    may be present within an     individual rule."
                   properties:
+                    auth:
+                      description: Auth is the required authentication type for the
+                        allowed traffic, if any.
+                      properties:
+                        type:
+                          description: Type is the required authentication type for
+                            the allowed traffic, if any.
+                          enum:
+                          - "null"
+                          - mtls-spiffe
+                          - always-fail
+                          type: string
+                      required:
+                      - type
+                      type: object
                     icmps:
                       description: "ICMPs is a list of ICMP rule identified by type
                         number which the endpoint subject to the rule is allowed to
@@ -141,26 +156,42 @@ spec:
                           to/from which outside communication  is allowed, along with
                           an optional list of subnets within that CIDR prefix to/from
                           which outside communication is not allowed.
+                        oneOf:
+                        - properties:
+                            cidr: {}
+                          required:
+                          - cidr
+                        - properties:
+                            cidrGroupRef: {}
+                          required:
+                          - cidrGroupRef
                         properties:
                           cidr:
                             description: CIDR is a CIDR prefix / IP Block.
                             pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                             type: string
+                          cidrGroupRef:
+                            description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                              object. A CiliumCIDRGroup contains a list of CIDRs that
+                              the endpoint, subject to the rule, can (Ingress) or
+                              cannot (IngressDeny) receive connections from.
+                            maxLength: 253
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
                           except:
                             description: ExceptCIDRs is a list of IP blocks which
                               the endpoint subject to the rule is not allowed to initiate
                               connections to. These CIDR prefixes should be contained
-                              within Cidr. These exceptions are only applied to the
-                              Cidr in this CIDRRule, and do not apply to any other
-                              CIDR prefixes in any other CIDRRules.
+                              within Cidr, using ExceptCIDRs together with CIDRGroupRef
+                              is not supported yet. These exceptions are only applied
+                              to the Cidr in this CIDRRule, and do not apply to any
+                              other CIDR prefixes in any other CIDRRules.
                             items:
                               description: 'CIDR specifies a block of IP addresses.
                                 Example: 192.0.2.1/32'
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
                             type: array
-                        required:
-                        - cidr
                         type: object
                       type: array
                     toEndpoints:
@@ -227,7 +258,8 @@ spec:
                     toEntities:
                       description: ToEntities is a list of special entities to which
                         the endpoint subject to the rule is allowed to initiate connections.
-                        Supported entities are `world`, `cluster` and `host`
+                        Supported entities are `world`, `cluster`,`host`,`remote-node`,`kube-apiserver`,
+                        `init`, `health`,`unmanaged` and `all`.
                       items:
                         description: Entity specifies the class of receiver/sender
                           endpoints that do not have individual identities.  Entities
@@ -238,6 +270,7 @@ spec:
                         - cluster
                         - host
                         - init
+                        - ingress
                         - unmanaged
                         - remote-node
                         - health
@@ -286,10 +319,11 @@ spec:
                               missing. \n Examples: `*.cilium.io` matches subomains
                               of cilium at that level   www.cilium.io and blog.cilium.io
                               match, cilium.io and google.com do not `*cilium.io`
-                              matches cilium.io and all subdomains 1 level below   www.cilium.io,
-                              blog.cilium.io and cilium.io match, google.com does
-                              not sub*.cilium.io matches subdomains of cilium where
-                              the subdomain component begins with \"sub\"   sub.cilium.io
+                              matches cilium.io and all subdomains ends with \"cilium.io\"
+                              \  except those containing \".\" separator, subcilium.io
+                              and sub-cilium.io match,   www.cilium.io and blog.cilium.io
+                              does not sub*.cilium.io matches subdomains of cilium
+                              where the subdomain component begins with \"sub\"   sub.cilium.io
                               and subdomain.cilium.io match, www.cilium.io,   blog.cilium.io,
                               cilium.io and google.com do not"
                             pattern: ^([-a-zA-Z0-9_*]+[.]?)+$
@@ -336,6 +370,45 @@ spec:
                         description: PortRule is a list of ports/protocol combinations
                           with optional Layer 7 rules which must be met.
                         properties:
+                          listener:
+                            description: listener specifies the name of a custom Envoy
+                              listener to which this traffic should be redirected
+                              to.
+                            properties:
+                              envoyConfig:
+                                description: EnvoyConfig is a reference to the CEC
+                                  or CCNP resource in which the listener is defined.
+                                properties:
+                                  kind:
+                                    description: Kind is the resource type being referred
+                                      to. Defaults to CiliumEnvoyConfig or CiliumClusterwideEnvoyConfig
+                                      for CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy,
+                                      respectively. The only case this is currently
+                                      explicitly needed is when referring to a CiliumClusterwideEnvoyConfig
+                                      from CiliumNetworkPolicy, as using a namespaced
+                                      listener from a cluster scoped policy is not
+                                      allowed.
+                                    enum:
+                                    - CiliumEnvoyConfig
+                                    - CiliumClusterwideEnvoyConfig
+                                    type: string
+                                  name:
+                                    description: Name is the resource name of the
+                                      CiliumEnvoyConfig or CiliumClusterwideEnvoyConfig
+                                      where the listener is defined in.
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              name:
+                                description: Name is the name of the listener.
+                                minLength: 1
+                                type: string
+                            required:
+                            - envoyConfig
+                            - name
+                            type: object
                           originatingTLS:
                             description: OriginatingTLS is the TLS context for the
                               connections originated by the L7 proxy.  For egress
@@ -407,13 +480,14 @@ spec:
                                 protocol:
                                   description: "Protocol is the L4 protocol. If omitted
                                     or empty, any protocol matches. Accepted values:
-                                    \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching on
-                                    ICMP is not supported. \n Named port specified
+                                    \"TCP\", \"UDP\", \"SCTP\", \"ANY\" \n Matching
+                                    on ICMP is not supported. \n Named port specified
                                     for a container may narrow this down, but may
                                     not contradict this."
                                   enum:
                                   - TCP
                                   - UDP
+                                  - SCTP
                                   - ANY
                                   type: string
                               required:
@@ -452,11 +526,12 @@ spec:
                                         of cilium at that level   www.cilium.io and
                                         blog.cilium.io match, cilium.io and google.com
                                         do not `*cilium.io` matches cilium.io and
-                                        all subdomains 1 level below   www.cilium.io,
-                                        blog.cilium.io and cilium.io match, google.com
-                                        does not sub*.cilium.io matches subdomains
-                                        of cilium where the subdomain component begins
-                                        with \"sub\"   sub.cilium.io and subdomain.cilium.io
+                                        all subdomains ends with \"cilium.io\"   except
+                                        those containing \".\" separator, subcilium.io
+                                        and sub-cilium.io match,   www.cilium.io and
+                                        blog.cilium.io does not sub*.cilium.io matches
+                                        subdomains of cilium where the subdomain component
+                                        begins with \"sub\"   sub.cilium.io and subdomain.cilium.io
                                         match, www.cilium.io,   blog.cilium.io, cilium.io
                                         and google.com do not"
                                       pattern: ^([-a-zA-Z0-9_*]+[.]?)+$
@@ -665,6 +740,13 @@ spec:
                                   Key-value pair rules apply.
                                 type: string
                             type: object
+                          serverNames:
+                            description: ServerNames is a list of allowed TLS SNI
+                              values. If not empty, then TLS must be present and one
+                              of the provided SNIs must be indicated in the TLS handshake.
+                            items:
+                              type: string
+                            type: array
                           terminatingTLS:
                             description: TerminatingTLS is the TLS context for the
                               connection terminated by the L7 proxy.  For egress policy
@@ -873,22 +955,22 @@ spec:
                 type: array
               egressDeny:
                 description: EgressDeny is a list of EgressDenyRule which are enforced
-                  at egress. Any rule inserted here will by denied regardless of the
+                  at egress. Any rule inserted here will be denied regardless of the
                   allowed egress rules in the 'egress' field. If omitted or empty,
                   this rule does not apply at egress.
                 items:
                   description: "EgressDenyRule contains all rule types which can be
                     applied at egress, i.e. network traffic that originates inside
                     the endpoint and exits the endpoint selected by the endpointSelector.
-                    \n - All members of this structure are optional. If omitted or
-                    empty, the   member will have no effect on the rule. \n - If multiple
-                    members of the structure are specified, then all members   must
-                    match in order for the rule to take effect. The exception to this
-                    \  rule is the ToRequires member; the effects of any Requires
-                    field in any   rule will apply to all other rules as well. \n
-                    - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices and ToGroups
-                    are   mutually exclusive. Only one of these members may be present
-                    within an   individual rule."
+                    \n   - All members of this structure are optional. If omitted
+                    or empty, the     member will have no effect on the rule. \n   -
+                    If multiple members of the structure are specified, then all members
+                    \    must match in order for the rule to take effect. The exception
+                    to this     rule is the ToRequires member; the effects of any
+                    Requires field in any     rule will apply to all other rules as
+                    well. \n   - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities, ToServices
+                    and ToGroups are     mutually exclusive. Only one of these members
+                    may be present within an     individual rule."
                   properties:
                     icmps:
                       description: "ICMPs is a list of ICMP rule identified by type
@@ -957,26 +1039,42 @@ spec:
                           to/from which outside communication  is allowed, along with
                           an optional list of subnets within that CIDR prefix to/from
                           which outside communication is not allowed.
+                        oneOf:
+                        - properties:
+                            cidr: {}
+                          required:
+                          - cidr
+                        - properties:
+                            cidrGroupRef: {}
+                          required:
+                          - cidrGroupRef
                         properties:
                           cidr:
                             description: CIDR is a CIDR prefix / IP Block.
                             pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                             type: string
+                          cidrGroupRef:
+                            description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                              object. A CiliumCIDRGroup contains a list of CIDRs that
+                              the endpoint, subject to the rule, can (Ingress) or
+                              cannot (IngressDeny) receive connections from.
+                            maxLength: 253
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
                           except:
                             description: ExceptCIDRs is a list of IP blocks which
                               the endpoint subject to the rule is not allowed to initiate
                               connections to. These CIDR prefixes should be contained
-                              within Cidr. These exceptions are only applied to the
-                              Cidr in this CIDRRule, and do not apply to any other
-                              CIDR prefixes in any other CIDRRules.
+                              within Cidr, using ExceptCIDRs together with CIDRGroupRef
+                              is not supported yet. These exceptions are only applied
+                              to the Cidr in this CIDRRule, and do not apply to any
+                              other CIDR prefixes in any other CIDRRules.
                             items:
                               description: 'CIDR specifies a block of IP addresses.
                                 Example: 192.0.2.1/32'
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
                             type: array
-                        required:
-                        - cidr
                         type: object
                       type: array
                     toEndpoints:
@@ -1043,7 +1141,8 @@ spec:
                     toEntities:
                       description: ToEntities is a list of special entities to which
                         the endpoint subject to the rule is allowed to initiate connections.
-                        Supported entities are `world`, `cluster` and `host`
+                        Supported entities are `world`, `cluster`,`host`,`remote-node`,`kube-apiserver`,
+                        `init`, `health`,`unmanaged` and `all`.
                       items:
                         description: Entity specifies the class of receiver/sender
                           endpoints that do not have individual identities.  Entities
@@ -1054,6 +1153,7 @@ spec:
                         - cluster
                         - host
                         - init
+                        - ingress
                         - unmanaged
                         - remote-node
                         - health
@@ -1122,13 +1222,14 @@ spec:
                                 protocol:
                                   description: "Protocol is the L4 protocol. If omitted
                                     or empty, any protocol matches. Accepted values:
-                                    \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching on
-                                    ICMP is not supported. \n Named port specified
+                                    \"TCP\", \"UDP\", \"SCTP\", \"ANY\" \n Matching
+                                    on ICMP is not supported. \n Named port specified
                                     for a container may narrow this down, but may
                                     not contradict this."
                                   enum:
                                   - TCP
                                   - UDP
+                                  - SCTP
                                   - ANY
                                   type: string
                               required:
@@ -1351,15 +1452,31 @@ spec:
                   description: "IngressRule contains all rule types which can be applied
                     at ingress, i.e. network traffic that originates outside of the
                     endpoint and is entering the endpoint selected by the endpointSelector.
-                    \n - All members of this structure are optional. If omitted or
-                    empty, the   member will have no effect on the rule. \n - If multiple
-                    members are set, all of them need to match in order for   the
-                    rule to take effect. The exception to this rule is FromRequires
-                    field;   the effects of any Requires field in any rule will apply
-                    to all other   rules as well. \n - FromEndpoints, FromCIDR, FromCIDRSet
-                    and FromEntities are mutually   exclusive. Only one of these members
-                    may be present within an individual   rule."
+                    \n   - All members of this structure are optional. If omitted
+                    or empty, the     member will have no effect on the rule. \n   -
+                    If multiple members are set, all of them need to match in order
+                    for     the rule to take effect. The exception to this rule is
+                    FromRequires field;     the effects of any Requires field in any
+                    rule will apply to all other     rules as well. \n   - FromEndpoints,
+                    FromCIDR, FromCIDRSet and FromEntities are mutually     exclusive.
+                    Only one of these members may be present within an individual
+                    \    rule."
                   properties:
+                    auth:
+                      description: Auth is the required authentication type for the
+                        allowed traffic, if any.
+                      properties:
+                        type:
+                          description: Type is the required authentication type for
+                            the allowed traffic, if any.
+                          enum:
+                          - "null"
+                          - mtls-spiffe
+                          - always-fail
+                          type: string
+                      required:
+                      - type
+                      type: object
                     fromCIDR:
                       description: "FromCIDR is a list of IP blocks which the endpoint
                         subject to the rule is allowed to receive connections from.
@@ -1395,26 +1512,42 @@ spec:
                           to/from which outside communication  is allowed, along with
                           an optional list of subnets within that CIDR prefix to/from
                           which outside communication is not allowed.
+                        oneOf:
+                        - properties:
+                            cidr: {}
+                          required:
+                          - cidr
+                        - properties:
+                            cidrGroupRef: {}
+                          required:
+                          - cidrGroupRef
                         properties:
                           cidr:
                             description: CIDR is a CIDR prefix / IP Block.
                             pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                             type: string
+                          cidrGroupRef:
+                            description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                              object. A CiliumCIDRGroup contains a list of CIDRs that
+                              the endpoint, subject to the rule, can (Ingress) or
+                              cannot (IngressDeny) receive connections from.
+                            maxLength: 253
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
                           except:
                             description: ExceptCIDRs is a list of IP blocks which
                               the endpoint subject to the rule is not allowed to initiate
                               connections to. These CIDR prefixes should be contained
-                              within Cidr. These exceptions are only applied to the
-                              Cidr in this CIDRRule, and do not apply to any other
-                              CIDR prefixes in any other CIDRRules.
+                              within Cidr, using ExceptCIDRs together with CIDRGroupRef
+                              is not supported yet. These exceptions are only applied
+                              to the Cidr in this CIDRRule, and do not apply to any
+                              other CIDR prefixes in any other CIDRRules.
                             items:
                               description: 'CIDR specifies a block of IP addresses.
                                 Example: 192.0.2.1/32'
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
                             type: array
-                        required:
-                        - cidr
                         type: object
                       type: array
                     fromEndpoints:
@@ -1492,6 +1625,7 @@ spec:
                         - cluster
                         - host
                         - init
+                        - ingress
                         - unmanaged
                         - remote-node
                         - health
@@ -1606,6 +1740,45 @@ spec:
                         description: PortRule is a list of ports/protocol combinations
                           with optional Layer 7 rules which must be met.
                         properties:
+                          listener:
+                            description: listener specifies the name of a custom Envoy
+                              listener to which this traffic should be redirected
+                              to.
+                            properties:
+                              envoyConfig:
+                                description: EnvoyConfig is a reference to the CEC
+                                  or CCNP resource in which the listener is defined.
+                                properties:
+                                  kind:
+                                    description: Kind is the resource type being referred
+                                      to. Defaults to CiliumEnvoyConfig or CiliumClusterwideEnvoyConfig
+                                      for CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy,
+                                      respectively. The only case this is currently
+                                      explicitly needed is when referring to a CiliumClusterwideEnvoyConfig
+                                      from CiliumNetworkPolicy, as using a namespaced
+                                      listener from a cluster scoped policy is not
+                                      allowed.
+                                    enum:
+                                    - CiliumEnvoyConfig
+                                    - CiliumClusterwideEnvoyConfig
+                                    type: string
+                                  name:
+                                    description: Name is the resource name of the
+                                      CiliumEnvoyConfig or CiliumClusterwideEnvoyConfig
+                                      where the listener is defined in.
+                                    minLength: 1
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              name:
+                                description: Name is the name of the listener.
+                                minLength: 1
+                                type: string
+                            required:
+                            - envoyConfig
+                            - name
+                            type: object
                           originatingTLS:
                             description: OriginatingTLS is the TLS context for the
                               connections originated by the L7 proxy.  For egress
@@ -1677,13 +1850,14 @@ spec:
                                 protocol:
                                   description: "Protocol is the L4 protocol. If omitted
                                     or empty, any protocol matches. Accepted values:
-                                    \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching on
-                                    ICMP is not supported. \n Named port specified
+                                    \"TCP\", \"UDP\", \"SCTP\", \"ANY\" \n Matching
+                                    on ICMP is not supported. \n Named port specified
                                     for a container may narrow this down, but may
                                     not contradict this."
                                   enum:
                                   - TCP
                                   - UDP
+                                  - SCTP
                                   - ANY
                                   type: string
                               required:
@@ -1722,11 +1896,12 @@ spec:
                                         of cilium at that level   www.cilium.io and
                                         blog.cilium.io match, cilium.io and google.com
                                         do not `*cilium.io` matches cilium.io and
-                                        all subdomains 1 level below   www.cilium.io,
-                                        blog.cilium.io and cilium.io match, google.com
-                                        does not sub*.cilium.io matches subdomains
-                                        of cilium where the subdomain component begins
-                                        with \"sub\"   sub.cilium.io and subdomain.cilium.io
+                                        all subdomains ends with \"cilium.io\"   except
+                                        those containing \".\" separator, subcilium.io
+                                        and sub-cilium.io match,   www.cilium.io and
+                                        blog.cilium.io does not sub*.cilium.io matches
+                                        subdomains of cilium where the subdomain component
+                                        begins with \"sub\"   sub.cilium.io and subdomain.cilium.io
                                         match, www.cilium.io,   blog.cilium.io, cilium.io
                                         and google.com do not"
                                       pattern: ^([-a-zA-Z0-9_*]+[.]?)+$
@@ -1935,6 +2110,13 @@ spec:
                                   Key-value pair rules apply.
                                 type: string
                             type: object
+                          serverNames:
+                            description: ServerNames is a list of allowed TLS SNI
+                              values. If not empty, then TLS must be present and one
+                              of the provided SNIs must be indicated in the TLS handshake.
+                            items:
+                              type: string
+                            type: array
                           terminatingTLS:
                             description: TerminatingTLS is the TLS context for the
                               connection terminated by the L7 proxy.  For egress policy
@@ -1993,21 +2175,22 @@ spec:
                 type: array
               ingressDeny:
                 description: IngressDeny is a list of IngressDenyRule which are enforced
-                  at ingress. Any rule inserted here will by denied regardless of
+                  at ingress. Any rule inserted here will be denied regardless of
                   the allowed ingress rules in the 'ingress' field. If omitted or
                   empty, this rule does not apply at ingress.
                 items:
                   description: "IngressDenyRule contains all rule types which can
                     be applied at ingress, i.e. network traffic that originates outside
                     of the endpoint and is entering the endpoint selected by the endpointSelector.
-                    \n - All members of this structure are optional. If omitted or
-                    empty, the   member will have no effect on the rule. \n - If multiple
-                    members are set, all of them need to match in order for   the
-                    rule to take effect. The exception to this rule is FromRequires
-                    field;   the effects of any Requires field in any rule will apply
-                    to all other   rules as well. \n - FromEndpoints, FromCIDR, FromCIDRSet
-                    and FromEntities are mutually   exclusive. Only one of these members
-                    may be present within an individual   rule."
+                    \n   - All members of this structure are optional. If omitted
+                    or empty, the     member will have no effect on the rule. \n   -
+                    If multiple members are set, all of them need to match in order
+                    for     the rule to take effect. The exception to this rule is
+                    FromRequires field;     the effects of any Requires field in any
+                    rule will apply to all other     rules as well. \n   - FromEndpoints,
+                    FromCIDR, FromCIDRSet and FromEntities are mutually     exclusive.
+                    Only one of these members may be present within an individual
+                    \    rule."
                   properties:
                     fromCIDR:
                       description: "FromCIDR is a list of IP blocks which the endpoint
@@ -2044,26 +2227,42 @@ spec:
                           to/from which outside communication  is allowed, along with
                           an optional list of subnets within that CIDR prefix to/from
                           which outside communication is not allowed.
+                        oneOf:
+                        - properties:
+                            cidr: {}
+                          required:
+                          - cidr
+                        - properties:
+                            cidrGroupRef: {}
+                          required:
+                          - cidrGroupRef
                         properties:
                           cidr:
                             description: CIDR is a CIDR prefix / IP Block.
                             pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                             type: string
+                          cidrGroupRef:
+                            description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                              object. A CiliumCIDRGroup contains a list of CIDRs that
+                              the endpoint, subject to the rule, can (Ingress) or
+                              cannot (IngressDeny) receive connections from.
+                            maxLength: 253
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
                           except:
                             description: ExceptCIDRs is a list of IP blocks which
                               the endpoint subject to the rule is not allowed to initiate
                               connections to. These CIDR prefixes should be contained
-                              within Cidr. These exceptions are only applied to the
-                              Cidr in this CIDRRule, and do not apply to any other
-                              CIDR prefixes in any other CIDRRules.
+                              within Cidr, using ExceptCIDRs together with CIDRGroupRef
+                              is not supported yet. These exceptions are only applied
+                              to the Cidr in this CIDRRule, and do not apply to any
+                              other CIDR prefixes in any other CIDRRules.
                             items:
                               description: 'CIDR specifies a block of IP addresses.
                                 Example: 192.0.2.1/32'
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
                             type: array
-                        required:
-                        - cidr
                         type: object
                       type: array
                     fromEndpoints:
@@ -2141,6 +2340,7 @@ spec:
                         - cluster
                         - host
                         - init
+                        - ingress
                         - unmanaged
                         - remote-node
                         - health
@@ -2276,13 +2476,14 @@ spec:
                                 protocol:
                                   description: "Protocol is the L4 protocol. If omitted
                                     or empty, any protocol matches. Accepted values:
-                                    \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching on
-                                    ICMP is not supported. \n Named port specified
+                                    \"TCP\", \"UDP\", \"SCTP\", \"ANY\" \n Matching
+                                    on ICMP is not supported. \n Named port specified
                                     for a container may narrow this down, but may
                                     not contradict this."
                                   enum:
                                   - TCP
                                   - UDP
+                                  - SCTP
                                   - ANY
                                   type: string
                               required:
@@ -2403,16 +2604,32 @@ spec:
                     description: "EgressRule contains all rule types which can be
                       applied at egress, i.e. network traffic that originates inside
                       the endpoint and exits the endpoint selected by the endpointSelector.
-                      \n - All members of this structure are optional. If omitted
-                      or empty, the   member will have no effect on the rule. \n -
-                      If multiple members of the structure are specified, then all
-                      members   must match in order for the rule to take effect. The
-                      exception to this   rule is the ToRequires member; the effects
-                      of any Requires field in any   rule will apply to all other
-                      rules as well. \n - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities,
-                      ToServices and ToGroups are   mutually exclusive. Only one of
-                      these members may be present within an   individual rule."
+                      \n   - All members of this structure are optional. If omitted
+                      or empty, the     member will have no effect on the rule. \n
+                      \  - If multiple members of the structure are specified, then
+                      all members     must match in order for the rule to take effect.
+                      The exception to this     rule is the ToRequires member; the
+                      effects of any Requires field in any     rule will apply to
+                      all other rules as well. \n   - ToEndpoints, ToCIDR, ToCIDRSet,
+                      ToEntities, ToServices and ToGroups are     mutually exclusive.
+                      Only one of these members may be present within an     individual
+                      rule."
                     properties:
+                      auth:
+                        description: Auth is the required authentication type for
+                          the allowed traffic, if any.
+                        properties:
+                          type:
+                            description: Type is the required authentication type
+                              for the allowed traffic, if any.
+                            enum:
+                            - "null"
+                            - mtls-spiffe
+                            - always-fail
+                            type: string
+                        required:
+                        - type
+                        type: object
                       icmps:
                         description: "ICMPs is a list of ICMP rule identified by type
                           number which the endpoint subject to the rule is allowed
@@ -2480,26 +2697,43 @@ spec:
                             to/from which outside communication  is allowed, along
                             with an optional list of subnets within that CIDR prefix
                             to/from which outside communication is not allowed.
+                          oneOf:
+                          - properties:
+                              cidr: {}
+                            required:
+                            - cidr
+                          - properties:
+                              cidrGroupRef: {}
+                            required:
+                            - cidrGroupRef
                           properties:
                             cidr:
                               description: CIDR is a CIDR prefix / IP Block.
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
+                            cidrGroupRef:
+                              description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                                object. A CiliumCIDRGroup contains a list of CIDRs
+                                that the endpoint, subject to the rule, can (Ingress)
+                                or cannot (IngressDeny) receive connections from.
+                              maxLength: 253
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                              type: string
                             except:
                               description: ExceptCIDRs is a list of IP blocks which
                                 the endpoint subject to the rule is not allowed to
                                 initiate connections to. These CIDR prefixes should
-                                be contained within Cidr. These exceptions are only
-                                applied to the Cidr in this CIDRRule, and do not apply
-                                to any other CIDR prefixes in any other CIDRRules.
+                                be contained within Cidr, using ExceptCIDRs together
+                                with CIDRGroupRef is not supported yet. These exceptions
+                                are only applied to the Cidr in this CIDRRule, and
+                                do not apply to any other CIDR prefixes in any other
+                                CIDRRules.
                               items:
                                 description: 'CIDR specifies a block of IP addresses.
                                   Example: 192.0.2.1/32'
                                 pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                                 type: string
                               type: array
-                          required:
-                          - cidr
                           type: object
                         type: array
                       toEndpoints:
@@ -2566,8 +2800,8 @@ spec:
                       toEntities:
                         description: ToEntities is a list of special entities to which
                           the endpoint subject to the rule is allowed to initiate
-                          connections. Supported entities are `world`, `cluster` and
-                          `host`
+                          connections. Supported entities are `world`, `cluster`,`host`,`remote-node`,`kube-apiserver`,
+                          `init`, `health`,`unmanaged` and `all`.
                         items:
                           description: Entity specifies the class of receiver/sender
                             endpoints that do not have individual identities.  Entities
@@ -2578,6 +2812,7 @@ spec:
                           - cluster
                           - host
                           - init
+                          - ingress
                           - unmanaged
                           - remote-node
                           - health
@@ -2628,8 +2863,9 @@ spec:
                                 matches subomains of cilium at that level   www.cilium.io
                                 and blog.cilium.io match, cilium.io and google.com
                                 do not `*cilium.io` matches cilium.io and all subdomains
-                                1 level below   www.cilium.io, blog.cilium.io and
-                                cilium.io match, google.com does not sub*.cilium.io
+                                ends with \"cilium.io\"   except those containing
+                                \".\" separator, subcilium.io and sub-cilium.io match,
+                                \  www.cilium.io and blog.cilium.io does not sub*.cilium.io
                                 matches subdomains of cilium where the subdomain component
                                 begins with \"sub\"   sub.cilium.io and subdomain.cilium.io
                                 match, www.cilium.io,   blog.cilium.io, cilium.io
@@ -2679,6 +2915,46 @@ spec:
                           description: PortRule is a list of ports/protocol combinations
                             with optional Layer 7 rules which must be met.
                           properties:
+                            listener:
+                              description: listener specifies the name of a custom
+                                Envoy listener to which this traffic should be redirected
+                                to.
+                              properties:
+                                envoyConfig:
+                                  description: EnvoyConfig is a reference to the CEC
+                                    or CCNP resource in which the listener is defined.
+                                  properties:
+                                    kind:
+                                      description: Kind is the resource type being
+                                        referred to. Defaults to CiliumEnvoyConfig
+                                        or CiliumClusterwideEnvoyConfig for CiliumNetworkPolicy
+                                        and CiliumClusterwideNetworkPolicy, respectively.
+                                        The only case this is currently explicitly
+                                        needed is when referring to a CiliumClusterwideEnvoyConfig
+                                        from CiliumNetworkPolicy, as using a namespaced
+                                        listener from a cluster scoped policy is not
+                                        allowed.
+                                      enum:
+                                      - CiliumEnvoyConfig
+                                      - CiliumClusterwideEnvoyConfig
+                                      type: string
+                                    name:
+                                      description: Name is the resource name of the
+                                        CiliumEnvoyConfig or CiliumClusterwideEnvoyConfig
+                                        where the listener is defined in.
+                                      minLength: 1
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                name:
+                                  description: Name is the name of the listener.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - envoyConfig
+                              - name
+                              type: object
                             originatingTLS:
                               description: OriginatingTLS is the TLS context for the
                                 connections originated by the L7 proxy.  For egress
@@ -2751,13 +3027,14 @@ spec:
                                   protocol:
                                     description: "Protocol is the L4 protocol. If
                                       omitted or empty, any protocol matches. Accepted
-                                      values: \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching
-                                      on ICMP is not supported. \n Named port specified
-                                      for a container may narrow this down, but may
-                                      not contradict this."
+                                      values: \"TCP\", \"UDP\", \"SCTP\", \"ANY\"
+                                      \n Matching on ICMP is not supported. \n Named
+                                      port specified for a container may narrow this
+                                      down, but may not contradict this."
                                     enum:
                                     - TCP
                                     - UDP
+                                    - SCTP
                                     - ANY
                                     type: string
                                 required:
@@ -2796,12 +3073,13 @@ spec:
                                           of cilium at that level   www.cilium.io
                                           and blog.cilium.io match, cilium.io and
                                           google.com do not `*cilium.io` matches cilium.io
-                                          and all subdomains 1 level below   www.cilium.io,
-                                          blog.cilium.io and cilium.io match, google.com
-                                          does not sub*.cilium.io matches subdomains
-                                          of cilium where the subdomain component
-                                          begins with \"sub\"   sub.cilium.io and
-                                          subdomain.cilium.io match, www.cilium.io,
+                                          and all subdomains ends with \"cilium.io\"
+                                          \  except those containing \".\" separator,
+                                          subcilium.io and sub-cilium.io match,   www.cilium.io
+                                          and blog.cilium.io does not sub*.cilium.io
+                                          matches subdomains of cilium where the subdomain
+                                          component begins with \"sub\"   sub.cilium.io
+                                          and subdomain.cilium.io match, www.cilium.io,
                                           \  blog.cilium.io, cilium.io and google.com
                                           do not"
                                         pattern: ^([-a-zA-Z0-9_*]+[.]?)+$
@@ -3014,6 +3292,14 @@ spec:
                                     Key-value pair rules apply.
                                   type: string
                               type: object
+                            serverNames:
+                              description: ServerNames is a list of allowed TLS SNI
+                                values. If not empty, then TLS must be present and
+                                one of the provided SNIs must be indicated in the
+                                TLS handshake.
+                              items:
+                                type: string
+                              type: array
                             terminatingTLS:
                               description: TerminatingTLS is the TLS context for the
                                 connection terminated by the L7 proxy.  For egress
@@ -3227,22 +3513,23 @@ spec:
                   type: array
                 egressDeny:
                   description: EgressDeny is a list of EgressDenyRule which are enforced
-                    at egress. Any rule inserted here will by denied regardless of
+                    at egress. Any rule inserted here will be denied regardless of
                     the allowed egress rules in the 'egress' field. If omitted or
                     empty, this rule does not apply at egress.
                   items:
                     description: "EgressDenyRule contains all rule types which can
                       be applied at egress, i.e. network traffic that originates inside
                       the endpoint and exits the endpoint selected by the endpointSelector.
-                      \n - All members of this structure are optional. If omitted
-                      or empty, the   member will have no effect on the rule. \n -
-                      If multiple members of the structure are specified, then all
-                      members   must match in order for the rule to take effect. The
-                      exception to this   rule is the ToRequires member; the effects
-                      of any Requires field in any   rule will apply to all other
-                      rules as well. \n - ToEndpoints, ToCIDR, ToCIDRSet, ToEntities,
-                      ToServices and ToGroups are   mutually exclusive. Only one of
-                      these members may be present within an   individual rule."
+                      \n   - All members of this structure are optional. If omitted
+                      or empty, the     member will have no effect on the rule. \n
+                      \  - If multiple members of the structure are specified, then
+                      all members     must match in order for the rule to take effect.
+                      The exception to this     rule is the ToRequires member; the
+                      effects of any Requires field in any     rule will apply to
+                      all other rules as well. \n   - ToEndpoints, ToCIDR, ToCIDRSet,
+                      ToEntities, ToServices and ToGroups are     mutually exclusive.
+                      Only one of these members may be present within an     individual
+                      rule."
                     properties:
                       icmps:
                         description: "ICMPs is a list of ICMP rule identified by type
@@ -3311,26 +3598,43 @@ spec:
                             to/from which outside communication  is allowed, along
                             with an optional list of subnets within that CIDR prefix
                             to/from which outside communication is not allowed.
+                          oneOf:
+                          - properties:
+                              cidr: {}
+                            required:
+                            - cidr
+                          - properties:
+                              cidrGroupRef: {}
+                            required:
+                            - cidrGroupRef
                           properties:
                             cidr:
                               description: CIDR is a CIDR prefix / IP Block.
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
+                            cidrGroupRef:
+                              description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                                object. A CiliumCIDRGroup contains a list of CIDRs
+                                that the endpoint, subject to the rule, can (Ingress)
+                                or cannot (IngressDeny) receive connections from.
+                              maxLength: 253
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                              type: string
                             except:
                               description: ExceptCIDRs is a list of IP blocks which
                                 the endpoint subject to the rule is not allowed to
                                 initiate connections to. These CIDR prefixes should
-                                be contained within Cidr. These exceptions are only
-                                applied to the Cidr in this CIDRRule, and do not apply
-                                to any other CIDR prefixes in any other CIDRRules.
+                                be contained within Cidr, using ExceptCIDRs together
+                                with CIDRGroupRef is not supported yet. These exceptions
+                                are only applied to the Cidr in this CIDRRule, and
+                                do not apply to any other CIDR prefixes in any other
+                                CIDRRules.
                               items:
                                 description: 'CIDR specifies a block of IP addresses.
                                   Example: 192.0.2.1/32'
                                 pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                                 type: string
                               type: array
-                          required:
-                          - cidr
                           type: object
                         type: array
                       toEndpoints:
@@ -3397,8 +3701,8 @@ spec:
                       toEntities:
                         description: ToEntities is a list of special entities to which
                           the endpoint subject to the rule is allowed to initiate
-                          connections. Supported entities are `world`, `cluster` and
-                          `host`
+                          connections. Supported entities are `world`, `cluster`,`host`,`remote-node`,`kube-apiserver`,
+                          `init`, `health`,`unmanaged` and `all`.
                         items:
                           description: Entity specifies the class of receiver/sender
                             endpoints that do not have individual identities.  Entities
@@ -3409,6 +3713,7 @@ spec:
                           - cluster
                           - host
                           - init
+                          - ingress
                           - unmanaged
                           - remote-node
                           - health
@@ -3478,13 +3783,14 @@ spec:
                                   protocol:
                                     description: "Protocol is the L4 protocol. If
                                       omitted or empty, any protocol matches. Accepted
-                                      values: \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching
-                                      on ICMP is not supported. \n Named port specified
-                                      for a container may narrow this down, but may
-                                      not contradict this."
+                                      values: \"TCP\", \"UDP\", \"SCTP\", \"ANY\"
+                                      \n Matching on ICMP is not supported. \n Named
+                                      port specified for a container may narrow this
+                                      down, but may not contradict this."
                                     enum:
                                     - TCP
                                     - UDP
+                                    - SCTP
                                     - ANY
                                     type: string
                                 required:
@@ -3711,16 +4017,31 @@ spec:
                     description: "IngressRule contains all rule types which can be
                       applied at ingress, i.e. network traffic that originates outside
                       of the endpoint and is entering the endpoint selected by the
-                      endpointSelector. \n - All members of this structure are optional.
-                      If omitted or empty, the   member will have no effect on the
-                      rule. \n - If multiple members are set, all of them need to
-                      match in order for   the rule to take effect. The exception
-                      to this rule is FromRequires field;   the effects of any Requires
-                      field in any rule will apply to all other   rules as well. \n
-                      - FromEndpoints, FromCIDR, FromCIDRSet and FromEntities are
-                      mutually   exclusive. Only one of these members may be present
-                      within an individual   rule."
+                      endpointSelector. \n   - All members of this structure are optional.
+                      If omitted or empty, the     member will have no effect on the
+                      rule. \n   - If multiple members are set, all of them need to
+                      match in order for     the rule to take effect. The exception
+                      to this rule is FromRequires field;     the effects of any Requires
+                      field in any rule will apply to all other     rules as well.
+                      \n   - FromEndpoints, FromCIDR, FromCIDRSet and FromEntities
+                      are mutually     exclusive. Only one of these members may be
+                      present within an individual     rule."
                     properties:
+                      auth:
+                        description: Auth is the required authentication type for
+                          the allowed traffic, if any.
+                        properties:
+                          type:
+                            description: Type is the required authentication type
+                              for the allowed traffic, if any.
+                            enum:
+                            - "null"
+                            - mtls-spiffe
+                            - always-fail
+                            type: string
+                        required:
+                        - type
+                        type: object
                       fromCIDR:
                         description: "FromCIDR is a list of IP blocks which the endpoint
                           subject to the rule is allowed to receive connections from.
@@ -3756,26 +4077,43 @@ spec:
                             to/from which outside communication  is allowed, along
                             with an optional list of subnets within that CIDR prefix
                             to/from which outside communication is not allowed.
+                          oneOf:
+                          - properties:
+                              cidr: {}
+                            required:
+                            - cidr
+                          - properties:
+                              cidrGroupRef: {}
+                            required:
+                            - cidrGroupRef
                           properties:
                             cidr:
                               description: CIDR is a CIDR prefix / IP Block.
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
+                            cidrGroupRef:
+                              description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                                object. A CiliumCIDRGroup contains a list of CIDRs
+                                that the endpoint, subject to the rule, can (Ingress)
+                                or cannot (IngressDeny) receive connections from.
+                              maxLength: 253
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                              type: string
                             except:
                               description: ExceptCIDRs is a list of IP blocks which
                                 the endpoint subject to the rule is not allowed to
                                 initiate connections to. These CIDR prefixes should
-                                be contained within Cidr. These exceptions are only
-                                applied to the Cidr in this CIDRRule, and do not apply
-                                to any other CIDR prefixes in any other CIDRRules.
+                                be contained within Cidr, using ExceptCIDRs together
+                                with CIDRGroupRef is not supported yet. These exceptions
+                                are only applied to the Cidr in this CIDRRule, and
+                                do not apply to any other CIDR prefixes in any other
+                                CIDRRules.
                               items:
                                 description: 'CIDR specifies a block of IP addresses.
                                   Example: 192.0.2.1/32'
                                 pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                                 type: string
                               type: array
-                          required:
-                          - cidr
                           type: object
                         type: array
                       fromEndpoints:
@@ -3853,6 +4191,7 @@ spec:
                           - cluster
                           - host
                           - init
+                          - ingress
                           - unmanaged
                           - remote-node
                           - health
@@ -3968,6 +4307,46 @@ spec:
                           description: PortRule is a list of ports/protocol combinations
                             with optional Layer 7 rules which must be met.
                           properties:
+                            listener:
+                              description: listener specifies the name of a custom
+                                Envoy listener to which this traffic should be redirected
+                                to.
+                              properties:
+                                envoyConfig:
+                                  description: EnvoyConfig is a reference to the CEC
+                                    or CCNP resource in which the listener is defined.
+                                  properties:
+                                    kind:
+                                      description: Kind is the resource type being
+                                        referred to. Defaults to CiliumEnvoyConfig
+                                        or CiliumClusterwideEnvoyConfig for CiliumNetworkPolicy
+                                        and CiliumClusterwideNetworkPolicy, respectively.
+                                        The only case this is currently explicitly
+                                        needed is when referring to a CiliumClusterwideEnvoyConfig
+                                        from CiliumNetworkPolicy, as using a namespaced
+                                        listener from a cluster scoped policy is not
+                                        allowed.
+                                      enum:
+                                      - CiliumEnvoyConfig
+                                      - CiliumClusterwideEnvoyConfig
+                                      type: string
+                                    name:
+                                      description: Name is the resource name of the
+                                        CiliumEnvoyConfig or CiliumClusterwideEnvoyConfig
+                                        where the listener is defined in.
+                                      minLength: 1
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                                name:
+                                  description: Name is the name of the listener.
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - envoyConfig
+                              - name
+                              type: object
                             originatingTLS:
                               description: OriginatingTLS is the TLS context for the
                                 connections originated by the L7 proxy.  For egress
@@ -4040,13 +4419,14 @@ spec:
                                   protocol:
                                     description: "Protocol is the L4 protocol. If
                                       omitted or empty, any protocol matches. Accepted
-                                      values: \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching
-                                      on ICMP is not supported. \n Named port specified
-                                      for a container may narrow this down, but may
-                                      not contradict this."
+                                      values: \"TCP\", \"UDP\", \"SCTP\", \"ANY\"
+                                      \n Matching on ICMP is not supported. \n Named
+                                      port specified for a container may narrow this
+                                      down, but may not contradict this."
                                     enum:
                                     - TCP
                                     - UDP
+                                    - SCTP
                                     - ANY
                                     type: string
                                 required:
@@ -4085,12 +4465,13 @@ spec:
                                           of cilium at that level   www.cilium.io
                                           and blog.cilium.io match, cilium.io and
                                           google.com do not `*cilium.io` matches cilium.io
-                                          and all subdomains 1 level below   www.cilium.io,
-                                          blog.cilium.io and cilium.io match, google.com
-                                          does not sub*.cilium.io matches subdomains
-                                          of cilium where the subdomain component
-                                          begins with \"sub\"   sub.cilium.io and
-                                          subdomain.cilium.io match, www.cilium.io,
+                                          and all subdomains ends with \"cilium.io\"
+                                          \  except those containing \".\" separator,
+                                          subcilium.io and sub-cilium.io match,   www.cilium.io
+                                          and blog.cilium.io does not sub*.cilium.io
+                                          matches subdomains of cilium where the subdomain
+                                          component begins with \"sub\"   sub.cilium.io
+                                          and subdomain.cilium.io match, www.cilium.io,
                                           \  blog.cilium.io, cilium.io and google.com
                                           do not"
                                         pattern: ^([-a-zA-Z0-9_*]+[.]?)+$
@@ -4303,6 +4684,14 @@ spec:
                                     Key-value pair rules apply.
                                   type: string
                               type: object
+                            serverNames:
+                              description: ServerNames is a list of allowed TLS SNI
+                                values. If not empty, then TLS must be present and
+                                one of the provided SNIs must be indicated in the
+                                TLS handshake.
+                              items:
+                                type: string
+                              type: array
                             terminatingTLS:
                               description: TerminatingTLS is the TLS context for the
                                 connection terminated by the L7 proxy.  For egress
@@ -4362,22 +4751,22 @@ spec:
                   type: array
                 ingressDeny:
                   description: IngressDeny is a list of IngressDenyRule which are
-                    enforced at ingress. Any rule inserted here will by denied regardless
+                    enforced at ingress. Any rule inserted here will be denied regardless
                     of the allowed ingress rules in the 'ingress' field. If omitted
                     or empty, this rule does not apply at ingress.
                   items:
                     description: "IngressDenyRule contains all rule types which can
                       be applied at ingress, i.e. network traffic that originates
                       outside of the endpoint and is entering the endpoint selected
-                      by the endpointSelector. \n - All members of this structure
-                      are optional. If omitted or empty, the   member will have no
-                      effect on the rule. \n - If multiple members are set, all of
-                      them need to match in order for   the rule to take effect. The
-                      exception to this rule is FromRequires field;   the effects
-                      of any Requires field in any rule will apply to all other   rules
-                      as well. \n - FromEndpoints, FromCIDR, FromCIDRSet and FromEntities
-                      are mutually   exclusive. Only one of these members may be present
-                      within an individual   rule."
+                      by the endpointSelector. \n   - All members of this structure
+                      are optional. If omitted or empty, the     member will have
+                      no effect on the rule. \n   - If multiple members are set, all
+                      of them need to match in order for     the rule to take effect.
+                      The exception to this rule is FromRequires field;     the effects
+                      of any Requires field in any rule will apply to all other     rules
+                      as well. \n   - FromEndpoints, FromCIDR, FromCIDRSet and FromEntities
+                      are mutually     exclusive. Only one of these members may be
+                      present within an individual     rule."
                     properties:
                       fromCIDR:
                         description: "FromCIDR is a list of IP blocks which the endpoint
@@ -4414,26 +4803,43 @@ spec:
                             to/from which outside communication  is allowed, along
                             with an optional list of subnets within that CIDR prefix
                             to/from which outside communication is not allowed.
+                          oneOf:
+                          - properties:
+                              cidr: {}
+                            required:
+                            - cidr
+                          - properties:
+                              cidrGroupRef: {}
+                            required:
+                            - cidrGroupRef
                           properties:
                             cidr:
                               description: CIDR is a CIDR prefix / IP Block.
                               pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                               type: string
+                            cidrGroupRef:
+                              description: CIDRGroupRef is a reference to a CiliumCIDRGroup
+                                object. A CiliumCIDRGroup contains a list of CIDRs
+                                that the endpoint, subject to the rule, can (Ingress)
+                                or cannot (IngressDeny) receive connections from.
+                              maxLength: 253
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                              type: string
                             except:
                               description: ExceptCIDRs is a list of IP blocks which
                                 the endpoint subject to the rule is not allowed to
                                 initiate connections to. These CIDR prefixes should
-                                be contained within Cidr. These exceptions are only
-                                applied to the Cidr in this CIDRRule, and do not apply
-                                to any other CIDR prefixes in any other CIDRRules.
+                                be contained within Cidr, using ExceptCIDRs together
+                                with CIDRGroupRef is not supported yet. These exceptions
+                                are only applied to the Cidr in this CIDRRule, and
+                                do not apply to any other CIDR prefixes in any other
+                                CIDRRules.
                               items:
                                 description: 'CIDR specifies a block of IP addresses.
                                   Example: 192.0.2.1/32'
                                 pattern: ^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$|^s*((([0-9A-Fa-f]{1,4}:){7}(:|([0-9A-Fa-f]{1,4})))|(([0-9A-Fa-f]{1,4}:){6}:([0-9A-Fa-f]{1,4})?)|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){0,1}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){0,2}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){0,3}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){0,4}):([0-9A-Fa-f]{1,4})?))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){0,5}):([0-9A-Fa-f]{1,4})?))|(:(:|((:[0-9A-Fa-f]{1,4}){1,7}))))(%.+)?s*/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$
                                 type: string
                               type: array
-                          required:
-                          - cidr
                           type: object
                         type: array
                       fromEndpoints:
@@ -4511,6 +4917,7 @@ spec:
                           - cluster
                           - host
                           - init
+                          - ingress
                           - unmanaged
                           - remote-node
                           - health
@@ -4647,13 +5054,14 @@ spec:
                                   protocol:
                                     description: "Protocol is the L4 protocol. If
                                       omitted or empty, any protocol matches. Accepted
-                                      values: \"TCP\", \"UDP\", \"\"/\"ANY\" \n Matching
-                                      on ICMP is not supported. \n Named port specified
-                                      for a container may narrow this down, but may
-                                      not contradict this."
+                                      values: \"TCP\", \"UDP\", \"SCTP\", \"ANY\"
+                                      \n Matching on ICMP is not supported. \n Named
+                                      port specified for a container may narrow this
+                                      down, but may not contradict this."
                                     enum:
                                     - TCP
                                     - UDP
+                                    - SCTP
                                     - ANY
                                     type: string
                                 required:

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,16 +7,16 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/go-openapi/runtime/middleware"
+
 	"github.com/cilium/cilium/api/v1/models"
 	. "github.com/cilium/cilium/api/v1/server/restapi/daemon"
 	"github.com/cilium/cilium/pkg/api"
 	"github.com/cilium/cilium/pkg/eventqueue"
-	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
-	"github.com/go-openapi/runtime/middleware"
 )
 
 // ConfigModifyEvent is a wrapper around the parameters for configModify.
@@ -161,13 +161,17 @@ func (h *getConfig) Handle(params GetConfigParams) middleware.Responder {
 
 	for i := 0; i < e.NumField(); i++ {
 		if e.Field(i).Kind() != reflect.Func {
-			// Remove configurable opttions from read-only map
-			if e.Type().Field(i).Name != "Opts" && e.Type().Field(i).Name != "ConfigPatchMutex" {
+			field := e.Type().Field(i)
+			// Only consider exported fields and ignore the mutable options.
+			if field.IsExported() && field.Name != "Opts" && field.Name != "ConfigPatchMutex" {
 				m[e.Type().Field(i).Name] = e.Field(i).Interface()
 			}
 		}
 	}
 	option.Config.ConfigPatchMutex.RUnlock()
+
+	// Manually add fields that are behind accessors.
+	m["Devices"] = option.Config.GetDevices()
 
 	spec := &models.DaemonConfigurationSpec{
 		Options:           *option.Config.Opts.GetMutableModel(),
@@ -176,8 +180,8 @@ func (h *getConfig) Handle(params GetConfigParams) middleware.Responder {
 
 	status := &models.DaemonConfigurationStatus{
 		Addressing:       node.GetNodeAddressing(),
-		K8sConfiguration: k8s.GetKubeconfigPath(),
-		K8sEndpoint:      k8s.GetAPIServerURL(),
+		K8sConfiguration: d.clientset.Config().K8sKubeConfigPath,
+		K8sEndpoint:      d.clientset.Config().K8sAPIServer,
 		NodeMonitor:      d.monitorAgent.State(),
 		KvstoreConfiguration: &models.KVstoreConfiguration{
 			Type:    option.Config.KVStore,
@@ -188,17 +192,15 @@ func (h *getConfig) Handle(params GetConfigParams) middleware.Responder {
 		DeviceMTU:              int64(d.mtuConfig.GetDeviceMTU()),
 		RouteMTU:               int64(d.mtuConfig.GetRouteMTU()),
 		DatapathMode:           models.DatapathMode(option.Config.DatapathMode),
-		IpvlanConfiguration: &models.IpvlanConfiguration{
-			MasterDeviceIndex: int64(option.Config.Ipvlan.MasterDeviceIndex),
-			OperationMode:     option.Config.Ipvlan.OperationMode,
-		},
-		IpamMode:   option.Config.IPAM,
-		Masquerade: option.Config.EnableIPv4Masquerade || option.Config.EnableIPv6Masquerade,
+		IpamMode:               option.Config.IPAM,
+		Masquerade:             option.Config.MasqueradingEnabled(),
 		MasqueradeProtocols: &models.DaemonConfigurationStatusMasqueradeProtocols{
 			IPV4: option.Config.EnableIPv4Masquerade,
 			IPV6: option.Config.EnableIPv6Masquerade,
 		},
 		EgressMultiHomeIPRuleCompat: option.Config.EgressMultiHomeIPRuleCompat,
+		GROMaxSize:                  int64(d.bigTCPConfig.GetGROMaxSize()),
+		GSOMaxSize:                  int64(d.bigTCPConfig.GetGSOMaxSize()),
 	}
 
 	cfg := &models.DaemonConfiguration{

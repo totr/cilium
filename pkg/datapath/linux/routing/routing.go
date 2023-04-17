@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package linuxrouting
 
@@ -7,6 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
+
+	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
@@ -17,10 +22,6 @@ import (
 	"github.com/cilium/cilium/pkg/mac"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
-
-	"github.com/sirupsen/logrus"
-	"github.com/vishvananda/netlink"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -74,7 +75,8 @@ func (info *RoutingInfo) Configure(ip net.IP, mtu int, compat bool) error {
 		tableID = computeTableIDFromIfaceNumber(info.InterfaceNumber)
 	}
 
-	if info.Masquerade {
+	// The condition here should mirror the condition in Delete.
+	if info.Masquerade && info.IpamMode == ipamOption.IPAMENI {
 		// Lookup a VPC specific table for all traffic from an endpoint to the
 		// CIDR configured for the VPC on which the endpoint has the IP on.
 		for _, cidr := range info.IPv4CIDRs {
@@ -143,17 +145,15 @@ func (info *RoutingInfo) Configure(ip net.IP, mtu int, compat bool) error {
 // main routing table. Due to multiple routing CIDRs, there might be more than
 // one egress rule. Deletion of any rule only proceeds if the rule matches
 // the IP & priority. If more than one rule matches, then deletion is skipped.
-func Delete(ip net.IP, compat bool) error {
-	if ip.To4() == nil {
+func Delete(ip netip.Addr, compat bool) error {
+	if !ip.Is4() {
 		log.WithFields(logrus.Fields{
 			"endpointIP": ip,
 		}).Warning("Unable to delete rules because IP is not an IPv4 address")
 		return errors.New("IP not compatible")
 	}
-	ipWithMask := net.IPNet{
-		IP:   ip,
-		Mask: net.CIDRMask(32, 32),
-	}
+
+	ipWithMask := iputil.AddrToIPNet(ip)
 
 	scopedLog := log.WithFields(logrus.Fields{
 		"ip": ipWithMask.String(),
@@ -162,7 +162,7 @@ func Delete(ip net.IP, compat bool) error {
 	// Ingress rules
 	ingress := route.Rule{
 		Priority: linux_defaults.RulePriorityIngress,
-		To:       &ipWithMask,
+		To:       ipWithMask,
 		Table:    route.MainTable,
 	}
 	if err := deleteRule(ingress); err != nil {
@@ -177,7 +177,9 @@ func Delete(ip net.IP, compat bool) error {
 	}
 
 	// Egress rules
-	if info := node.GetRouterInfo(); info != nil && option.Config.IPAM == ipamOption.IPAMENI {
+	// The condition here should mirror the conditions in Configure.
+	info := node.GetRouterInfo()
+	if info != nil && option.Config.EnableIPv4Masquerade && option.Config.IPAM == ipamOption.IPAMENI {
 		ipv4CIDRs := info.GetIPv4CIDRs()
 		cidrs := make([]*net.IPNet, 0, len(ipv4CIDRs))
 		for i := range ipv4CIDRs {
@@ -190,7 +192,7 @@ func Delete(ip net.IP, compat bool) error {
 		for _, cidr := range routingCIDRs {
 			egress := route.Rule{
 				Priority: priority,
-				From:     &ipWithMask,
+				From:     ipWithMask,
 				To:       cidr,
 			}
 			if err := deleteRule(egress); err != nil {
@@ -201,12 +203,28 @@ func Delete(ip net.IP, compat bool) error {
 	} else {
 		egress := route.Rule{
 			Priority: priority,
-			From:     &ipWithMask,
+			From:     ipWithMask,
 		}
 		if err := deleteRule(egress); err != nil {
 			return fmt.Errorf("unable to delete egress rule with ip %s: %w", ipWithMask.String(), err)
 		}
 		scopedLog.WithField(logfields.Rule, egress).Debug("Deleted egress rule")
+	}
+
+	if option.Config.EnableUnreachableRoutes {
+		// Replace route to old IP with an unreachable route. This will
+		//   - trigger ICMP error messages for clients attempting to connect to the stale IP
+		//   - avoid hitting rp_filter and getting Martian packet warning
+		// When the IP is reused, the unreachable route will be replaced to target the new pod veth
+		// In CRD-based IPAM, when an IP is unassigned from the CiliumNode, we delete this route
+		// to avoid blackholing traffic to this IP if it gets reassigned to another node
+		if err := netlink.RouteReplace(&netlink.Route{
+			Dst:   ipWithMask,
+			Table: route.MainTable,
+			Type:  unix.RTN_UNREACHABLE,
+		}); err != nil {
+			return fmt.Errorf("unable to add unreachable route for ip %s: %w", ipWithMask.String(), err)
+		}
 	}
 
 	return nil

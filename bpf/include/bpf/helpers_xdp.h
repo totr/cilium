@@ -1,5 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/* Copyright (C) 2016-2020 Authors of Cilium */
+/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
+/* Copyright Authors of Cilium */
 
 #ifndef __BPF_HELPERS_XDP__
 #define __BPF_HELPERS_XDP__
@@ -46,6 +46,10 @@ static int BPF_STUB(xdp_get_tunnel_key, struct xdp_md *xdp,
 static int BPF_STUB(xdp_set_tunnel_key, struct xdp_md *xdp,
 		    const struct bpf_tunnel_key *from, __u32 size,
 		    __u32 flags);
+static int BPF_STUB(xdp_get_tunnel_opt, struct xdp_md *xdp, void *opt,
+		    __u32 size);
+static int BPF_STUB(xdp_set_tunnel_opt, struct xdp_md *xdp, void *opt,
+		    __u32 size);
 
 /* Events for user space */
 static int BPF_FUNC_REMAP(xdp_event_output, struct xdp_md *xdp, void *map,

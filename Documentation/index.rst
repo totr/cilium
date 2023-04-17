@@ -9,16 +9,11 @@ Welcome to Cilium's documentation!
 
 The documentation is divided into the following sections:
 
-* :ref:`gs_guide`: Provides a simple tutorial for running a small Cilium
+* :ref:`k8s_install_quick`: Provides a simple tutorial for running a small Cilium
   setup on your laptop.  Intended as an easy way to get your hands dirty
   applying Cilium security policies between containers.
 
-* :ref:`concepts`: Describes the components of Cilium,
-  and the different models for deploying Cilium.  Provides the high-level
-  understanding required to run a full Cilium deployment and understand its
-  behavior.
-
-* :ref:`gs_install` :  Details instructions for installing, configuring, and
+* :ref:`getting_started` :  Details instructions for installing, configuring, and
   troubleshooting Cilium in different deployment modes.
 
 * :ref:`network_policy` : Detailed walkthrough of the policy language structure
@@ -38,14 +33,77 @@ The documentation is divided into the following sections:
 * :ref:`dev_guide` : Gives background to those looking to develop and contribute
   modifications to the Cilium code or documentation.
 
+* :ref:`security_root` : Provides a one-page resource of best practices for securing Cilium.
+
+A `hands-on tutorial <https://cilium.io/enterprise/#trainings>`_
+in a live environment is also available for users looking for a way to quickly
+get started and experiment with Cilium.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Overview
+
+   overview/intro
+   overview/component-overview
+
+.. _getting_started:
+
 .. toctree::
    :maxdepth: 2
    :caption: Getting Started
 
-   intro
-   gettingstarted/index
-   concepts/index
-   gettinghelp
+   gettingstarted/k8s-install-default
+   gettingstarted/hubble_intro
+   gettingstarted/hubble_setup
+   gettingstarted/hubble-configuration
+   gettingstarted/hubble
+   gettingstarted/hubble_cli.rst
+   gettingstarted/demo
+   gettingstarted/terminology
+   gettingstarted/gettinghelp
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Advanced Installation
+
+   installation/taints
+   installation/k8s-install-helm
+   installation/k8s-install-migration
+   installation/k8s-toc
+   installation/external-toc
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Networking
+
+   network/concepts/index
+   network/kubernetes/index
+   network/bgp-toc
+   network/ebpf/index
+   network/clustermesh/index
+   network/external-toc
+   network/servicemesh/index
+   network/istio
+   network/vtep
+   network/lb-ipam
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Security
+
+   security/index
+   security/network/index
+   security/policy/index
+   security/restrict-pod-access
+   security/threat-model
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Observability
+
+   observability/grafana
+   observability/metrics
+   observability/visibility
 
 .. toctree::
    :maxdepth: 2
@@ -54,28 +112,27 @@ The documentation is divided into the following sections:
    operations/system_requirements
    operations/upgrade
    configuration/index
-   policy/index
-   operations/metrics
    operations/performance/index
    operations/troubleshooting
-
 
 .. toctree::
    :maxdepth: 2
    :caption: Community
 
-   community
+   community/governance/index
+   community/community
+   community/roadmap
 
 .. toctree::
-   :maxdepth: 3
-   :caption: For Developers
+   :maxdepth: 2
+   :caption: Contributor Guide
 
-   contributing/governance/index
    contributing/development/index
    contributing/release/index
    contributing/testing/index
-   bpf
+   contributing/docs/index
    api
+   grpcapi
    internals/index
 
 .. toctree::
@@ -84,7 +141,13 @@ The documentation is divided into the following sections:
 
    cheatsheet
    cmdref/index
+   helm-reference
    kvstore
    further_reading
    glossary
-   helm-reference
+
+.. toctree::
+   :maxdepth: 2
+   :caption: BPF and XDP Reference Guide
+
+   bpf/index

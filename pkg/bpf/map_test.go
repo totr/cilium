@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package bpf
 
@@ -11,9 +8,9 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/cilium/cilium/pkg/byteorder"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/byteorder"
 )
 
 func (s *BPFTestSuite) TestExtractCommonName(c *C) {

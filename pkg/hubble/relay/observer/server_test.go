@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package observer
 
@@ -14,14 +11,6 @@ import (
 	"net"
 	"testing"
 
-	flowpb "github.com/cilium/cilium/api/v1/flow"
-	observerpb "github.com/cilium/cilium/api/v1/observer"
-	relaypb "github.com/cilium/cilium/api/v1/relay"
-	"github.com/cilium/cilium/pkg/hubble/defaults"
-	peerTypes "github.com/cilium/cilium/pkg/hubble/peer/types"
-	poolTypes "github.com/cilium/cilium/pkg/hubble/relay/pool/types"
-	"github.com/cilium/cilium/pkg/hubble/testutils"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/sirupsen/logrus"
@@ -31,6 +20,14 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	flowpb "github.com/cilium/cilium/api/v1/flow"
+	observerpb "github.com/cilium/cilium/api/v1/observer"
+	relaypb "github.com/cilium/cilium/api/v1/relay"
+	"github.com/cilium/cilium/pkg/hubble/defaults"
+	peerTypes "github.com/cilium/cilium/pkg/hubble/peer/types"
+	poolTypes "github.com/cilium/cilium/pkg/hubble/relay/pool/types"
+	"github.com/cilium/cilium/pkg/hubble/testutils"
 )
 
 func TestGetFlows(t *testing.T) {
@@ -935,7 +932,7 @@ func TestServerStatus(t *testing.T) {
 					NumFlows:            3333,
 					MaxFlows:            3333,
 					SeenFlows:           3333,
-					UptimeNs:            111111111,
+					UptimeNs:            222222222,
 					NumConnectedNodes:   &wrapperspb.UInt32Value{Value: 2},
 					NumUnavailableNodes: &wrapperspb.UInt32Value{Value: 0},
 				},

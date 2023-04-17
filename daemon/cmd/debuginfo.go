@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,15 +7,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/go-openapi/runtime/middleware"
+
 	"github.com/cilium/cilium/api/v1/models"
 	restapi "github.com/cilium/cilium/api/v1/server/restapi/daemon"
 	"github.com/cilium/cilium/api/v1/server/restapi/endpoint"
 	"github.com/cilium/cilium/pkg/debug"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/version"
-
-	"github.com/go-openapi/runtime/middleware"
-	"github.com/spf13/viper"
 )
 
 type getDebugInfo struct {
@@ -49,9 +48,9 @@ func (h *getDebugInfo) Handle(params restapi.GetDebuginfoParams) middleware.Resp
 	dr.CiliumMemoryMap = memoryMap(os.Getpid())
 
 	dr.EnvironmentVariables = []string{}
-	for _, k := range viper.AllKeys() {
+	for _, k := range Vp.AllKeys() {
 		// Assuming we are only getting strings
-		v := fmt.Sprintf("%s:%s", k, viper.GetString(k))
+		v := fmt.Sprintf("%s:%s", k, Vp.GetString(k))
 		dr.EnvironmentVariables = append(dr.EnvironmentVariables, v)
 	}
 

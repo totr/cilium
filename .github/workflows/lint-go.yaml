@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - master
+      - ft/master/**
 
 permissions: read-all
 
@@ -18,11 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Go
-        uses: actions/setup-go@331ce1d993939866bb63c32c6cbbfd48fa76fc57
+        uses: actions/setup-go@6edd4406fa81c3da01a34fa6f6343087c207a568 # v3.5.0
         with:
-          go-version: 1.17.4
+          go-version: 1.20.1
       - name: Checkout code
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
       - name: Check module vendoring
@@ -30,50 +31,35 @@ jobs:
           go mod tidy
           go mod vendor
           test -z "$(git status --porcelain)" || (echo "please run 'go mod tidy && go mod vendor', and submit your changes"; exit 1)
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   golangci:
     name: lint
     runs-on: ubuntu-latest
     steps:
       - name: Install Go
-        uses: actions/setup-go@331ce1d993939866bb63c32c6cbbfd48fa76fc57
+        uses: actions/setup-go@6edd4406fa81c3da01a34fa6f6343087c207a568 # v3.5.0
         with:
-          go-version: 1.17.4
+          go-version: 1.20.1
       - name: Checkout code
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@5c56cd6c9dc07901af25baab6f2b0d9f3b7c3018
+        uses: golangci/golangci-lint-action@08e2f20817b15149a52b5b3ebe7de50aff2ba8c5 # v3.4.0
         with:
-          version: v1.37.1
-          skip-go-installation: true
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # renovate: datasource=docker depName=golangci/golangci-lint
+          version: v1.52.2
+          skip-cache: true
 
   precheck:
     runs-on: ubuntu-latest
     steps:
       - name: Install Go
-        uses: actions/setup-go@331ce1d993939866bb63c32c6cbbfd48fa76fc57
+        uses: actions/setup-go@6edd4406fa81c3da01a34fa6f6343087c207a568 # v3.5.0
         with:
-          go-version: 1.17.4
+          go-version: 1.20.1
       - name: Checkout code
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
           # hard-code the path instead of using ${{ github.repository }} to make sure it works for forked repo as well
@@ -82,24 +68,16 @@ jobs:
         run: |
           cd src/github.com/cilium/cilium
           make precheck
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   generate-api:
     runs-on: ubuntu-latest
     steps:
       - name: Install Go
-        uses: actions/setup-go@331ce1d993939866bb63c32c6cbbfd48fa76fc57
+        uses: actions/setup-go@6edd4406fa81c3da01a34fa6f6343087c207a568 # v3.5.0
         with:
-          go-version: 1.17.4
+          go-version: 1.20.1
       - name: Checkout code
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
           # hard-code the path instead of using ${{ github.repository }} to make sure it works for forked repo as well
@@ -108,24 +86,16 @@ jobs:
         run: |
           cd src/github.com/cilium/cilium
           contrib/scripts/check-api-code-gen.sh
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   generate-k8s-api:
     runs-on: ubuntu-latest
     steps:
       - name: Install Go
-        uses: actions/setup-go@331ce1d993939866bb63c32c6cbbfd48fa76fc57
+        uses: actions/setup-go@6edd4406fa81c3da01a34fa6f6343087c207a568 # v3.5.0
         with:
-          go-version: 1.17.4
+          go-version: 1.20.1
       - name: Checkout code
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
           # hard-code the path instead of using ${{ github.repository }} to make sure it works for forked repo as well
@@ -137,20 +107,11 @@ jobs:
           curl -Lo protoc-$PROTOBUF_VERSION-linux-x86_64.zip https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOBUF_VERSION/protoc-$PROTOBUF_VERSION-linux-x86_64.zip
           unzip protoc-$PROTOBUF_VERSION-linux-x86_64.zip
           sudo chmod +x bin/protoc && sudo cp bin/protoc /usr/local/bin
-      - name: Set GOPATH
-        run: |
-          echo "GOPATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
-        shell: bash
       - name: Check k8s generated files
         run: |
+          # Set GOBIN to ensure 'go install' binaries end up in the same directory
+          # as the one actions/setup-go adds to PATH, regardless of GOPATH.
+          export GOBIN="$HOME/go/bin"
+
           cd src/github.com/cilium/cilium
           contrib/scripts/check-k8s-code-gen.sh
-
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

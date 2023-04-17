@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package endpoint
 
@@ -11,17 +10,18 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sirupsen/logrus"
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
 	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
-
-	"github.com/sirupsen/logrus"
-	. "gopkg.in/check.v1"
+	testipcache "github.com/cilium/cilium/pkg/testutils/ipcache"
 )
 
 func (s *EndpointSuite) TestPolicyLog(c *C) {
-	do := &DummyOwner{repo: policy.NewPolicyRepository(nil, nil, nil)}
-	ep := NewEndpointWithState(do, do, nil, testidentity.NewMockIdentityAllocator(nil), 12345, StateReady)
+	do := &DummyOwner{repo: policy.NewPolicyRepository(nil, nil, nil, nil)}
+	ep := NewEndpointWithState(do, do, testipcache.NewMockIPCache(), nil, testidentity.NewMockIdentityAllocator(nil), 12345, StateReady)
 
 	// Initially nil
 	policyLogger := ep.getPolicyLogger()

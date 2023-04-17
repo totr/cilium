@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package v2
 
 import (
 	"fmt"
 	"reflect"
+	"strings"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cilium/cilium/pkg/comparator"
 	k8sConst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
@@ -14,9 +18,6 @@ import (
 	k8sUtils "github.com/cilium/cilium/pkg/k8s/utils"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // +genclient
@@ -238,7 +239,14 @@ func (r *CiliumNetworkPolicy) Parse() (api.Rules, error) {
 // GetControllerName returns the unique name for the controller manager.
 func (r *CiliumNetworkPolicy) GetControllerName() string {
 	name := k8sUtils.GetObjNamespaceName(&r.ObjectMeta)
-	return fmt.Sprintf("%s (v2 %s)", k8sConst.CtrlPrefixPolicyStatus, name)
+	const staticLen = 6
+	var str strings.Builder
+	str.Grow(staticLen + len(name) + len(k8sConst.CtrlPrefixPolicyStatus))
+	str.WriteString(k8sConst.CtrlPrefixPolicyStatus)
+	str.WriteString(" (v2 ")
+	str.WriteString(name)
+	str.WriteString(")")
+	return str.String()
 }
 
 // GetIdentityLabels returns all rule labels in the CiliumNetworkPolicy.

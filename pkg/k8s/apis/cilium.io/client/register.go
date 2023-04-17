@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package client
 
@@ -10,15 +10,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cilium/cilium/pkg/k8s"
-	k8sconstv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	k8sconstv2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
-	"github.com/cilium/cilium/pkg/k8s/synced"
-	k8sversion "github.com/cilium/cilium/pkg/k8s/version"
-	"github.com/cilium/cilium/pkg/logging"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-	"github.com/cilium/cilium/pkg/versioncheck"
-
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -28,6 +19,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/yaml"
+
+	k8sconst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
+	k8sconstv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	k8sconstv2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	"github.com/cilium/cilium/pkg/k8s/client"
+	"github.com/cilium/cilium/pkg/k8s/synced"
+	"github.com/cilium/cilium/pkg/logging"
+	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/versioncheck"
 )
 
 const (
@@ -55,18 +55,36 @@ const (
 	// CLRPCRDName is the full name of the CLRP CRD.
 	CLRPCRDName = k8sconstv2.CLRPKindDefinition + "/" + k8sconstv2.CustomResourceDefinitionVersion
 
-	// CENPCRDName is the full name of the CENP CRD.
-	CENPCRDName = k8sconstv2alpha1.CENPKindDefinition + "/" + k8sconstv2alpha1.CustomResourceDefinitionVersion
+	// CEGPCRDName is the full name of the CEGP CRD.
+	CEGPCRDName = k8sconstv2.CEGPKindDefinition + "/" + k8sconstv2.CustomResourceDefinitionVersion
 
 	// CESCRDName is the full name of the CES CRD.
 	CESCRDName = k8sconstv2alpha1.CESKindDefinition + "/" + k8sconstv2alpha1.CustomResourceDefinitionVersion
+
+	// CCECCRDName is the full name of the CCEC CRD.
+	CCECCRDName = k8sconstv2.CCECKindDefinition + "/" + k8sconstv2.CustomResourceDefinitionVersion
+
+	// CECCRDName is the full name of the CEC CRD.
+	CECCRDName = k8sconstv2.CECKindDefinition + "/" + k8sconstv2.CustomResourceDefinitionVersion
+
+	// BGPPCRDName is the full name of the BGPP CRD.
+	BGPPCRDName = k8sconstv2alpha1.BGPPKindDefinition + "/" + k8sconstv2alpha1.CustomResourceDefinitionVersion
+
+	// LBIPPoolCRDName is the full name of the BGPPool CRD.
+	LBIPPoolCRDName = k8sconstv2alpha1.PoolKindDefinition + "/" + k8sconstv2alpha1.CustomResourceDefinitionVersion
+
+	// CNCCRDName is the full name of the CiliumNodeConfig CRD.
+	CNCCRDName = k8sconstv2alpha1.CNCKindDefinition + "/" + k8sconstv2alpha1.CustomResourceDefinitionVersion
+
+	// CCGCRDName is the full name of the CiliumCIDRGroup CRD.
+	CCGCRDName = k8sconstv2alpha1.CCGKindDefinition + "/" + k8sconstv2alpha1.CustomResourceDefinitionVersion
 )
 
 var (
 	// log is the k8s package logger object.
 	log = logging.DefaultLogger.WithField(logfields.LogSubsys, subsysK8s)
 
-	comparableCRDSchemaVersion = versioncheck.MustVersion(k8sconstv2.CustomResourceDefinitionSchemaVersion)
+	comparableCRDSchemaVersion = versioncheck.MustVersion(k8sconst.CustomResourceDefinitionSchemaVersion)
 )
 
 type crdCreationFn func(clientset apiextensionsclient.Interface) error
@@ -77,17 +95,23 @@ func CreateCustomResourceDefinitions(clientset apiextensionsclient.Interface) er
 	g, _ := errgroup.WithContext(context.Background())
 
 	resourceToCreateFnMapping := map[string]crdCreationFn{
-		synced.CRDResourceName(k8sconstv2.CNPName):        createCNPCRD,
-		synced.CRDResourceName(k8sconstv2.CCNPName):       createCCNPCRD,
-		synced.CRDResourceName(k8sconstv2.CNName):         createNodeCRD,
-		synced.CRDResourceName(k8sconstv2.CIDName):        createIdentityCRD,
-		synced.CRDResourceName(k8sconstv2.CEPName):        createCEPCRD,
-		synced.CRDResourceName(k8sconstv2.CEWName):        createCEWCRD,
-		synced.CRDResourceName(k8sconstv2.CLRPName):       createCLRPCRD,
-		synced.CRDResourceName(k8sconstv2alpha1.CENPName): createCENPCRD,
-		synced.CRDResourceName(k8sconstv2alpha1.CESName):  createCESCRD,
+		synced.CRDResourceName(k8sconstv2.CNPName):            createCRD(CNPCRDName, k8sconstv2.CNPName),
+		synced.CRDResourceName(k8sconstv2.CCNPName):           createCRD(CCNPCRDName, k8sconstv2.CCNPName),
+		synced.CRDResourceName(k8sconstv2.CNName):             createCRD(CNCRDName, k8sconstv2.CNName),
+		synced.CRDResourceName(k8sconstv2.CIDName):            createCRD(CIDCRDName, k8sconstv2.CIDName),
+		synced.CRDResourceName(k8sconstv2.CEPName):            createCRD(CEPCRDName, k8sconstv2.CEPName),
+		synced.CRDResourceName(k8sconstv2.CEWName):            createCRD(CEWCRDName, k8sconstv2.CEWName),
+		synced.CRDResourceName(k8sconstv2.CLRPName):           createCRD(CLRPCRDName, k8sconstv2.CLRPName),
+		synced.CRDResourceName(k8sconstv2.CEGPName):           createCRD(CEGPCRDName, k8sconstv2.CEGPName),
+		synced.CRDResourceName(k8sconstv2alpha1.CESName):      createCRD(CESCRDName, k8sconstv2alpha1.CESName),
+		synced.CRDResourceName(k8sconstv2.CCECName):           createCRD(CCECCRDName, k8sconstv2.CCECName),
+		synced.CRDResourceName(k8sconstv2.CECName):            createCRD(CECCRDName, k8sconstv2.CECName),
+		synced.CRDResourceName(k8sconstv2alpha1.BGPPName):     createCRD(BGPPCRDName, k8sconstv2alpha1.BGPPName),
+		synced.CRDResourceName(k8sconstv2alpha1.LBIPPoolName): createCRD(LBIPPoolCRDName, k8sconstv2alpha1.LBIPPoolName),
+		synced.CRDResourceName(k8sconstv2alpha1.CNCName):      createCRD(CNCCRDName, k8sconstv2alpha1.CNCName),
+		synced.CRDResourceName(k8sconstv2alpha1.CCGName):      createCRD(CCGCRDName, k8sconstv2alpha1.CCGName),
 	}
-	for _, r := range synced.AllCRDResourceNames() {
+	for _, r := range synced.AllCiliumCRDResourceNames() {
 		fn, ok := resourceToCreateFnMapping[r]
 		if !ok {
 			log.Fatalf("Unknown resource %s. Please update pkg/k8s/apis/cilium.io/client to understand this type.", r)
@@ -122,11 +146,29 @@ var (
 	//go:embed crds/v2/ciliumlocalredirectpolicies.yaml
 	crdsCiliumlocalredirectpolicies []byte
 
-	//go:embed crds/v2alpha1/ciliumegressnatpolicies.yaml
-	crdsv2Alpha1Ciliumegressnatpolicies []byte
+	//go:embed crds/v2/ciliumegressgatewaypolicies.yaml
+	crdsv2Ciliumegressgatewaypolicies []byte
 
 	//go:embed crds/v2alpha1/ciliumendpointslices.yaml
 	crdsv2Alpha1Ciliumendpointslices []byte
+
+	//go:embed crds/v2/ciliumclusterwideenvoyconfigs.yaml
+	crdsv2Ciliumclusterwideenvoyconfigs []byte
+
+	//go:embed crds/v2/ciliumenvoyconfigs.yaml
+	crdsv2Ciliumenvoyconfigs []byte
+
+	//go:embed crds/v2alpha1/ciliumbgppeeringpolicies.yaml
+	crdsv2Alpha1Ciliumbgppeeringpolicies []byte
+
+	//go:embed crds/v2alpha1/ciliumloadbalancerippools.yaml
+	crdsv2Alpha1Ciliumloadbalancerippools []byte
+
+	//go:embed crds/v2alpha1/ciliumnodeconfigs.yaml
+	crdsv2Alpha1CiliumNodeConfigs []byte
+
+	//go:embed crds/v2alpha1/ciliumcidrgroups.yaml
+	crdsv2Alpha1CiliumCIDRGroups []byte
 )
 
 // GetPregeneratedCRD returns the pregenerated CRD based on the requested CRD
@@ -156,10 +198,22 @@ func GetPregeneratedCRD(crdName string) apiextensionsv1.CustomResourceDefinition
 		crdBytes = crdsCiliumexternalworkloads
 	case CLRPCRDName:
 		crdBytes = crdsCiliumlocalredirectpolicies
-	case CENPCRDName:
-		crdBytes = crdsv2Alpha1Ciliumegressnatpolicies
+	case CEGPCRDName:
+		crdBytes = crdsv2Ciliumegressgatewaypolicies
 	case CESCRDName:
 		crdBytes = crdsv2Alpha1Ciliumendpointslices
+	case CCECCRDName:
+		crdBytes = crdsv2Ciliumclusterwideenvoyconfigs
+	case CECCRDName:
+		crdBytes = crdsv2Ciliumenvoyconfigs
+	case BGPPCRDName:
+		crdBytes = crdsv2Alpha1Ciliumbgppeeringpolicies
+	case LBIPPoolCRDName:
+		crdBytes = crdsv2Alpha1Ciliumloadbalancerippools
+	case CNCCRDName:
+		crdBytes = crdsv2Alpha1CiliumNodeConfigs
+	case CCGCRDName:
+		crdBytes = crdsv2Alpha1CiliumCIDRGroups
 	default:
 		scopedLog.Fatal("Pregenerated CRD does not exist")
 	}
@@ -173,144 +227,29 @@ func GetPregeneratedCRD(crdName string) apiextensionsv1.CustomResourceDefinition
 	return ciliumCRD
 }
 
-// createCNPCRD creates and updates the CiliumNetworkPolicies CRD. It should be called
-// on agent startup but is idempotent and safe to call again.
-func createCNPCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CNPCRDName)
+// createCRD creates and updates a CRD.
+// It should be called on agent startup but is idempotent and safe to call again.
+func createCRD(crdVersionedName string, crdMetaName string) func(clientset apiextensionsclient.Interface) error {
+	return func(clientset apiextensionsclient.Interface) error {
+		ciliumCRD := GetPregeneratedCRD(crdVersionedName)
 
-	return createUpdateCRD(
-		clientset,
-		CNPCRDName,
-		constructV1CRD(k8sconstv2.CNPName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-// createCCNPCRD creates and updates the CiliumClusterwideNetworkPolicy CRD. It
-// should be called on agent startup but is idempotent and safe to call again.
-func createCCNPCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CCNPCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CCNPCRDName,
-		constructV1CRD(k8sconstv2.CCNPName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-// createCEPCRD creates and updates the CiliumEndpoint CRD. It should be called
-// on agent startup but is idempotent and safe to call again.
-func createCEPCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CEPCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CEPCRDName,
-		constructV1CRD(k8sconstv2.CEPName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-// createNodeCRD creates and updates the CiliumNode CRD. It should be called on
-// agent startup but is idempotent and safe to call again.
-func createNodeCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CNCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CNCRDName,
-		constructV1CRD(k8sconstv2.CNName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-// createCEWCRD creates and updates the CiliumExternalWorkload CRD. It should be called on
-// agent startup but is idempotent and safe to call again.
-func createCEWCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CEWCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CEWCRDName,
-		constructV1CRD(k8sconstv2.CEWName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-// createIdentityCRD creates and updates the CiliumIdentity CRD. It should be
-// called on agent startup but is idempotent and safe to call again.
-func createIdentityCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CIDCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CIDCRDName,
-		constructV1CRD(k8sconstv2.CIDName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-func createCLRPCRD(clientset apiextensionsclient.Interface) error {
-	cLrpCRD := GetPregeneratedCRD(CLRPCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CLRPCRDName,
-		constructV1CRD(k8sconstv2.CLRPName, cLrpCRD),
-		newDefaultPoller(),
-	)
-}
-
-func createCENPCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CENPCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CENPCRDName,
-		constructV1CRD(k8sconstv2alpha1.CENPName, ciliumCRD),
-		newDefaultPoller(),
-	)
-}
-
-// createCESCRD creates and updates the CiliumEndpointSlice CRD. It should be
-// called on agent startup but is idempotent and safe to call again.
-func createCESCRD(clientset apiextensionsclient.Interface) error {
-	ciliumCRD := GetPregeneratedCRD(CESCRDName)
-
-	return createUpdateCRD(
-		clientset,
-		CESCRDName,
-		constructV1CRD(k8sconstv2alpha1.CESName, ciliumCRD),
-		newDefaultPoller(),
-	)
+		return createUpdateCRD(
+			clientset,
+			constructV1CRD(crdMetaName, ciliumCRD),
+			newDefaultPoller(),
+		)
+	}
 }
 
 // createUpdateCRD ensures the CRD object is installed into the K8s cluster. It
 // will create or update the CRD and its validation schema as necessary. This
-// function only accepts v1 CRD objects, and defers to its v1beta1 variant if
-// the cluster only supports v1beta1 CRDs. This allows us to convert all our
-// CRDs into v1 form and only perform conversions on-demand, simplifying the
-// code.
+// function only accepts v1 CRD objects.
 func createUpdateCRD(
 	clientset apiextensionsclient.Interface,
-	crdName string,
 	crd *apiextensionsv1.CustomResourceDefinition,
 	poller poller,
 ) error {
-	scopedLog := log.WithField("name", crdName)
-
-	if !k8sversion.Capabilities().APIExtensionsV1CRD {
-		log.Infof("K8s apiserver does not support v1 CRDs, falling back to v1beta1")
-
-		return createUpdateV1beta1CRD(
-			scopedLog,
-			clientset.ApiextensionsV1beta1(),
-			crdName,
-			crd,
-			poller,
-		)
-	}
+	scopedLog := log.WithField("name", crd.Name)
 
 	v1CRDClient := clientset.ApiextensionsV1()
 	clusterCRD, err := v1CRDClient.CustomResourceDefinitions().Get(
@@ -337,7 +276,7 @@ func createUpdateCRD(
 	if err := updateV1CRD(scopedLog, crd, clusterCRD, v1CRDClient, poller); err != nil {
 		return err
 	}
-	if err := waitForV1CRD(scopedLog, crdName, clusterCRD, v1CRDClient, poller); err != nil {
+	if err := waitForV1CRD(scopedLog, clusterCRD, v1CRDClient, poller); err != nil {
 		return err
 	}
 
@@ -354,11 +293,11 @@ func constructV1CRD(
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				k8sconstv2.CustomResourceDefinitionSchemaVersionKey: k8sconstv2.CustomResourceDefinitionSchemaVersion,
+				k8sconst.CustomResourceDefinitionSchemaVersionKey: k8sconst.CustomResourceDefinitionSchemaVersion,
 			},
 		},
 		Spec: apiextensionsv1.CustomResourceDefinitionSpec{
-			Group: k8sconstv2.CustomResourceDefinitionGroup,
+			Group: k8sconst.CustomResourceDefinitionGroup,
 			Names: apiextensionsv1.CustomResourceDefinitionNames{
 				Kind:       template.Spec.Names.Kind,
 				Plural:     template.Spec.Names.Plural,
@@ -376,7 +315,7 @@ func needsUpdateV1(clusterCRD *apiextensionsv1.CustomResourceDefinition) bool {
 		// no validation detected
 		return true
 	}
-	v, ok := clusterCRD.Labels[k8sconstv2.CustomResourceDefinitionSchemaVersionKey]
+	v, ok := clusterCRD.Labels[k8sconst.CustomResourceDefinitionSchemaVersionKey]
 	if !ok {
 		// no schema version detected
 		return true
@@ -459,7 +398,6 @@ func updateV1CRD(
 
 func waitForV1CRD(
 	scopedLog *logrus.Entry,
-	crdName string,
 	crd *apiextensionsv1.CustomResourceDefinition,
 	client v1client.CustomResourceDefinitionsGetter,
 	poller poller,
@@ -519,8 +457,8 @@ func (p defaultPoll) Poll(
 }
 
 // RegisterCRDs registers all CRDs with the K8s apiserver.
-func RegisterCRDs() error {
-	if err := CreateCustomResourceDefinitions(k8s.APIExtClient()); err != nil {
+func RegisterCRDs(clientset client.Clientset) error {
+	if err := CreateCustomResourceDefinitions(clientset); err != nil {
 		return fmt.Errorf("Unable to create custom resource definition: %s", err)
 	}
 

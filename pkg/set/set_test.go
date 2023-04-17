@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package set
 
 import (
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -70,6 +67,30 @@ func (s *SetTestSuite) TestSliceSubsetOf(c *C) {
 			sub:          []string{"foo", "foo", "foo", "bar", "bar"},
 			main:         []string{"foo", "foo", "bar"},
 			isSubset:     false,
+			expectedDiff: nil,
+		},
+		{
+			sub:          []string{"foo"},
+			main:         []string{},
+			isSubset:     false,
+			expectedDiff: []string{"foo"},
+		},
+		{
+			sub:          []string{},
+			main:         []string{"foo"},
+			isSubset:     true,
+			expectedDiff: nil,
+		},
+		{
+			sub:          []string{},
+			main:         []string{},
+			isSubset:     true,
+			expectedDiff: nil,
+		},
+		{
+			sub:          nil,
+			main:         nil,
+			isSubset:     true,
 			expectedDiff: nil,
 		},
 	}

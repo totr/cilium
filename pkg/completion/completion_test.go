@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package completion
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
-	"context"
 	. "gopkg.in/check.v1"
 )
 

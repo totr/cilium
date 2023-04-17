@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package api
 
 import (
 	"fmt"
 
-	"github.com/cilium/cilium/pkg/lock"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+
+	"github.com/cilium/cilium/pkg/lock"
 )
 
 // Registry holds a set of registered metric handlers
@@ -38,28 +38,41 @@ func (r *Registry) Register(name string, p Plugin) {
 	r.mutex.Unlock()
 }
 
+type NamedHandler struct {
+	Name    string
+	Options Options
+	Handler Handler
+}
+
 // ConfigureHandlers enables a set of metric handlers and initializes them.
 // Only metrics handlers which have been previously registered via the
 // Register() function can be configured.
-func (r *Registry) ConfigureHandlers(registry *prometheus.Registry, enabled Map) (Handlers, error) {
+func (r *Registry) ConfigureHandlers(registry *prometheus.Registry, enabled Map) (*Handlers, error) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	initialized := make(Handlers, 0, len(enabled))
+	var enabledHandlers []NamedHandler
 	for name, opts := range enabled {
 		plugin, ok := r.handlers[name]
 		if !ok {
 			return nil, fmt.Errorf("metric '%s' does not exist", name)
 		}
 
-		handler := plugin.NewHandler()
-		if err := handler.Init(registry, opts); err != nil {
-			return nil, fmt.Errorf("unable to initialize metric '%s': %s", name, err)
+		if cp, ok := plugin.(PluginConflicts); ok {
+			for _, conflict := range cp.ConflictingPlugins() {
+				if _, conflictExists := enabled[conflict]; conflictExists {
+					return nil, fmt.Errorf("plugin %s conflicts with plugin %s", name, conflict)
+				}
+			}
 		}
-		r.log.WithFields(logrus.Fields{"name": name, "status": handler.Status()}).Info("Configured metrics plugin")
 
-		initialized = append(initialized, handler)
+		h := NamedHandler{
+			Name:    name,
+			Options: opts,
+			Handler: plugin.NewHandler(),
+		}
+		enabledHandlers = append(enabledHandlers, h)
 	}
 
-	return initialized, nil
+	return NewHandlers(r.log, registry, enabledHandlers)
 }

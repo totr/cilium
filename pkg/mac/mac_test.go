@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package mac
 
@@ -10,9 +7,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/cilium/cilium/pkg/checker"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 // Hook up gocheck into the "go test" runner.
@@ -28,7 +25,7 @@ func (s *MACSuite) TestUint64(c *C) {
 	m := MAC([]byte{0x11, 0x12, 0x23, 0x34, 0x45, 0x56})
 	v, err := m.Uint64()
 	c.Assert(err, IsNil)
-	c.Assert(v, Equals, uint64(0x564534231211))
+	c.Assert(v, Equals, Uint64MAC(0x564534231211))
 }
 
 func (s *MACSuite) TestUnmarshalJSON(c *C) {

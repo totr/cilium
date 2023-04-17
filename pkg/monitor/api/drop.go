@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package api
 
@@ -56,7 +56,7 @@ var errors = map[uint8]string{
 	157: "IP fragmentation not supported",
 	158: "Service backend not found",
 	160: "No tunnel/encapsulation endpoint (datapath BUG!)",
-	161: "Failed to insert into proxymap", // Unused
+	161: "NAT 46/64 not enabled",
 	162: "Reached EDT rate-limiting drop horizon",
 	163: "Unknown connection tracking state",
 	164: "Local host is unreachable",
@@ -78,12 +78,38 @@ var errors = map[uint8]string{
 	180: "Proxy redirection not supported for protocol",
 	181: "Policy denied by denylist",
 	182: "VLAN traffic disallowed by VLAN filter",
+	183: "Incorrect VNI from VTEP",
+	184: "Failed to update or lookup TC buffer",
+	185: "No SID was found for the IP address",
+	186: "SRv6 state was removed during tail call",
+	187: "L3 translation from IPv4 to IPv6 failed (NAT46)",
+	188: "L3 translation from IPv6 to IPv4 failed (NAT64)",
+	189: "Authentication required",
+	190: "No conntrack map found",
+	191: "No nat map found",
+	192: "Invalid ClusterID",
+	193: "Unsupported packet protocol for DSR encapsulation",
+}
+
+func extendedReason(reason uint8, extError int8) string {
+	if extError == int8(0) {
+		return ""
+	}
+	return fmt.Sprintf("%d", extError)
+}
+
+func DropReasonExt(reason uint8, extError int8) string {
+	if err, ok := errors[reason]; ok {
+		if ext := extendedReason(reason, extError); ext == "" {
+			return err
+		} else {
+			return err + ", " + ext
+		}
+	}
+	return fmt.Sprintf("%d, %d", reason, extError)
 }
 
 // DropReason prints the drop reason in a human readable string
 func DropReason(reason uint8) string {
-	if err, ok := errors[reason]; ok {
-		return err
-	}
-	return fmt.Sprintf("%d", reason)
+	return DropReasonExt(reason, int8(0))
 }

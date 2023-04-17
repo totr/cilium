@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,10 +11,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cilium/cilium/api/v1/models"
-
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
+
+	"github.com/cilium/cilium/api/v1/models"
 )
 
 // DaemonInterface to help with testing.

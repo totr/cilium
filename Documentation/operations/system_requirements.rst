@@ -19,7 +19,7 @@ Summary
 When running Cilium using the container image ``cilium/cilium``, the host
 system must meet these requirements:
 
-- `Linux kernel`_ >= 4.9.17
+- `Linux kernel`_ >= 4.19.57 or equivalent (e.g., 4.18 on RHEL8)
 
 When running Cilium as a native process on your host (i.e. **not** running the
 ``cilium/cilium`` container image) these additional requirements must be met:
@@ -35,82 +35,127 @@ must be met:
 
 - :ref:`req_kvstore` etcd >= 3.1.0
 
-======================== ========================== ===================
-Requirement              Minimum Version            In cilium container
-======================== ========================== ===================
-`Linux kernel`_          >= 4.9.17                  no
-Key-Value store (etcd)   >= 3.1.0                   no
-clang+LLVM               >= 10.0                    yes
-iproute2                 >= 5.9.0 [#iproute2_foot]_ yes
-======================== ========================== ===================
+======================== ============================== ===================
+Requirement              Minimum Version                In cilium container
+======================== ============================== ===================
+`Linux kernel`_          >= 4.19.57 or >= 4.18 on RHEL8 no
+Key-Value store (etcd)   >= 3.1.0                       no
+clang+LLVM               >= 10.0                        yes
+iproute2                 >= 5.9.0 [#iproute2_foot]_     yes
+======================== ============================== ===================
 
 .. [#iproute2_foot] Requires support for eBPF templating as documented
    :ref:`below <iproute2_requirements>`.
 
-Linux Distribution Compatibility Matrix
-=======================================
+Linux Distribution Compatibility & Considerations
+=================================================
 
 The following table lists Linux distributions that are known to work
-well with Cilium.
+well with Cilium. Some distributions require a few initial tweaks. Please make
+sure to read each distribution's specific notes below before attempting to
+run Cilium.
 
 ========================== ====================
 Distribution               Minimum Version
 ========================== ====================
 `Amazon Linux 2`_          all
+`CentOS`_                  >= 8.0
 `Container-Optimized OS`_  all
-`CentOS`_                  >= 7.0 [#centos_foot]_
-Debian_                    >= 9 Stretch
-`Fedora Atomic/Core`_      >= 25
+`CoreOS`_                  all
+Debian_                    >= 10 Buster
 Flatcar_                   all
 LinuxKit_                  all
+Opensuse_                  Tumbleweed, >=Leap 15.4
 `RedHat Enterprise Linux`_ >= 8.0
-Ubuntu_                    >= 16.04.1 (Azure), >= 16.04.2 (Canonical), >= 16.10
-Opensuse_                  Tumbleweed, >=Leap 15.0
-RancherOS_                 >= 1.5.5
+Ubuntu_                    >= 18.04.3
 ========================== ====================
 
 .. _Amazon Linux 2: https://aws.amazon.com/amazon-linux-2/
 .. _CentOS: https://centos.org
 .. _Container-Optimized OS: https://cloud.google.com/container-optimized-os/docs
+.. _CoreOS: https://getfedora.org/coreos?stream=stable
 .. _Debian: https://wiki.debian.org/DebianStretch
-.. _Fedora Atomic/Core: http://www.projectatomic.io/blog/2017/03/fedora_atomic_2week_2/
 .. _Flatcar: https://www.flatcar-linux.org/
 .. _LinuxKit: https://github.com/linuxkit/linuxkit/tree/master/kernel
 .. _RedHat Enterprise Linux: https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux
 .. _Ubuntu: https://wiki.ubuntu.com/YakketyYak/ReleaseNotes#Linux_kernel_4.8
 .. _Opensuse: https://www.opensuse.org/
-.. _RancherOS: https://rancher.com/rancher-os/
-
-.. [#centos_foot] CentOS 7 requires a third-party kernel provided by `ElRepo <http://elrepo.org/tiki/tiki-index.php>`_
-    whereas CentOS 8 ships with a supported kernel.
 
 .. note:: The above list is based on feedback by users. If you find an unlisted
           Linux distribution that works well, please let us know by opening a
           GitHub issue or by creating a pull request that updates this guide.
 
-.. note:: Systemd 245 and above (``systemctl --version``) overrides ``rp_filter`` setting
-          of Cilium network interfaces. This introduces connectivity issues
-          (see :gh-issue:`10645` for details). To avoid that, configure
-          ``rp_filter`` in systemd using the following commands:
 
-          .. code-block:: shell-session
+systemd-based distributions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-              echo 'net.ipv4.conf.lxc*.rp_filter = 0' > /etc/sysctl.d/99-override_cilium_rp_filter.conf
-              systemctl restart systemd-sysctl
+Some distributions need to be configured not to manage "foreign" routes. This
+is the case in Ubuntu 22.04, for example (see :gh-issue:`18706`). This can
+usually be done by setting
+
+.. code-block:: text
+
+   ManageForeignRoutes=no
+   ManageForeignRoutingPolicyRules=no
+
+in ``/etc/systemd/networkd.conf``, but please refer to your distribution's
+documentation for the right way to perform this override.
+
+
+Flatcar
+~~~~~~~
+
+Flatcar is known to manipulate network interfaces created and managed by
+Cilium. This is especially true in the official Flatcar image for AWS EKS, and
+causes connectivity issues and potentially prevents the Cilium agent from
+booting when Cilium is running in ENI mode. To avoid this, disable DHCP on
+these interfaces and mark them as unmanaged by adding
+
+.. code-block:: text
+
+        [Match]
+        Name=eth[1-9]*
+
+        [Network]
+        DHCP=no
+
+        [Link]
+        Unmanaged=yes
+
+to ``/etc/systemd/network/01-no-dhcp.network`` and then
+
+.. code-block:: shell-session
+
+        systemctl daemon-reload
+        systemctl restart systemd-networkd
+
+Ubuntu 22.04 on Raspberry Pi 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Before running Cilium on Ubuntu 22.04 on a Raspberry Pi, please make sure to install the following package:
+
+.. code-block:: shell-session
+
+        sudo apt install linux-modules-extra-raspi
 
 .. _admin_kernel_version:
 
 Linux Kernel
 ============
 
+Base Requirements
+~~~~~~~~~~~~~~~~~
+
 Cilium leverages and builds on the kernel eBPF functionality as well as various
 subsystems which integrate with eBPF. Therefore, host systems are required to
-run Linux kernel version 4.9.17 or later to run a Cilium agent. More recent
-kernels may provide additional eBPF functionality that Cilium will automatically
-detect and use on agent start.
+run a recent Linux kernel to run a Cilium agent. More recent kernels may
+provide additional eBPF functionality that Cilium will automatically detect and
+use on agent start. For this version of Cilium, it is recommended to use kernel
+4.19.57 or later (or equivalent such as 4.18 on RHEL8). For a list of features
+that require newer kernels, see :ref:`advanced_features`.
 
 In order for the eBPF feature to be enabled properly, the following kernel
-configuration options must be enabled. This is typically the case  with
+configuration options must be enabled. This is typically the case with
 distribution kernels. When an option can be built as a module or statically
 linked, either choice is valid.
 
@@ -126,11 +171,23 @@ linked, either choice is valid.
         CONFIG_CRYPTO_USER_API_HASH=y
         CONFIG_CGROUPS=y
         CONFIG_CGROUP_BPF=y
+        CONFIG_PERF_EVENTS=y
 
-.. note::
 
-   Users running Linux 4.10 or earlier with Cilium CIDR policies may face
-   :ref:`cidr_limitations`.
+Requirements for Iptables-based Masquerading
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you are not using BPF for masquerading (``enable-bpf-masquerade=false``, the
+default value), then you will need the following kernel configuration options.
+
+::
+
+        CONFIG_NETFILTER_XT_SET=m
+        CONFIG_IP_SET=m
+        CONFIG_IP_SET_HASH_IP=m
+
+Requirements for L7 and FQDN Policies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 L7 proxy redirection currently uses ``TPROXY`` iptables actions as well
 as ``socket`` matches. For L7 redirection to work as intended kernel
@@ -163,31 +220,68 @@ by adding the following to the helm configuration command line:
 
 .. _features_kernel_matrix:
 
+Requirements for IPsec
+~~~~~~~~~~~~~~~~~~~~~~
+
+The :ref:`encryption_ipsec` feature requires a lot of kernel configuration
+options, most of which to enable the actual encryption. Note that the
+specific options required depend on the algorithm. The list below
+corresponds to requirements for GCM-128-AES.
+
+::
+
+        CONFIG_XFRM=y
+        CONFIG_XFRM_OFFLOAD=y
+        CONFIG_XFRM_STATISTICS=y
+        CONFIG_XFRM_ALGO=m
+        CONFIG_XFRM_USER=m
+        CONFIG_INET{,6}_ESP=m
+        CONFIG_INET{,6}_IPCOMP=m
+        CONFIG_INET{,6}_XFRM_TUNNEL=m
+        CONFIG_INET{,6}_TUNNEL=m
+        CONFIG_INET_XFRM_MODE_TUNNEL=m
+        CONFIG_CRYPTO_AEAD=m
+        CONFIG_CRYPTO_AEAD2=m
+        CONFIG_CRYPTO_GCM=m
+        CONFIG_CRYPTO_SEQIV=m
+        CONFIG_CRYPTO_CBC=m
+        CONFIG_CRYPTO_HMAC=m
+        CONFIG_CRYPTO_SHA256=m
+        CONFIG_CRYPTO_AES=m
+
+Requirements for the Bandwidth Manager
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The :ref:`bandwidth-manager` requires the following kernel configuration option
+to change the packet scheduling algorithm.
+
+::
+
+        CONFIG_NET_SCH_FQ=m
+
+.. _advanced_features:
+
 Required Kernel Versions for Advanced Features
 ==============================================
 
-Cilium requires Linux kernel 4.9.17 or higher; however, development on
-additional kernel features continues to progress in the Linux community. Some
+Additional kernel features continues to progress in the Linux community. Some
 of Cilium's features are dependent on newer kernel versions and are thus
 enabled by upgrading to more recent kernel versions as detailed below.
 
-=========================================== ===============================
-Cilium Feature                              Minimum Kernel Version
-=========================================== ===============================
-:ref:`concepts_fragmentation`               >= 4.10
-:ref:`cidr_limitations`                     >= 4.11
-:ref:`encryption_ipsec` in tunneling mode   >= 4.19
-:ref:`encryption_wg`                        >= 5.6
-:ref:`host-services`                        >= 4.19.57, >= 5.1.16,  >= 5.2
-:ref:`kubeproxy-free`                       >= 4.19.57, >= 5.1.16,  >= 5.2
-:ref:`bandwidth-manager`                    >= 5.1
-:ref:`local-redirect-policy`                >= 4.19.57, >= 5.1.16,  >= 5.2
-Full support for :ref:`session-affinity`    >= 5.7
-BPF-based proxy redirection                 >= 5.7
-BPF-based host routing                      >= 5.10
-Socket-level LB bypass in pod netns         >= 5.7
-:ref:`egress-gateway`                       >= 5.2
-=========================================== ===============================
+====================================================== ===============================
+Cilium Feature                                         Minimum Kernel Version
+====================================================== ===============================
+:ref:`bandwidth-manager`                               >= 5.1
+:ref:`egress-gateway`                                  >= 5.2
+VXLAN Tunnel Endpoint (VTEP) Integration               >= 5.2
+:ref:`encryption_wg`                                   >= 5.6
+Full support for :ref:`session-affinity`               >= 5.7
+BPF-based proxy redirection                            >= 5.7
+Socket-level LB bypass in pod netns                    >= 5.7
+L3 devices                                             >= 5.8
+BPF-based host routing                                 >= 5.10
+IPv6 BIG TCP support                                   >= 5.19
+====================================================== ===============================
 
 .. _req_kvstore:
 
@@ -252,6 +346,8 @@ If you are running Cilium in an environment that requires firewall rules to enab
 
 It is recommended but optional that all nodes running Cilium in a given cluster must be able to ping each other so ``cilium-health`` can report and monitor connectivity among nodes. This requires ICMP Type 0/8, Code 0 open among all nodes. TCP 4240 should also be open among all nodes for ``cilium-health`` monitoring. Note that it is also an option to only use one of these two methods to enable health monitoring. If the firewall does not permit either of these methods, Cilium will still operate fine but will not be able to provide health information.
 
+For IPSec enabled Cilium deployments, you need to ensure that the firewall allows ESP traffic through. For example, AWS Security Groups doesn't allow ESP traffic by default.
+
 If you are using VXLAN overlay network mode, Cilium uses Linux's default VXLAN port 8472 over UDP, unless Linux has been configured otherwise. In this case, UDP 8472 must be open among all nodes to enable VXLAN overlay mode. The same applies to Geneve overlay network mode, except the port is UDP 6081.
 
 If you are running in direct routing mode, your network must allow routing of pod IPs.
@@ -305,24 +401,25 @@ ICMP 8/0                 egress          ``worker-sg`` (self) health checks
 
 The following ports should also be available on each node:
 
-======================== ===========================================================
+======================== ==================================================================
 Port Range / Protocol    Description
-======================== ===========================================================
+======================== ==================================================================
 4240/tcp                 cluster health checks (``cilium-health``)
 4244/tcp                 Hubble server
 4245/tcp                 Hubble Relay
 6060/tcp                 cilium-agent pprof server (listening on 127.0.0.1)
 6061/tcp                 cilium-operator pprof server (listening on 127.0.0.1)
 6062/tcp                 Hubble Relay pprof server (listening on 127.0.0.1)
-6942/tcp                 operator Prometheus metrics
-9090/tcp                 cilium-agent Prometheus metrics
-9876/tcp                 cilium-agent health status API
+9879/tcp                 cilium-agent health status API (listening on 127.0.0.1 and/or ::1)
 9890/tcp                 cilium-agent gops server (listening on 127.0.0.1)
 9891/tcp                 operator gops server (listening on 127.0.0.1)
 9892/tcp                 clustermesh-apiserver gops server (listening on 127.0.0.1)
 9893/tcp                 Hubble Relay gops server (listening on 127.0.0.1)
+9962/tcp                 cilium-agent Prometheus metrics
+9963/tcp                 cilium-operator Prometheus metrics
+9964/tcp                 cilium-proxy Prometheus metrics
 51871/udp                WireGuard encryption tunnel endpoint
-======================== ===========================================================
+======================== ==================================================================
 
 .. _admin_mount_bpffs:
 
@@ -370,7 +467,7 @@ Privileges
 ==========
 
 The following privileges are required to run Cilium. When running the standard
-Kubernetes `DaemonSet`, the privileges are automatically granted to Cilium.
+Kubernetes :term:`DaemonSet`, the privileges are automatically granted to Cilium.
 
 * Cilium interacts with the Linux kernel to install eBPF program which will then
   perform networking tasks and implement security rules. In order to install

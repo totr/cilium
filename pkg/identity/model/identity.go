@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package model
 
@@ -33,9 +33,8 @@ func CreateModel(id *identity.Identity) *models.Identity {
 	}
 
 	ret := &models.Identity{
-		ID:           int64(id.ID),
-		Labels:       make([]string, 0, len(id.Labels)),
-		LabelsSHA256: id.GetLabelsSHA256(),
+		ID:     int64(id.ID),
+		Labels: make([]string, 0, len(id.Labels)),
 	}
 
 	for _, v := range id.Labels {

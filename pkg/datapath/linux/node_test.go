@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package linux
 
 import (
 	"net"
 
+	"gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/cidr"
-	"github.com/cilium/cilium/pkg/datapath"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/datapath/fake"
+	datapath "github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/mtu"
-
-	"gopkg.in/check.v1"
 )
 
 var (
@@ -32,33 +30,34 @@ var (
 )
 
 func (s *linuxTestSuite) TestTunnelCIDRUpdateRequired(c *check.C) {
-	c1 := cidr.MustParseCIDR("10.1.0.0/16")
-	c2 := cidr.MustParseCIDR("10.2.0.0/16")
+	nilPrefixCluster := cmtypes.PrefixCluster{}
+	c1 := cmtypes.PrefixClusterFromCIDR(cidr.MustParseCIDR("10.1.0.0/16"), 0)
+	c2 := cmtypes.PrefixClusterFromCIDR(cidr.MustParseCIDR("10.2.0.0/16"), 0)
 	ip1 := net.ParseIP("1.1.1.1")
 	ip2 := net.ParseIP("2.2.2.2")
 
-	c.Assert(cidrNodeMappingUpdateRequired(nil, nil, ip1, ip1, 0, 0), check.Equals, false) // disabled -> disabled
-	c.Assert(cidrNodeMappingUpdateRequired(nil, c1, ip1, ip1, 0, 0), check.Equals, true)   // disabled -> c1
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 0), check.Equals, false)   // c1 -> c1
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip2, 0, 0), check.Equals, true)    // c1 -> c1 (changed host IP)
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c2, ip2, ip2, 0, 0), check.Equals, true)    // c1 -> c2
-	c.Assert(cidrNodeMappingUpdateRequired(c2, nil, ip2, ip2, 0, 0), check.Equals, false)  // c2 -> disabled
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 1), check.Equals, true)    // key upgrade 0 -> 1
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 1, 0), check.Equals, true)    // key downgrade 1 -> 0
+	c.Assert(cidrNodeMappingUpdateRequired(nilPrefixCluster, nilPrefixCluster, ip1, ip1, 0, 0), check.Equals, false) // disabled -> disabled
+	c.Assert(cidrNodeMappingUpdateRequired(nilPrefixCluster, c1, ip1, ip1, 0, 0), check.Equals, true)                // disabled -> c1
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 0), check.Equals, false)                             // c1 -> c1
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip2, 0, 0), check.Equals, true)                              // c1 -> c1 (changed host IP)
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c2, ip2, ip2, 0, 0), check.Equals, true)                              // c1 -> c2
+	c.Assert(cidrNodeMappingUpdateRequired(c2, nilPrefixCluster, ip2, ip2, 0, 0), check.Equals, false)               // c2 -> disabled
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 1), check.Equals, true)                              // key upgrade 0 -> 1
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 1, 0), check.Equals, true)                              // key downgrade 1 -> 0
 
-	c1 = cidr.MustParseCIDR("f00d::a0a:0:0:0/96")
-	c2 = cidr.MustParseCIDR("f00d::b0b:0:0:0/96")
+	c1 = cmtypes.PrefixClusterFromCIDR(cidr.MustParseCIDR("f00d::a0a:0:0:0/96"), 0)
+	c2 = cmtypes.PrefixClusterFromCIDR(cidr.MustParseCIDR("f00d::b0b:0:0:0/96"), 0)
 	ip1 = net.ParseIP("cafe::1")
 	ip2 = net.ParseIP("cafe::2")
 
-	c.Assert(cidrNodeMappingUpdateRequired(nil, nil, ip1, ip1, 0, 0), check.Equals, false) // disabled -> disabled
-	c.Assert(cidrNodeMappingUpdateRequired(nil, c1, ip1, ip1, 0, 0), check.Equals, true)   // disabled -> c1
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 0), check.Equals, false)   // c1 -> c1
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip2, 0, 0), check.Equals, true)    // c1 -> c1 (changed host IP)
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c2, ip2, ip2, 0, 0), check.Equals, true)    // c1 -> c2
-	c.Assert(cidrNodeMappingUpdateRequired(c2, nil, ip2, ip2, 0, 0), check.Equals, false)  // c2 -> disabled
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 1), check.Equals, true)    // key upgrade 0 -> 1
-	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 1, 0), check.Equals, true)    // key downgrade 1 -> 0
+	c.Assert(cidrNodeMappingUpdateRequired(nilPrefixCluster, nilPrefixCluster, ip1, ip1, 0, 0), check.Equals, false) // disabled -> disabled
+	c.Assert(cidrNodeMappingUpdateRequired(nilPrefixCluster, c1, ip1, ip1, 0, 0), check.Equals, true)                // disabled -> c1
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 0), check.Equals, false)                             // c1 -> c1
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip2, 0, 0), check.Equals, true)                              // c1 -> c1 (changed host IP)
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c2, ip2, ip2, 0, 0), check.Equals, true)                              // c1 -> c2
+	c.Assert(cidrNodeMappingUpdateRequired(c2, nilPrefixCluster, ip2, ip2, 0, 0), check.Equals, false)               // c2 -> disabled
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 0, 1), check.Equals, true)                              // key upgrade 0 -> 1
+	c.Assert(cidrNodeMappingUpdateRequired(c1, c1, ip1, ip1, 1, 0), check.Equals, true)                              // key downgrade 1 -> 0
 }
 
 func (s *linuxTestSuite) TestCreateNodeRoute(c *check.C) {
@@ -83,8 +82,8 @@ func (s *linuxTestSuite) TestCreateNodeRoute(c *check.C) {
 	c.Assert(err, check.IsNil)
 	c.Assert(generatedRoute.Prefix, checker.DeepEquals, *c1.IPNet)
 	c.Assert(generatedRoute.Device, check.Equals, dpConfig.HostDevice)
-	c.Assert(*generatedRoute.Nexthop, checker.DeepEquals, fakeNodeAddressing.IPv6().Router())
-	c.Assert(generatedRoute.Local, checker.DeepEquals, fakeNodeAddressing.IPv6().PrimaryExternal())
+	c.Assert(generatedRoute.Nexthop, check.IsNil)
+	c.Assert(generatedRoute.Local, checker.DeepEquals, fakeNodeAddressing.IPv6().Router())
 }
 
 func (s *linuxTestSuite) TestCreateNodeRouteSpecMtu(c *check.C) {
@@ -101,7 +100,7 @@ func (s *linuxTestSuite) TestCreateNodeRouteSpecMtu(c *check.C) {
 
 func (s *linuxTestSuite) TestStoreLoadNeighLinks(c *check.C) {
 	tmpDir := c.MkDir()
-	devExpected := "dev1"
+	devExpected := []string{"dev1"}
 	err := storeNeighLink(tmpDir, devExpected)
 	c.Assert(err, check.IsNil)
 

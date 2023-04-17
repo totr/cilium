@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package allocator
 
@@ -148,7 +148,10 @@ func (c *cache) OnDelete(id idpool.ID, key AllocatorKey) {
 		if value := a.localKeys.lookupID(id); value != nil {
 			ctx, cancel := context.WithTimeout(context.TODO(), backendOpTimeout)
 			defer cancel()
-			a.backend.UpdateKey(ctx, id, value, true)
+			err := a.backend.UpdateKey(ctx, id, value, true)
+			if err != nil {
+				log.WithError(err).Errorf("OnDelete MasterKeyProtection update for key %q", id)
+			}
 			return
 		}
 	}

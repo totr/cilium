@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Hubble
+// Copyright Authors of Hubble
 
 package v1
 
@@ -37,6 +37,8 @@ func FlowProtocol(flow *pb.Flow) string {
 				return "ICMPv4"
 			case l4.GetICMPv6() != nil:
 				return "ICMPv6"
+			case l4.GetSCTP() != nil:
+				return "SCTP"
 			}
 		}
 		return "Unknown L4"

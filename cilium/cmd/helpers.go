@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -17,17 +17,19 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cilium/cilium/api/v1/client/daemon"
+	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/defaults"
 	endpointid "github.com/cilium/cilium/pkg/endpoint/id"
+	"github.com/cilium/cilium/pkg/iana"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/maps/policymap"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy/trafficdirection"
 	"github.com/cilium/cilium/pkg/u8proto"
-
-	"github.com/spf13/cobra"
 )
 
 // Fatalf prints the Printf formatted message to stderr and exits the program
@@ -339,13 +341,14 @@ func updatePolicyKey(pa *PolicyUpdateArgs, add bool) {
 		entry := fmt.Sprintf("%d %d/%s", pa.label, pa.port, u8p.String())
 		if add {
 			var (
-				proxyPort uint16
+				authType  uint8  // never set
+				proxyPort uint16 // never set
 				err       error
 			)
 			if pa.isDeny {
 				err = policyMap.Deny(pa.label, pa.port, u8p, pa.trafficDirection)
 			} else {
-				err = policyMap.Allow(pa.label, pa.port, u8p, pa.trafficDirection, proxyPort)
+				err = policyMap.Allow(pa.label, pa.port, u8p, pa.trafficDirection, authType, proxyPort)
 			}
 			if err != nil {
 				Fatalf("Cannot add policy key '%s': %s\n", entry, err)
@@ -408,7 +411,7 @@ func getIpv6EnableStatus() bool {
 	if _, err := client.Daemon.GetHealthz(params); err == nil {
 		if resp, err := client.ConfigGet(); err == nil {
 			if resp.Status != nil {
-				return resp.Status.Addressing.IPV6 != nil && resp.Status.Addressing.IPV6.Enabled == true
+				return resp.Status.Addressing.IPV6 != nil && resp.Status.Addressing.IPV6.Enabled
 			}
 		}
 	} else { // else read the EnableIPv6 status from the file-system
@@ -434,4 +437,47 @@ func mergeMaps(m1, m2 map[string]interface{}) map[string]interface{} {
 		m3[k] = v
 	}
 	return m3
+}
+
+// parseL4PortsSlice parses a given `slice` of strings. Each string should be in
+// the form of `<port>[/<protocol>]`, where the `<port>` is an integer or a port name and
+// `<protocol>` is an optional layer 4 protocol `tcp` or `udp`. In case
+// `protocol` is not present, or is set to `any`, the parsed port will be set to
+// `models.PortProtocolAny`.
+func parseL4PortsSlice(slice []string) ([]*models.Port, error) {
+	rules := []*models.Port{}
+	for _, v := range slice {
+		vSplit := strings.Split(v, "/")
+		var protoStr string
+		switch len(vSplit) {
+		case 1:
+			protoStr = models.PortProtocolANY
+		case 2:
+			protoStr = strings.ToUpper(vSplit[1])
+			switch protoStr {
+			case models.PortProtocolTCP, models.PortProtocolUDP, models.PortProtocolSCTP, models.PortProtocolICMP, models.PortProtocolICMPV6, models.PortProtocolANY:
+			default:
+				return nil, fmt.Errorf("invalid protocol %q", protoStr)
+			}
+		default:
+			return nil, fmt.Errorf("invalid format %q. Should be <port>[/<protocol>]", v)
+		}
+		var port uint16
+		portStr := vSplit[0]
+		if !iana.IsSvcName(portStr) {
+			portUint64, err := strconv.ParseUint(portStr, 10, 16)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %q: %s", portStr, err)
+			}
+			port = uint16(portUint64)
+			portStr = ""
+		}
+		l4 := &models.Port{
+			Port:     port,
+			Name:     portStr,
+			Protocol: protoStr,
+		}
+		rules = append(rules, l4)
+	}
+	return rules, nil
 }

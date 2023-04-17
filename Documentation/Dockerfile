@@ -1,4 +1,5 @@
-FROM docker.io/library/python:3.7.9-alpine3.11
+# Python version should match the one in use in Read The Docs
+FROM docker.io/library/python:3.7.9-alpine3.13 AS docs-base
 
 LABEL maintainer="maintainer@cilium.io"
 
@@ -8,21 +9,24 @@ RUN apk add --no-cache --virtual --update \
     npm \
     bash \
     ca-certificates \
-    enchant \
+    enchant2 \
+    enchant2-dev \
     git \
     libc6-compat \
     py-pip \
-    python \
-    sphinx-python \
+    python3 \
+    py3-sphinx \
     gcc \
     musl-dev \
     && true
 
+FROM docs-base AS docs-builder
 ADD ./requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
 ENV HOME=/tmp
 ENV READTHEDOCS_VERSION=$READTHEDOCS_VERSION
+ENV MAKE_GIT_REPO_SAFE=1
 
 ## Workaround odd behaviour of sphinx versionwarning extension. It wants to
 ## write runtime data inside a system directory.

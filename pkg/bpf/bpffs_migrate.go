@@ -1,18 +1,18 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
+
 package bpf
 
 import (
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 
-	"encoding/binary"
-
-	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/ebpf"
-
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
+
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 const bpffsPending = ":pending"
@@ -25,18 +25,12 @@ const bpffsPending = ":pending"
 // Takes a bpffsPath explicitly since it does not necessarily execute within
 // the same runtime as the agent. It is imported from a Cilium cmd that takes
 // its bpffs path from an env.
-func StartBPFFSMigration(bpffsPath, elfPath string) error {
-	coll, err := ebpf.LoadCollectionSpec(elfPath)
-	if err != nil {
-		return err
+func StartBPFFSMigration(bpffsPath string, coll *ebpf.CollectionSpec) error {
+	if coll == nil {
+		return errors.New("can't migrate a nil CollectionSpec")
 	}
 
 	for name, spec := range coll.Maps {
-		// Parse iproute2 bpf_elf_map's extra fields, if any.
-		if err := parseExtra(spec, coll); err != nil {
-			return fmt.Errorf("parsing extra bytes of ELF map definition %q:", name)
-		}
-
 		// Skip map specs without the pinning flag. Also takes care of skipping .data,
 		// .rodata and .bss.
 		if spec.Pinning == 0 {
@@ -60,18 +54,12 @@ func StartBPFFSMigration(bpffsPath, elfPath string) error {
 // Takes a bpffsPath explicitly since it does not necessarily execute within
 // the same runtime as the agent. It is imported from a Cilium cmd that takes
 // its bpffs path from an env.
-func FinalizeBPFFSMigration(bpffsPath, elfPath string, revert bool) error {
-	coll, err := ebpf.LoadCollectionSpec(elfPath)
-	if err != nil {
-		return err
+func FinalizeBPFFSMigration(bpffsPath string, coll *ebpf.CollectionSpec, revert bool) error {
+	if coll == nil {
+		return errors.New("can't migrate a nil CollectionSpec")
 	}
 
 	for name, spec := range coll.Maps {
-		// Parse iproute2 bpf_elf_map's extra fields, if any.
-		if err := parseExtra(spec, coll); err != nil {
-			return fmt.Errorf("parsing extra bytes of ELF map definition %q:", name)
-		}
-
 		// Skip map specs without the pinning flag. Also takes care of skipping .data,
 		// .rodata and .bss.
 		// Don't unpin existing maps if their new versions are missing the pinning flag.
@@ -83,35 +71,6 @@ func FinalizeBPFFSMigration(bpffsPath, elfPath string, revert bool) error {
 			return err
 		}
 	}
-
-	return nil
-}
-
-// parseExtra parses extra bytes that appear at the end of a struct bpf_elf_map.
-// If the Extra field is empty, the function is a no-op.
-//
-// The library supports parsing `struct bpf_map_def` out of the box, but Cilium
-// uses `struct bpf_elf_map` instead, which is bigger.
-// The 'extra' bytes are exposed in the Map's Extra field, and appear in the
-// following order (all u32): id, pinning, inner_id, inner_idx.
-func parseExtra(spec *ebpf.MapSpec, coll *ebpf.CollectionSpec) error {
-	// Nothing to parse. This will be the case for BTF-style maps that have
-	// built-in support for pinning and map-in-map.
-	if spec.Extra.Len() == 0 {
-		return nil
-	}
-
-	// Discard the id as it's not needed.
-	if _, err := io.CopyN(io.Discard, &spec.Extra, 4); err != nil {
-		return fmt.Errorf("reading id field: %v", err)
-	}
-
-	// Read the pinning field.
-	var pinning uint32
-	if err := binary.Read(&spec.Extra, coll.ByteOrder, &pinning); err != nil {
-		return fmt.Errorf("reading pinning field: %v", err)
-	}
-	spec.Pinning = ebpf.PinType(pinning)
 
 	return nil
 }
@@ -142,8 +101,10 @@ func repinMap(bpffsPath string, name string, spec *ebpf.MapSpec) error {
 
 	dest := file + bpffsPending
 
-	log.WithFields(logrus.Fields{logfields.BPFMapName: name, logfields.BPFMapPath: file}).
-		Infof("New version of map has different properties, re-pinning with '%s' suffix", bpffsPending)
+	log.WithFields(logrus.Fields{
+		logfields.BPFMapName: name,
+		logfields.BPFMapPath: file,
+	}).Infof("New version of map has different properties, re-pinning with '%s' suffix", bpffsPending)
 
 	// Atomically re-pin the map to the its new path.
 	if err := pinned.Pin(dest); err != nil {
@@ -174,8 +135,10 @@ func finalizeMap(bpffsPath, name string, revert bool) error {
 	// Pending Map was found on bpffs and needs to be reverted.
 	if revert {
 		dest := filepath.Join(bpffsPath, name)
-		log.WithFields(logrus.Fields{logfields.BPFMapPath: dest, logfields.BPFMapName: name}).
-			Infof("Repinning without '%s' suffix after failed migration", bpffsPending)
+		log.WithFields(logrus.Fields{
+			logfields.BPFMapPath: dest,
+			logfields.BPFMapName: name,
+		}).Infof("Repinning without '%s' suffix after failed migration", bpffsPending)
 
 		// Atomically re-pin the map to its original path.
 		if err := pending.Pin(dest); err != nil {
@@ -185,8 +148,10 @@ func finalizeMap(bpffsPath, name string, revert bool) error {
 		return nil
 	}
 
-	log.WithFields(logrus.Fields{logfields.BPFMapPath: file, logfields.BPFMapName: name}).
-		Info("Unpinning map after successful recreation")
+	log.WithFields(logrus.Fields{
+		logfields.BPFMapPath: file,
+		logfields.BPFMapName: name,
+	}).Info("Unpinning map after successful recreation")
 
 	// Pending Map found on bpffs and its replacement was successfully loaded.
 	// Unpin the old map since it no longer needs to be interacted with from userspace.

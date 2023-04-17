@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package types
 
 import (
 	"net"
-
-	"github.com/cilium/cilium/pkg/checker"
+	"net/netip"
 
 	"gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/checker"
 )
 
 var testIPv6Address IPv6 = [16]byte{240, 13, 0, 0, 0, 0, 0, 0, 172, 16, 0, 20, 0, 0, 0, 1}
@@ -24,6 +22,13 @@ func (s *IPv6Suite) TestIP(c *check.C) {
 	var expectedAddress net.IP
 	expectedAddress = []byte{240, 13, 0, 0, 0, 0, 0, 0, 172, 16, 0, 20, 0, 0, 0, 1}
 	result := testIPv6Address.IP()
+
+	c.Assert(result, checker.DeepEquals, expectedAddress)
+}
+
+func (s *IPv6Suite) TestAddr(c *check.C) {
+	expectedAddress := netip.AddrFrom16(testIPv6Address)
+	result := testIPv6Address.Addr()
 
 	c.Assert(result, checker.DeepEquals, expectedAddress)
 }

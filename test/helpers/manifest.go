@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -280,6 +280,8 @@ func (m *DeploymentManager) DeleteAll() {
 // DeployCilium()
 func (m *DeploymentManager) DeleteCilium() {
 	if m.ciliumDeployed {
+		// Ensure any Cilium-managed pods are terminated first
+		m.kubectl.WaitTerminatingPods(2 * time.Minute)
 		ginkgoext.By("Deleting Cilium")
 		m.kubectl.DeleteAndWait(m.ciliumFilename, true)
 		m.kubectl.WaitTerminatingPods(2 * time.Minute)

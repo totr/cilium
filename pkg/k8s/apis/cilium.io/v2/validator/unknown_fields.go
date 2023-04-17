@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package validator
 
@@ -9,14 +9,14 @@ import (
 	"fmt"
 	"regexp"
 
-	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
-	"github.com/cilium/cilium/pkg/logging/logfields"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/jeremywohl/flatten"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	cilium_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 )
 
 // detectUnknownFields will check the given policy against the expected policy
@@ -211,9 +211,9 @@ func getFields(u map[string]interface{}) ([]string, error) {
 
 // arbitraryLabelRegex matches any field path that includes "matchLabels" or
 // "matchExpressions". For example, it matches the following:
-//  - spec.endpointSelector.matchLabels.*
-//  - specs.0.ingress.0.fromEndpoints.0.matchLabels.*
-//  - specs.0.ingress.0.fromEndpoints.0.matchExpressions.*
+//   - spec.endpointSelector.matchLabels.*
+//   - specs.0.ingress.0.fromEndpoints.0.matchLabels.*
+//   - specs.0.ingress.0.fromEndpoints.0.matchExpressions.*
 var arbitraryLabelRegex = regexp.MustCompile(`^(.+\.(matchLabels|matchExpressions))\..+$`)
 
 func flattenObject(obj map[string]interface{}) (map[string]interface{}, error) {

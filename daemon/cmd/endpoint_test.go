@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package cmd
 
@@ -12,27 +11,28 @@ import (
 	"runtime"
 	"time"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/api/v1/models"
 	apiEndpoint "github.com/cilium/cilium/api/v1/server/restapi/endpoint"
 	"github.com/cilium/cilium/pkg/checker"
 	endpointid "github.com/cilium/cilium/pkg/endpoint/id"
 	"github.com/cilium/cilium/pkg/identity"
+	"github.com/cilium/cilium/pkg/ipam"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/testutils"
-
-	. "gopkg.in/check.v1"
 )
 
 func getEPTemplate(c *C, d *Daemon) *models.EndpointChangeRequest {
-	ip4, ip6, err := d.ipam.AllocateNext("", "test")
+	ip4, ip6, err := d.ipam.AllocateNext("", "test", ipam.PoolDefault)
 	c.Assert(err, Equals, nil)
 	c.Assert(ip4, Not(IsNil))
 	c.Assert(ip6, Not(IsNil))
 
 	return &models.EndpointChangeRequest{
 		ContainerName: "foo",
-		State:         models.EndpointStateWaitingForIdentity,
+		State:         models.EndpointStateWaitingDashForDashIdentity.Pointer(),
 		Addressing: &models.AddressPair{
 			IPV6: ip6.IP.String(),
 			IPV4: ip4.IP.String(),
@@ -41,7 +41,7 @@ func getEPTemplate(c *C, d *Daemon) *models.EndpointChangeRequest {
 }
 
 func (ds *DaemonSuite) TestEndpointAddReservedLabel(c *C) {
-	assertOnMetric(c, string(models.EndpointStateWaitingForIdentity), 0)
+	assertOnMetric(c, string(models.EndpointStateWaitingDashForDashIdentity), 0)
 
 	epTemplate := getEPTemplate(c, ds.d)
 	epTemplate.Labels = []string{"reserved:world"}
@@ -51,7 +51,7 @@ func (ds *DaemonSuite) TestEndpointAddReservedLabel(c *C) {
 
 	// Endpoint was created with invalid data; should transition from
 	// WaitingForIdentity -> Invalid.
-	assertOnMetric(c, string(models.EndpointStateWaitingForIdentity), 0)
+	assertOnMetric(c, string(models.EndpointStateWaitingDashForDashIdentity), 0)
 	assertOnMetric(c, string(models.EndpointStateInvalid), 0)
 
 	// Endpoint is created with initial label as well as disallowed
@@ -63,12 +63,12 @@ func (ds *DaemonSuite) TestEndpointAddReservedLabel(c *C) {
 
 	// Endpoint was created with invalid data; should transition from
 	// WaitingForIdentity -> Invalid.
-	assertOnMetric(c, string(models.EndpointStateWaitingForIdentity), 0)
+	assertOnMetric(c, string(models.EndpointStateWaitingDashForDashIdentity), 0)
 	assertOnMetric(c, string(models.EndpointStateInvalid), 0)
 }
 
 func (ds *DaemonSuite) TestEndpointAddInvalidLabel(c *C) {
-	assertOnMetric(c, string(models.EndpointStateWaitingForIdentity), 0)
+	assertOnMetric(c, string(models.EndpointStateWaitingDashForDashIdentity), 0)
 
 	epTemplate := getEPTemplate(c, ds.d)
 	epTemplate.Labels = []string{"reserved:foo"}
@@ -78,12 +78,12 @@ func (ds *DaemonSuite) TestEndpointAddInvalidLabel(c *C) {
 
 	// Endpoint was created with invalid data; should transition from
 	// WaitingForIdentity -> Invalid.
-	assertOnMetric(c, string(models.EndpointStateWaitingForIdentity), 0)
+	assertOnMetric(c, string(models.EndpointStateWaitingDashForDashIdentity), 0)
 	assertOnMetric(c, string(models.EndpointStateInvalid), 0)
 }
 
 func (ds *DaemonSuite) TestEndpointAddNoLabels(c *C) {
-	assertOnMetric(c, string(models.EndpointStateWaitingForIdentity), 0)
+	assertOnMetric(c, string(models.EndpointStateWaitingDashForDashIdentity), 0)
 
 	// For this test case, we want to allow the endpoint controllers to rebuild
 	// the endpoint after getting new labels.

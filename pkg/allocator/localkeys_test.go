@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2017 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package allocator
 
 import (
-	"github.com/cilium/cilium/pkg/idpool"
-
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/idpool"
 )
 
 func (s *AllocatorSuite) TestLocalKeys(c *C) {

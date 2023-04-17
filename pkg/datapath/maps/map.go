@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package maps
 
@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/cilium/cilium/pkg/bpf"
-	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/callsmap"
@@ -77,8 +76,7 @@ func (ms *MapSweeper) deleteMapIfStale(path string, filename string, endpointID 
 
 func (ms *MapSweeper) checkStaleGlobalMap(path string, filename string) {
 	globalCTinUse := ms.HasGlobalCT() || option.Config.EnableNodePort ||
-		!option.Config.InstallIptRules && (option.Config.EnableIPv4Masquerade ||
-			option.Config.EnableIPv6Masquerade)
+		!option.Config.InstallIptRules && option.Config.MasqueradingEnabled()
 
 	if !globalCTinUse && ctmap.NameIsGlobal(filename) {
 		ms.RemoveMapPath(path)
@@ -96,7 +94,6 @@ func (ms *MapSweeper) walk(path string, _ os.FileInfo, _ error) error {
 		ctmap.MapNameAny4,
 		callsmap.MapName,
 		callsmap.CustomCallsMapName,
-		endpoint.IpvlanMapName,
 	}
 
 	ms.checkStaleGlobalMap(path, filename)
@@ -115,7 +112,7 @@ func (ms *MapSweeper) walk(path string, _ os.FileInfo, _ error) error {
 // CollectStaleMapGarbage cleans up stale content in the BPF maps from the
 // datapath.
 func (ms *MapSweeper) CollectStaleMapGarbage() {
-	if err := filepath.Walk(bpf.MapPrefixPath(), ms.walk); err != nil {
+	if err := filepath.Walk(bpf.TCGlobalsPath(), ms.walk); err != nil {
 		log.WithError(err).Warn("Error while scanning for stale maps")
 	}
 }
@@ -220,7 +217,7 @@ func (ms *MapSweeper) RemoveDisabledMaps() {
 	}
 
 	for _, m := range maps {
-		p := path.Join(bpf.MapPrefixPath(), m)
+		p := path.Join(bpf.TCGlobalsPath(), m)
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			ms.RemoveMapPath(p)
 		}

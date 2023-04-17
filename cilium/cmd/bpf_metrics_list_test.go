@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -11,12 +8,12 @@ import (
 	"sort"
 	"strings"
 
+	. "gopkg.in/check.v1"
+
 	"github.com/cilium/cilium/pkg/checker"
 	"github.com/cilium/cilium/pkg/maps/metricsmap"
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 	"github.com/cilium/cilium/pkg/testutils/mockmaps"
-
-	. "gopkg.in/check.v1"
 )
 
 type BPFMetricsMapSuite struct{}

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
-//go:build !privileged_tests && integration_tests
-// +build !privileged_tests,integration_tests
+//go:build integration_tests
 
 package store
 
@@ -13,12 +12,13 @@ import (
 	"testing"
 	"time"
 
+	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/rand"
-
-	. "gopkg.in/check.v1"
 )
 
 const (
@@ -44,7 +44,7 @@ func (e *StoreEtcdSuite) SetUpTest(c *C) {
 
 func (e *StoreEtcdSuite) TearDownTest(c *C) {
 	kvstore.Client().DeletePrefix(context.TODO(), testPrefix)
-	kvstore.Client().Close()
+	kvstore.Client().Close(context.TODO())
 }
 
 type StoreConsulSuite struct {
@@ -59,7 +59,7 @@ func (e *StoreConsulSuite) SetUpTest(c *C) {
 
 func (e *StoreConsulSuite) TearDownTest(c *C) {
 	kvstore.Client().DeletePrefix(context.TODO(), testPrefix)
-	kvstore.Client().Close()
+	kvstore.Client().Close(context.TODO())
 	time.Sleep(sharedKeyDeleteDelay + 5*time.Second)
 }
 
@@ -219,6 +219,7 @@ func (s *StoreSuite) TestStorePeriodicSync(c *C) {
 		Prefix:                  rand.RandomString(),
 		KeyCreator:              newTestType,
 		SynchronizationInterval: 10 * time.Millisecond,
+		SharedKeyDeleteDelay:    defaults.NodeDeleteDelay,
 		Observer:                &observer{},
 	})
 	c.Assert(err, IsNil)

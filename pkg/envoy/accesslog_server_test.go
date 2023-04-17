@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package envoy
 
 import (
 	"encoding/json"
 
-	"github.com/cilium/cilium/pkg/proxy/logger"
-	logger_test "github.com/cilium/cilium/pkg/proxy/logger/test"
-
-	"github.com/cilium/proxy/go/cilium/api"
-
+	cilium "github.com/cilium/proxy/go/cilium/api"
 	. "gopkg.in/check.v1"
+
+	"github.com/cilium/cilium/pkg/proxy/logger"
 )
 
 type AccessLogServerSuite struct{}
@@ -61,7 +56,7 @@ func (n *testNotifier) NewProxyLogRecord(l *logger.LogRecord) error {
 func (k *AccessLogServerSuite) TestKafkaLogNoTopic(c *C) {
 	notifier := &testNotifier{}
 	logger.SetNotifier(notifier)
-	logRecord(&dummyEndpointInfoRegistry{}, &logger_test.ProxyUpdaterMock{}, &cilium.LogEntry{
+	logRecord(&cilium.LogEntry{
 		L7: &cilium.LogEntry_Kafka{Kafka: &cilium.KafkaLogEntry{
 			CorrelationId: 76541,
 			ErrorCode:     42,
@@ -77,7 +72,7 @@ func (k *AccessLogServerSuite) TestKafkaLogNoTopic(c *C) {
 func (k *AccessLogServerSuite) TestKafkaLogSingleTopic(c *C) {
 	notifier := &testNotifier{}
 	logger.SetNotifier(notifier)
-	logRecord(&dummyEndpointInfoRegistry{}, &logger_test.ProxyUpdaterMock{}, &cilium.LogEntry{
+	logRecord(&cilium.LogEntry{
 		L7: &cilium.LogEntry_Kafka{Kafka: &cilium.KafkaLogEntry{
 			CorrelationId: 76541,
 			ErrorCode:     42,
@@ -96,7 +91,7 @@ func (k *AccessLogServerSuite) TestKafkaLogSingleTopic(c *C) {
 func (k *AccessLogServerSuite) TestKafkaLogMultipleTopics(c *C) {
 	notifier := &testNotifier{}
 	logger.SetNotifier(notifier)
-	logRecord(&dummyEndpointInfoRegistry{}, &logger_test.ProxyUpdaterMock{}, &cilium.LogEntry{
+	logRecord(&cilium.LogEntry{
 		L7: &cilium.LogEntry_Kafka{Kafka: &cilium.KafkaLogEntry{
 			CorrelationId: 76541,
 			ErrorCode:     42,

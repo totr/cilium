@@ -75,6 +75,7 @@ type CreateTrafficMirrorFilterRequest struct {
 	ClientToken                    string                                   `position:"Query" name:"ClientToken"`
 	IngressRules                   *[]CreateTrafficMirrorFilterIngressRules `position:"Query" name:"IngressRules"  type:"Repeated"`
 	TrafficMirrorFilterName        string                                   `position:"Query" name:"TrafficMirrorFilterName"`
+	ResourceGroupId                string                                   `position:"Query" name:"ResourceGroupId"`
 	EgressRules                    *[]CreateTrafficMirrorFilterEgressRules  `position:"Query" name:"EgressRules"  type:"Repeated"`
 	DryRun                         requests.Boolean                         `position:"Query" name:"DryRun"`
 	ResourceOwnerAccount           string                                   `position:"Query" name:"ResourceOwnerAccount"`
@@ -85,31 +86,32 @@ type CreateTrafficMirrorFilterRequest struct {
 
 // CreateTrafficMirrorFilterIngressRules is a repeated param struct in CreateTrafficMirrorFilterRequest
 type CreateTrafficMirrorFilterIngressRules struct {
-	Priority             string `name:"Priority"`
 	Action               string `name:"Action"`
-	Protocol             string `name:"Protocol"`
-	DestinationCidrBlock string `name:"DestinationCidrBlock"`
 	SourceCidrBlock      string `name:"SourceCidrBlock"`
+	Protocol             string `name:"Protocol"`
 	DestinationPortRange string `name:"DestinationPortRange"`
+	Priority             string `name:"Priority"`
+	DestinationCidrBlock string `name:"DestinationCidrBlock"`
 	SourcePortRange      string `name:"SourcePortRange"`
 }
 
 // CreateTrafficMirrorFilterEgressRules is a repeated param struct in CreateTrafficMirrorFilterRequest
 type CreateTrafficMirrorFilterEgressRules struct {
-	Priority             string `name:"Priority"`
 	Action               string `name:"Action"`
-	Protocol             string `name:"Protocol"`
-	DestinationCidrBlock string `name:"DestinationCidrBlock"`
 	SourceCidrBlock      string `name:"SourceCidrBlock"`
+	Protocol             string `name:"Protocol"`
 	DestinationPortRange string `name:"DestinationPortRange"`
+	Priority             string `name:"Priority"`
+	DestinationCidrBlock string `name:"DestinationCidrBlock"`
 	SourcePortRange      string `name:"SourcePortRange"`
 }
 
 // CreateTrafficMirrorFilterResponse is the response struct for api CreateTrafficMirrorFilter
 type CreateTrafficMirrorFilterResponse struct {
 	*responses.BaseResponse
-	RequestId             string `json:"RequestId" xml:"RequestId"`
 	TrafficMirrorFilterId string `json:"TrafficMirrorFilterId" xml:"TrafficMirrorFilterId"`
+	RequestId             string `json:"RequestId" xml:"RequestId"`
+	ResourceGroupId       string `json:"ResourceGroupId" xml:"ResourceGroupId"`
 }
 
 // CreateCreateTrafficMirrorFilterRequest creates a request to invoke CreateTrafficMirrorFilter API

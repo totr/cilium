@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
 import (
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/cilium/cilium/api/v1/models"
 	loaderMetrics "github.com/cilium/cilium/pkg/datapath/loader/metrics"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/metrics"
 	"github.com/cilium/cilium/pkg/spanstat"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 var endpointPolicyStatus endpointPolicyStatusMap
@@ -144,13 +144,13 @@ func (epPolicyMaps *endpointPolicyStatusMap) Remove(endpointID uint16) {
 // UpdateMetrics update the policy enforcement metrics statistics for the endpoints.
 func (epPolicyMaps *endpointPolicyStatusMap) UpdateMetrics() {
 	policyStatus := map[models.EndpointPolicyEnabled]float64{
-		models.EndpointPolicyEnabledNone:         0,
-		models.EndpointPolicyEnabledEgress:       0,
-		models.EndpointPolicyEnabledIngress:      0,
-		models.EndpointPolicyEnabledBoth:         0,
-		models.EndpointPolicyEnabledAuditEgress:  0,
-		models.EndpointPolicyEnabledAuditIngress: 0,
-		models.EndpointPolicyEnabledAuditBoth:    0,
+		models.EndpointPolicyEnabledNone:             0,
+		models.EndpointPolicyEnabledEgress:           0,
+		models.EndpointPolicyEnabledIngress:          0,
+		models.EndpointPolicyEnabledBoth:             0,
+		models.EndpointPolicyEnabledAuditDashEgress:  0,
+		models.EndpointPolicyEnabledAuditDashIngress: 0,
+		models.EndpointPolicyEnabledAuditDashBoth:    0,
 	}
 
 	epPolicyMaps.mutex.Lock()

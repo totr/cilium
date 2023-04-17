@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package certloader
 
@@ -127,8 +124,20 @@ func TestWatchedClientConfigRotation(t *testing.T) {
 	assert.NotNil(t, c)
 	defer c.Stop()
 
+	prevKeypairGeneration, prevCaCertPoolGeneration := c.generations()
 	rotate(t, hubble, relay)
-	<-time.After(testReloadDelay)
+
+	// wait until both keypair and caCertPool have been reloaded
+	ticker := time.NewTicker(testReloadDelay)
+	defer ticker.Stop()
+	for range ticker.C {
+		keypairGeneration, caCertPoolGeneration := c.generations()
+		keypairUpdated := keypairGeneration > prevKeypairGeneration
+		caCertPoolUpdated := caCertPoolGeneration > prevCaCertPoolGeneration
+		if keypairUpdated && caCertPoolUpdated {
+			break
+		}
+	}
 
 	tlsConfig := c.ClientConfig(&tls.Config{
 		MinVersion: tls.VersionTLS13,

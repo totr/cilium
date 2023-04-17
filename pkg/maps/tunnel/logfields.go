@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package tunnel
 
@@ -12,6 +12,7 @@ const (
 	fieldEndpoint = "endpoint"
 	fieldPrefix   = "prefix"
 	fieldKey      = "key"
+	fieldNodeID   = "nodeID"
 )
 
 var (

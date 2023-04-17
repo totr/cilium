@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -8,13 +8,13 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/spf13/cobra"
+
 	identityApi "github.com/cilium/cilium/api/v1/client/policy"
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/api"
 	"github.com/cilium/cilium/pkg/command"
 	"github.com/cilium/cilium/pkg/labels"
-
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -22,9 +22,9 @@ var (
 )
 
 func printIdentities(identities []*models.Identity) {
-	if command.OutputJSON() {
+	if command.OutputOption() {
 		if err := command.PrintOutput(identities); err != nil {
-			Fatalf("Unable to provide JSON output: %s", err)
+			Fatalf("Unable to provide %s output: %s", command.OutputOptionString(), err)
 		}
 		return
 	}
@@ -76,5 +76,5 @@ var identityGetCmd = &cobra.Command{
 func init() {
 	identityCmd.AddCommand(identityGetCmd)
 	identityGetCmd.Flags().StringSliceVar(&lookupLabels, "label", []string{}, "Label to lookup")
-	command.AddJSONOutput(identityGetCmd)
+	command.AddOutputOption(identityGetCmd)
 }

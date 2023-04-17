@@ -16,18 +16,18 @@ cilium bpf ipmasq list [flags]
 
 ```
   -h, --help            help for list
-  -o, --output string   json| jsonpath='{}'
+  -o, --output string   json| yaml| jsonpath='{}'
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default is $HOME/.cilium.yaml)
+      --config string   Config file (default is $HOME/.cilium.yaml)
   -D, --debug           Enable debug messages
   -H, --host string     URI to server-side API
 ```
 
 ### SEE ALSO
 
-* [cilium bpf ipmasq](../cilium_bpf_ipmasq)	 - ip-masq-agent CIDRs
+* [cilium bpf ipmasq](cilium_bpf_ipmasq.md)	 - ip-masq-agent CIDRs
 

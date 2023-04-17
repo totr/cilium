@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2017-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package utils
 
 import (
+	"github.com/sirupsen/logrus"
+	"k8s.io/apimachinery/pkg/types"
+
 	k8sConst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	"github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -149,6 +149,7 @@ func parseToCiliumIngressRule(namespace string, es api.EndpointSelector, inRules
 				copy(retRules[i].ICMPs, ing.ICMPs)
 			}
 			retRules[i].IngressCommonRule = parseToCiliumIngressCommonRule(namespace, es, ing.IngressCommonRule)
+			retRules[i].Auth = ing.Auth.DeepCopy()
 			retRules[i].SetAggregatedSelectors()
 		}
 	}
@@ -243,6 +244,7 @@ func parseToCiliumEgressRule(namespace string, es api.EndpointSelector, inRules 
 			}
 
 			retRules[i].EgressCommonRule = parseToCiliumEgressCommonRule(namespace, es, egr.EgressCommonRule)
+			retRules[i].Auth = egr.Auth
 			retRules[i].SetAggregatedSelectors()
 		}
 	}

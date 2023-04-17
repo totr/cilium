@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package ipam
 
@@ -7,12 +7,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/ipam"
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/lock"
-
-	"github.com/sirupsen/logrus"
 )
 
 // AzureAPI is the API surface used of the Azure API
@@ -44,6 +44,13 @@ func NewInstancesManager(api AzureAPI) *InstancesManager {
 // CreateNode is called on discovery of a new node
 func (m *InstancesManager) CreateNode(obj *v2.CiliumNode, n *ipam.Node) ipam.NodeOperations {
 	return &Node{manager: m, node: n}
+}
+
+// HasInstance returns whether the instance is in instances
+func (m *InstancesManager) HasInstance(instanceID string) bool {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return m.instances.Exists(instanceID)
 }
 
 // GetPoolQuota returns the number of available IPs in all IP pools
@@ -90,4 +97,11 @@ func (m *InstancesManager) Resync(ctx context.Context) time.Time {
 	m.mutex.Unlock()
 
 	return resyncStart
+}
+
+// DeleteInstance delete instance from m.instances
+func (m *InstancesManager) DeleteInstance(instanceID string) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.instances.Delete(instanceID)
 }

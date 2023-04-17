@@ -63,10 +63,14 @@ concurrency:
 env:
   clusterName1: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}-mesh-1
   clusterName2: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}-mesh-2
+  clusterNameBase: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}-mesh
   zone: us-west2-a
   firewallRuleName: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}-rule
-  cilium_cli_version: v0.10.0
+  k8s_version: 1.23
+  # renovate: datasource=github-releases depName=cilium/cilium-cli
+  cilium_cli_version: v0.13.1
   check_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  USE_GKE_GCLOUD_AUTH_PLUGIN: True
 
 jobs:
   check_changes:
@@ -76,7 +80,7 @@ jobs:
         github.event.comment.body == '/ci-multicluster-1.11' ||
         github.event.comment.body == '/test-backport-1.11'
       )) ||
-      (github.event_name == 'schedule' && github.repository == 'cilium/cilium') ||
+      github.event_name == 'schedule' ||
       github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
@@ -86,7 +90,7 @@ jobs:
       # paths-filter to work.
       - name: Checkout code
         if: ${{ github.event.issue.pull_request }}
-        uses: actions/checkout@ec3a7ce113134d7a93b817d10a8272cb61118579
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
         with:
           persist-credentials: false
       - name: Retrieve pull request's base and head
@@ -94,11 +98,11 @@ jobs:
         id: pr
         run: |
           curl ${{ github.event.issue.pull_request.url }} > pr.json
-          echo "::set-output name=base::$(jq -r '.base.sha' pr.json)"
-          echo "::set-output name=head::$(jq -r '.head.sha' pr.json)"
+          echo "base=$(jq -r '.base.sha' pr.json)" >> $GITHUB_OUTPUT
+          echo "head=$(jq -r '.head.sha' pr.json)" >> $GITHUB_OUTPUT
       - name: Check code changes
         if: ${{ github.event.issue.pull_request }}
-        uses: dorny/paths-filter@b2feaf19c27470162a626bd6fa8438ae5b263721
+        uses: dorny/paths-filter@4512585405083f25c027a35db413c2b3b9006d50 # v2.11.1
         id: tested-tree
         with:
           base: ${{ steps.pr.outputs.base }}
@@ -116,11 +120,19 @@ jobs:
         github.event.comment.body == '/ci-multicluster-1.11' ||
         (github.event.comment.body == '/test-backport-1.11' && needs.check_changes.outputs.tested == 'true')
       )) ||
-      (github.event_name == 'schedule' && github.repository == 'cilium/cilium') ||
+      github.event_name == 'schedule' ||
       github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
+      - name: Checkout master branch to access local actions
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set Environment Variables
+        uses: ./.github/actions/set-env-variables
+
       - name: Set up job variables
         id: vars
         run: |
@@ -136,24 +148,38 @@ jobs:
             OWNER=${{ github.sha }}
           fi
 
-          CILIUM_INSTALL_DEFAULTS="--agent-image=quay.io/${{ github.repository_owner }}/cilium-ci \
-            --operator-image=quay.io/${{ github.repository_owner }}/operator-generic-ci \
-            --version=${SHA} \
+          CILIUM_INSTALL_DEFAULTS="--chart-directory=install/kubernetes/cilium \
+            --helm-set=image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/cilium-ci \
+            --helm-set=image.useDigest=false \
+            --helm-set=image.tag=${SHA} \
+            --helm-set=operator.image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/operator \
+            --helm-set=operator.image.suffix=-ci \
+            --helm-set=operator.image.tag=${SHA} \
+            --helm-set=operator.image.useDigest=false \
+            --helm-set=clustermesh.apiserver.image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/clustermesh-apiserver-ci \
+            --helm-set=clustermesh.apiserver.image.tag=${SHA} \
+            --helm-set=clustermesh.apiserver.image.useDigest=false \
+            --helm-set=hubble.relay.image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/hubble-relay-ci \
+            --helm-set=hubble.relay.image.tag=${SHA} \
             --wait=false \
             --rollback=false \
-            --config monitor-aggregation=none"
-          HUBBLE_ENABLE_DEFAULTS="--relay-image=quay.io/${{ github.repository_owner }}/hubble-relay-ci \
+            --config monitor-aggregation=none \
+            --version="
+          HUBBLE_ENABLE_DEFAULTS="--chart-directory=install/kubernetes/cilium \
+            --relay-image=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/hubble-relay-ci:${SHA} \
             --relay-version=${SHA}"
-          CLUSTERMESH_ENABLE_DEFAULTS="--apiserver-image=quay.io/${{ github.repository_owner }}/clustermesh-apiserver-ci \
+          CONNECTIVITY_TEST_DEFAULTS="--flow-validation=disabled --hubble=false --collect-sysdump-on-failure"
+          CLUSTERMESH_ENABLE_DEFAULTS="--apiserver-image=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/clustermesh-apiserver-ci \
             --apiserver-version=${SHA}"
-          echo ::set-output name=cilium_install_defaults::${CILIUM_INSTALL_DEFAULTS}
-          echo ::set-output name=hubble_enable_defaults::${HUBBLE_ENABLE_DEFAULTS}
-          echo ::set-output name=clustermesh_enable_defaults::${CLUSTERMESH_ENABLE_DEFAULTS}
-          echo ::set-output name=sha::${SHA}
-          echo ::set-output name=owner::${OWNER}
+          echo cilium_install_defaults=${CILIUM_INSTALL_DEFAULTS} >> $GITHUB_OUTPUT
+          echo hubble_enable_defaults=${HUBBLE_ENABLE_DEFAULTS} >> $GITHUB_OUTPUT
+          echo connectivity_test_defaults=${CONNECTIVITY_TEST_DEFAULTS} >> $GITHUB_OUTPUT
+          echo clustermesh_enable_defaults=${CLUSTERMESH_ENABLE_DEFAULTS} >> $GITHUB_OUTPUT
+          echo sha=${SHA} >> $GITHUB_OUTPUT
+          echo owner=${OWNER} >> $GITHUB_OUTPUT
 
       - name: Set commit status to pending
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -161,6 +187,13 @@ jobs:
           description: Connectivity test in progress...
           state: pending
           target_url: ${{ env.check_url }}
+
+      # Checkout source code to install Cilium using local Helm chart.
+      - name: Checkout code
+        uses: actions/checkout@24cb9080177205b6e8c946b17badbe402adc938f # v3.4.0
+        with:
+          ref: ${{ steps.vars.outputs.sha }}
+          persist-credentials: false
 
       - name: Install Cilium CLI
         run: |
@@ -170,12 +203,21 @@ jobs:
           rm cilium-linux-amd64.tar.gz{,.sha256sum}
           cilium version
 
+      - name: Set up gcloud credentials
+        id: 'auth'
+        uses: google-github-actions/auth@ef5d53e30bbcd8d0836f4288f5e50ff3e086997d # v1.0.0
+        with:
+          credentials_json: '${{ secrets.GCP_PR_SA_KEY }}'
+
       - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@a45a0825993ace67ae6e11cf3011b3e7d6795f82
+        uses: google-github-actions/setup-gcloud@62d4898025f6041e16b1068643bfc5a696863587 # v1.1.0
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
-          service_account_key: ${{ secrets.GCP_PR_SA_KEY }}
-          export_default_credentials: true
+          version: "405.0.0"
+
+      - name: Install gke-gcloud-auth-plugin
+        run: |
+          gcloud components install gke-gcloud-auth-plugin
 
       - name: Display gcloud CLI info
         run: |
@@ -186,28 +228,32 @@ jobs:
           gcloud container clusters create ${{ env.clusterName1 }} \
             --labels "usage=${{ github.repository_owner }}-${{ github.event.repository.name }},owner=${{ steps.vars.outputs.owner }}" \
             --zone ${{ env.zone }} \
+            --cluster-version ${{ env.k8s_version }} \
+            --enable-ip-alias \
+            --create-subnetwork="" \
             --image-type COS_CONTAINERD \
             --num-nodes 2 \
             --machine-type e2-custom-2-4096 \
             --disk-type pd-standard \
             --disk-size 10GB \
-            --node-taints node.cilium.io/agent-not-ready=true:NoSchedule \
-            --preemptible \
-            --enable-ip-alias
+            --node-taints node.cilium.io/agent-not-ready=true:NoExecute \
+            --preemptible
 
       - name: Create GKE cluster 2
         run: |
           gcloud container clusters create ${{ env.clusterName2 }} \
             --labels "usage=${{ github.repository_owner }}-${{ github.event.repository.name }},owner=${{ steps.vars.outputs.owner }}" \
             --zone ${{ env.zone }} \
+            --cluster-version ${{ env.k8s_version }} \
+            --enable-ip-alias \
+            --create-subnetwork="" \
             --image-type COS_CONTAINERD \
             --num-nodes 2 \
             --machine-type e2-custom-2-4096 \
             --disk-type pd-standard \
             --disk-size 10GB \
-            --node-taints node.cilium.io/agent-not-ready=true:NoSchedule \
-            --preemptible \
-            --enable-ip-alias
+            --node-taints node.cilium.io/agent-not-ready=true:NoExecute \
+            --preemptible
 
       - name: Allow cross-cluster traffic
         run: |
@@ -223,17 +269,17 @@ jobs:
         run: |
           gcloud container clusters get-credentials ${{ env.clusterName1 }} --zone ${{ env.zone }}
           CONTEXT_1="$(kubectl config view | grep ${{ env.clusterName1 }} | head -1 | awk '{print $2}')"
-          echo ::set-output name=context1::${CONTEXT_1}
+          echo context1=${CONTEXT_1} >> $GITHUB_OUTPUT
           gcloud container clusters get-credentials ${{ env.clusterName2 }} --zone ${{ env.zone }}
           CONTEXT_2="$(kubectl config view | grep ${{ env.clusterName2 }} | head -1 | awk '{print $2}')"
-          echo ::set-output name=context2::${CONTEXT_2}
+          echo context2=${CONTEXT_2} >> $GITHUB_OUTPUT
 
       - name: Wait for images to be available
         timeout-minutes: 10
         shell: bash
         run: |
           for image in cilium-ci operator-generic-ci hubble-relay-ci clustermesh-apiserver-ci ; do
-            until curl --silent -f -lSL "https://quay.io/api/v1/repository/${{ github.repository_owner }}/$image/tag/${{ steps.vars.outputs.sha }}/images" &> /dev/null; do sleep 45s; done
+            until docker manifest inspect quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/$image:${{ steps.vars.outputs.sha }} &> /dev/null; do sleep 45s; done
           done
 
       - name: Install Cilium in cluster1
@@ -242,7 +288,7 @@ jobs:
             --context ${{ steps.contexts.outputs.context1 }} \
             --cluster-name=${{ env.clusterName1 }} \
             --cluster-id 1 \
-            --native-routing-cidr=10.0.0.0/9
+            --ipv4-native-routing-cidr=10.0.0.0/9
 
       - name: Install Cilium in cluster2
         run: |
@@ -250,7 +296,7 @@ jobs:
             --context ${{ steps.contexts.outputs.context2 }} \
             --cluster-name=${{ env.clusterName2 }} \
             --cluster-id 2 \
-            --native-routing-cidr=10.0.0.0/9 \
+            --ipv4-native-routing-cidr=10.0.0.0/9 \
             --inherit-ca ${{ steps.contexts.outputs.context1 }}
 
       - name: Enable Relay
@@ -289,11 +335,14 @@ jobs:
       - name: Run connectivity test
         run: |
           cilium connectivity test \
+            ${{ steps.vars.outputs.connectivity_test_defaults }} \
             --context ${{ steps.contexts.outputs.context1 }} \
             --multi-cluster ${{ steps.contexts.outputs.context2 }} \
+            --collect-sysdump-on-failure \
             --test '!/pod-to-.*-nodeport' \
             --test '!no-policies/pod-to-service' \
-            --flow-validation=disabled
+            --external-target google.com \
+            --external-cidr 8.0.0.0/8 --external-ip 8.8.8.8 --external-other-ip 8.8.4.4
         # TODO: Remove `no-policies/pod-to-service` test exception (unreliable
         # on clustermesh) once https://github.com/cilium/cilium-cli/issues/600
         # is fixed.
@@ -309,34 +358,35 @@ jobs:
 
           kubectl config use-context ${{ steps.contexts.outputs.context1 }}
           kubectl get pods --all-namespaces -o wide
-          cilium sysdump --output-filename cilium-sysdump-context1
+          cilium sysdump --output-filename cilium-sysdump-context1-final
 
           kubectl config use-context ${{ steps.contexts.outputs.context2 }}
           kubectl get pods --all-namespaces -o wide
-          cilium sysdump --output-filename cilium-sysdump-context2
+          cilium sysdump --output-filename cilium-sysdump-context2-final
         shell: bash {0} # Disable default fail-fast behaviour so that all commands run independently
 
       - name: Clean up GKE
         if: ${{ always() }}
         run: |
-          gcloud compute firewall-rules delete ${{ env.firewallRuleName }} --quiet
+          while [ "$(gcloud container operations list --filter="status=RUNNING AND targetLink~${{ env.clusterNameBase }}" --format="value(name)")" ];do
+            echo "cluster has an ongoing operation, waiting for all operations to finish"; sleep 15
+          done
           gcloud container clusters delete ${{ env.clusterName1 }} --zone ${{ env.zone }} --quiet --async
           gcloud container clusters delete ${{ env.clusterName2 }} --zone ${{ env.zone }} --quiet --async
-        shell: bash {0} # Disable default fail-fast behaviour so that all commands run independently
+          gcloud compute firewall-rules delete ${{ env.firewallRuleName }} --quiet
+        shell: bash {0} # Disable default fail-fast behavior so that all commands run independently
 
       - name: Upload artifacts
         if: ${{ !success() }}
-        uses: actions/upload-artifact@da838ae9595ac94171fa2d4de5a2f117b3e7ac32
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
         with:
-          name: cilium-sysdump-out.zip
-          path: |
-            cilium-sysdump-context1.zip
-            cilium-sysdump-context2.zip
+          name: cilium-sysdumps
+          path: cilium-sysdump-*.zip
           retention-days: 5
 
       - name: Set commit status to success
         if: ${{ success() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -347,7 +397,7 @@ jobs:
 
       - name: Set commit status to failure
         if: ${{ failure() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -358,7 +408,7 @@ jobs:
 
       - name: Set commit status to cancelled
         if: ${{ cancelled() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ steps.vars.outputs.sha }}
@@ -366,12 +416,3 @@ jobs:
           description: Connectivity test cancelled
           state: error
           target_url: ${{ env.check_url }}
-
-      - name: Send slack notification
-        if: ${{ !success() && (github.event_name == 'schedule' || github.event_name == 'push') }}
-        uses: 8398a7/action-slack@c9ff874f8549f97317ec9f6162d5449ee77bc984
-        with:
-          status: ${{ job.status }}
-          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took # selectable (default: repo,message)
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

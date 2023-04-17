@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// bpfIPCacheCmd represents the bpf command
+// bpfTemplateCmd represents the bpf-sha command
 var bpfTemplateCmd = &cobra.Command{
 	Use:     "sha",
 	Aliases: []string{"template"},

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cgroups
 
@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cilium/cilium/pkg/mountinfo"
-
 	"golang.org/x/sys/unix"
+
+	"github.com/vishvananda/netlink/nl"
+
+	"github.com/cilium/cilium/pkg/mountinfo"
 )
 
 // mountCgroup mounts the Cgroup v2 filesystem into the desired cgroupRoot directory.
@@ -53,4 +55,15 @@ func cgrpCheckOrMountLocation(cgroupRoot string) error {
 	}
 
 	return nil
+}
+
+func GetCgroupID(cgroupPath string) (uint64, error) {
+	handle, _, err := unix.NameToHandleAt(unix.AT_FDCWD, cgroupPath, 0)
+	if err != nil {
+		return 0, fmt.Errorf("NameToHandleAt failed: %w", err)
+	}
+	b := handle.Bytes()[:8]
+	cgID := nl.NativeEndian().Uint64(b)
+
+	return cgID, nil
 }

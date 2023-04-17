@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 //go:build linux
-// +build linux
 
 package route
 
 import (
 	"fmt"
 	"net"
+	"sort"
 	"time"
 
 	"github.com/vishvananda/netlink"
@@ -115,10 +115,10 @@ func Lookup(route Route) (*Route, error) {
 
 // lookup finds a particular route as specified by the filter which points
 // to the specified device. The filter route can have the following fields set:
-//  - Dst
-//  - LinkIndex
-//  - Scope
-//  - Gw
+//   - Dst
+//   - LinkIndex
+//   - Scope
+//   - Gw
 func lookup(route *netlink.Route) *netlink.Route {
 	var filter uint64
 	if route.Dst != nil {
@@ -210,17 +210,19 @@ func deleteNexthopRoute(route Route, link netlink.Link, routerNet *net.IPNet) er
 // the following two forms:
 //
 // direct:
-//   prefix dev foo
+//
+//	prefix dev foo
 //
 // nexthop:
-//   prefix via nexthop dev foo
+//
+//	prefix via nexthop dev foo
 //
 // If a nexthop route is specified, this function will check whether a direct
 // route to the nexthop exists and add if required. This means that the
 // following two routes will exist afterwards:
 //
-//   nexthop dev foo
-//   prefix via nexthop dev foo
+//	nexthop dev foo
+//	prefix via nexthop dev foo
 //
 // Due to a bug in the Linux kernel, the prefix route is attempted to be
 // updated RouteReplaceMaxTries with an interval of RouteReplaceRetryInterval.
@@ -229,18 +231,18 @@ func deleteNexthopRoute(route Route, link netlink.Link, routerNet *net.IPNet) er
 // EINVAL if the Netlink calls are issued in short order.
 //
 // An error is returned if the route can not be added or updated.
-func Upsert(route Route) (bool, error) {
+func Upsert(route Route) error {
 	var nexthopRouteCreated bool
 
 	link, err := netlink.LinkByName(route.Device)
 	if err != nil {
-		return false, fmt.Errorf("unable to lookup interface %s: %s", route.Device, err)
+		return fmt.Errorf("unable to lookup interface %s: %s", route.Device, err)
 	}
 
 	routerNet := route.getNexthopAsIPNet()
 	if routerNet != nil {
 		if _, err := replaceNexthopRoute(route, link, routerNet); err != nil {
-			return false, fmt.Errorf("unable to add nexthop route: %s", err)
+			return fmt.Errorf("unable to add nexthop route: %s", err)
 		}
 
 		nexthopRouteCreated = true
@@ -264,10 +266,10 @@ func Upsert(route Route) (bool, error) {
 		if nexthopRouteCreated {
 			deleteNexthopRoute(route, link, routerNet)
 		}
-		return false, err
+		return err
 	}
 
-	return true, nil
+	return nil
 }
 
 // Delete deletes a Linux route. An error is returned if the route does not
@@ -445,7 +447,7 @@ func replaceRule(spec Rule, family int) error {
 	if err != nil {
 		return err
 	}
-	if exists == true {
+	if exists {
 		return nil
 	}
 	rule := netlink.NewRule()
@@ -482,23 +484,20 @@ func deleteRule(spec Rule, family int) error {
 }
 
 func lookupDefaultRoute(family int) (netlink.Route, error) {
-	linkIndex := 0
-
 	routes, err := netlink.RouteListFiltered(family, &netlink.Route{Dst: nil}, netlink.RT_FILTER_DST)
 	if err != nil {
 		return netlink.Route{}, fmt.Errorf("Unable to list direct routes: %s", err)
 	}
 
-	if len(routes) == 0 {
-		return netlink.Route{}, fmt.Errorf("Default route not found for family %d", family)
-	}
+	sort.Slice(routes, func(i, j int) bool {
+		return routes[i].Priority < routes[j].Priority
+	})
 
-	for _, route := range routes {
-		if linkIndex != 0 && linkIndex != route.LinkIndex {
-			return netlink.Route{}, fmt.Errorf("Found default routes with different netdev ifindices: %v vs %v",
-				linkIndex, route.LinkIndex)
-		}
-		linkIndex = route.LinkIndex
+	switch {
+	case len(routes) == 0:
+		return netlink.Route{}, fmt.Errorf("Default route not found for family %d", family)
+	case len(routes) > 1 && routes[0].Priority == routes[1].Priority:
+		return netlink.Route{}, fmt.Errorf("Found multiple default routes with the same priority: %v vs %v", routes[0], routes[1])
 	}
 
 	log.Debugf("Found default route on node %v", routes[0])

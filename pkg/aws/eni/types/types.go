@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package types
 
@@ -98,6 +98,12 @@ type ENISpec struct {
 	// +kubebuilder:validation:Optional
 	SubnetTags map[string]string `json:"subnet-tags,omitempty"`
 
+	// NodeSubnetID is the subnet of the primary ENI the instance was brought up
+	// with. It is used as a sensible default subnet to create ENIs in.
+	//
+	// +kubebuilder:validation:Optional
+	NodeSubnetID string `json:"node-subnet-id,omitempty"`
+
 	// VpcID is the VPC ID to use when allocating ENIs.
 	//
 	// +kubebuilder:validation:Optional
@@ -109,12 +115,31 @@ type ENISpec struct {
 	// +kubebuilder:validation:Optional
 	AvailabilityZone string `json:"availability-zone,omitempty"`
 
+	// ExcludeInterfaceTags is the list of tags to use when excluding ENIs for
+	// Cilium IP allocation. Any interface matching this set of tags will not
+	// be managed by Cilium.
+	//
+	// +kubebuilder:validation:Optional
+	ExcludeInterfaceTags map[string]string `json:"exclude-interface-tags,omitempty"`
+
 	// DeleteOnTermination defines that the ENI should be deleted when the
 	// associated instance is terminated. If the parameter is not set the
 	// default behavior is to delete the ENI on instance termination.
 	//
 	// +kubebuilder:validation:Optional
 	DeleteOnTermination *bool `json:"delete-on-termination,omitempty"`
+
+	// UsePrimaryAddress determines whether an ENI's primary address
+	// should be available for allocations on the node
+	//
+	// +kubebuilder:validation:Optional
+	UsePrimaryAddress *bool `json:"use-primary-address,omitempty"`
+
+	// DisablePrefixDelegation determines whether ENI prefix delegation should be
+	// disabled on this node.
+	//
+	// +kubebuilder:validation:Optional
+	DisablePrefixDelegation *bool `json:"disable-prefix-delegation,omitempty"`
 }
 
 // ENI represents an AWS Elastic Network Interface
@@ -168,8 +193,19 @@ type ENI struct {
 	// +optional
 	Addresses []string `json:"addresses,omitempty"`
 
+	// Prefixes is the list of all /28 prefixes associated with the ENI
+	//
+	// +optional
+	Prefixes []string `json:"prefixes,omitempty"`
+
 	// SecurityGroups are the security groups associated with the ENI
 	SecurityGroups []string `json:"security-groups,omitempty"`
+
+	// Tags is the set of tags of the ENI. Used to detect ENIs which should
+	// not be managed by Cilium
+	//
+	// +optional
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // InterfaceID returns the identifier of the interface
@@ -186,6 +222,22 @@ func (e *ENI) ForeachAddress(id string, fn types.AddressIterator) error {
 	}
 
 	return nil
+}
+
+// IsExcludedBySpec returns true if the ENI is excluded by the provided spec and
+// therefore should not be managed by Cilium.
+func (e *ENI) IsExcludedBySpec(spec ENISpec) bool {
+	if spec.FirstInterfaceIndex != nil && e.Number < *spec.FirstInterfaceIndex {
+		return true
+	}
+
+	if len(spec.ExcludeInterfaceTags) > 0 {
+		if types.Tags(e.Tags).Match(spec.ExcludeInterfaceTags) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // ENIStatus is the status of ENI addressing of the node

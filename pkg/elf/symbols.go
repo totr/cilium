@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019-2021 Authors of Cilium
+// Copyright Authors of Cilium
 
 package elf
 
@@ -12,7 +12,6 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"unsafe"
 )
 
 const (
@@ -35,14 +34,14 @@ const (
 type symbolKind uint32
 
 const (
-	symbolUint32 = symbolKind(1)
+	symbolData   = symbolKind(1)
 	symbolString = symbolKind(2)
 )
 
 func (k symbolKind) String() string {
 	switch k {
-	case symbolUint32:
-		return "uint32"
+	case symbolData:
+		return "data"
 	case symbolString:
 		return "string"
 	}
@@ -67,9 +66,8 @@ func newSymbol(name string, kind symbolKind, offset, size uint64) symbol {
 	}
 }
 
-func newVariable(name string, offset uint64) symbol {
-	size := uint64(unsafe.Sizeof(symbolUint32))
-	return newSymbol(name, symbolUint32, offset, size)
+func newVariable(name string, offset, size uint64) symbol {
+	return newSymbol(name, symbolData, offset, size)
 }
 
 func newString(name string, offset uint64) symbol {
@@ -166,9 +164,9 @@ func (s *symbols) extractFrom(e *elf.File) error {
 		// Skip local symbols that are objects or untyped. These are usually
 		// program segments referred to using long jumps in bytecode.
 		case !isGlobalData(sym):
-			// LBB is a common llvm symbol prefix (basic block);
-			// Don't flood the logs with messages about it.
-			if !strings.HasPrefix(sym.Name, "LBB") {
+			// Some symbols don't have names and 'LBB0 is a common llvm symbol prefix
+			// (basic block). Don't flood the logs with messages about them.
+			if sym.Name != "" && !strings.HasPrefix(sym.Name, "LBB") {
 				log.Debugf("Skipping %s", sym.Name)
 			}
 			continue
@@ -179,7 +177,7 @@ func (s *symbols) extractFrom(e *elf.File) error {
 		case section.Name == dataSection:
 			// Offset from start of binary to variable inside .data
 			offset := section.Offset + sym.Value
-			dataOffsets[sym.Name] = newVariable(sym.Name, offset)
+			dataOffsets[sym.Name] = newVariable(sym.Name, offset, sym.Size)
 			log.WithField(fieldSymbol, sym.Name).Debugf("Found variable with offset %d", offset)
 
 		// Find the absolute offset to the map's entry in .strtab.

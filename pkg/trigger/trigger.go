@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package trigger
 
@@ -33,6 +33,9 @@ type Parameters struct {
 	// TriggerFunc is the function to be called when Trigger() is called
 	// while respecting MinInterval and serialization
 	TriggerFunc func(reasons []string)
+
+	// ShutdownFunc is called when the trigger is shut down
+	ShutdownFunc func()
 
 	MetricsObserver MetricsObserver
 
@@ -208,6 +211,10 @@ func (t *Trigger) waiter() {
 		case <-sleepTimer.After(t.params.sleepInterval):
 
 		case <-t.closeChan:
+			shutdownFunc := t.params.ShutdownFunc
+			if shutdownFunc != nil {
+				shutdownFunc()
+			}
 			return
 		}
 	}

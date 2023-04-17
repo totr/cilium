@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2019 Authors of Cilium
+// Copyright Authors of Cilium
 
 package endpoint
 
@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/cilium/cilium/pkg/bandwidth"
 	"github.com/cilium/cilium/pkg/eventqueue"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/bwmap"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
-
-	"github.com/sirupsen/logrus"
 )
 
 // EndpointRegenerationEvent contains all fields necessary to regenerate an endpoint.
@@ -109,7 +109,7 @@ func (e *Endpoint) PolicyRevisionBumpEvent(rev uint64) {
 	}
 }
 
-/// EndpointNoTrackEvent contains all fields necessary to update the NOTRACK rules.
+// EndpointNoTrackEvent contains all fields necessary to update the NOTRACK rules.
 type EndpointNoTrackEvent struct {
 	ep     *Endpoint
 	annoCB AnnotationsResolverCB
@@ -156,24 +156,24 @@ func (ev *EndpointNoTrackEvent) Handle(res chan interface{}) {
 
 	if port != e.noTrackPort {
 		log.Debug("Updating NOTRACK rules")
-		if e.IPv4.IsSet() {
+		if e.IPv4.IsValid() {
 			if port > 0 {
 				err = e.owner.Datapath().InstallNoTrackRules(e.IPv4.String(), port, false)
-				log.Warnf("Error installing iptable NOTRACK rules %s", err)
+				log.WithError(err).Warn("Error installing iptable NOTRACK rules")
 			}
 			if e.noTrackPort > 0 {
 				err = e.owner.Datapath().RemoveNoTrackRules(e.IPv4.String(), e.noTrackPort, false)
-				log.Warnf("Error removing iptable NOTRACK rules %s", err)
+				log.WithError(err).Warn("Error removing iptable NOTRACK rules")
 			}
 		}
-		if e.IPv6.IsSet() {
+		if e.IPv6.IsValid() {
 			if port > 0 {
 				e.owner.Datapath().InstallNoTrackRules(e.IPv6.String(), port, true)
-				log.Warnf("Error installing iptable NOTRACK rules %s", err)
+				log.WithError(err).Warn("Error installing iptable NOTRACK rules")
 			}
 			if e.noTrackPort > 0 {
 				err = e.owner.Datapath().RemoveNoTrackRules(e.IPv6.String(), e.noTrackPort, true)
-				log.Warnf("Error removing iptable NOTRACK rules %s", err)
+				log.WithError(err).Warn("Error removing iptable NOTRACK rules")
 			}
 		}
 		e.noTrackPort = port
@@ -288,7 +288,7 @@ func (ev *EndpointPolicyBandwidthEvent) Handle(res chan interface{}) {
 			err = bwmap.Update(e.ID, bps)
 		}
 	} else {
-		err = bwmap.Delete(e.ID)
+		err = bwmap.SilentDelete(e.ID)
 	}
 	if err != nil {
 		res <- &EndpointRegenerationResult{
@@ -366,6 +366,12 @@ func (e *Endpoint) Stop() {
 	// closed elsewhere.
 	e.eventQueue.Stop()
 
+	// Cancel active controllers for the endpoint tied to e.aliveCtx.
+	// Needs to be performed before draining the event queue to allow
+	// in-flight functions to act before the Endpoint's underlying resources
+	// are removed by the container runtime.
+	e.aliveCancel()
+
 	// Wait for the queue to be drained in case an event which is currently
 	// running for the endpoint tries to acquire the lock - we cannot be sure
 	// what types of events will be pushed onto the EventQueue for an endpoint
@@ -379,7 +385,4 @@ func (e *Endpoint) Stop() {
 	// if anything is blocking on it. If a delete request has already been
 	// enqueued for this endpoint, this is a no-op.
 	e.closeBPFProgramChannel()
-
-	// Cancel active controllers for the endpoint tied to e.aliveCtx.
-	e.aliveCancel()
 }

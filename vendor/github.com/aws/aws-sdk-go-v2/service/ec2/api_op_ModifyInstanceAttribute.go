@@ -43,7 +43,11 @@ type ModifyInstanceAttributeInput struct {
 	// This member is required.
 	InstanceId *string
 
-	// The name of the attribute.
+	// The name of the attribute to modify. You can modify the following attributes
+	// only: disableApiTermination | instanceType | kernel | ramdisk |
+	// instanceInitiatedShutdownBehavior | blockDeviceMapping | userData |
+	// sourceDestCheck | groupSet | ebsOptimized | sriovNetSupport | enaSupport |
+	// nvmeSupport | disableApiStop | enclaveOptions
 	Attribute types.InstanceAttributeName
 
 	// Modifies the DeleteOnTermination attribute for volumes that are currently
@@ -55,6 +59,11 @@ type ModifyInstanceAttributeInput struct {
 	// (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/block-device-mapping-concepts.html#Using_OverridingAMIBDM)
 	// in the Amazon EC2 User Guide.
 	BlockDeviceMappings []types.InstanceBlockDeviceMappingSpecification
+
+	// Indicates whether an instance is enabled for stop protection. For more
+	// information, see Stop Protection
+	// (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Stop_Start.html#Using_StopProtection).
+	DisableApiStop *types.AttributeBooleanValue
 
 	// If the value is true, you can't terminate the instance using the Amazon EC2
 	// console, CLI, or API; otherwise, you can. You cannot use this parameter for Spot

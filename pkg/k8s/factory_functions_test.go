@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018-2020 Authors of Cilium
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Cilium
 
 package k8s
 
 import (
 	"time"
+
+	. "gopkg.in/check.v1"
+	core_v1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/annotation"
@@ -15,16 +18,11 @@ import (
 	fakeDatapath "github.com/cilium/cilium/pkg/datapath/fake"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
+	slim_networkingv1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/networking/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/k8s/types"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	. "gopkg.in/check.v1"
-	core_v1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/cache"
 )
 
 func (s *K8sSuite) Test_EqualV2CNP(c *C) {
@@ -890,7 +888,7 @@ func (s *K8sSuite) Test_EqualV1Service(c *C) {
 				o2: &slim_corev1.Service{
 					ObjectMeta: slim_metav1.ObjectMeta{
 						Annotations: map[string]string{
-							"io.cilium/shared-service": "true",
+							"service.cilium.io/shared": "true",
 						},
 					},
 				},
@@ -967,14 +965,14 @@ func (s *K8sSuite) Test_ConvertToK8sV1ServicePorts(c *C) {
 	tests := []struct {
 		name string
 		args args
-		want []v1.ServicePort
+		want []core_v1.ServicePort
 	}{
 		{
 			name: "empty",
 			args: args{
 				ports: []slim_corev1.ServicePort{},
 			},
-			want: []v1.ServicePort{},
+			want: []core_v1.ServicePort{},
 		},
 		{
 			name: "non-empty",
@@ -986,7 +984,7 @@ func (s *K8sSuite) Test_ConvertToK8sV1ServicePorts(c *C) {
 					},
 				},
 			},
-			want: []v1.ServicePort{
+			want: []core_v1.ServicePort{
 				{
 					Name: "foo",
 					Port: int32(1),
@@ -1008,14 +1006,14 @@ func (s *K8sSuite) Test_ConvertToK8sV1SessionAffinityConfig(c *C) {
 	tests := []struct {
 		name string
 		args args
-		want *v1.SessionAffinityConfig
+		want *core_v1.SessionAffinityConfig
 	}{
 		{
 			name: "empty",
 			args: args{
 				cfg: &slim_corev1.SessionAffinityConfig{},
 			},
-			want: &v1.SessionAffinityConfig{},
+			want: &core_v1.SessionAffinityConfig{},
 		},
 		{
 			name: "non-empty",
@@ -1026,8 +1024,8 @@ func (s *K8sSuite) Test_ConvertToK8sV1SessionAffinityConfig(c *C) {
 					},
 				},
 			},
-			want: &v1.SessionAffinityConfig{
-				ClientIP: &v1.ClientIPConfig{
+			want: &core_v1.SessionAffinityConfig{
+				ClientIP: &core_v1.ClientIPConfig{
 					TimeoutSeconds: &ts,
 				},
 			},
@@ -1046,14 +1044,14 @@ func (s *K8sSuite) Test_ConvertToK8sV1LoadBalancerIngress(c *C) {
 	tests := []struct {
 		name string
 		args args
-		want []v1.LoadBalancerIngress
+		want []core_v1.LoadBalancerIngress
 	}{
 		{
 			name: "empty",
 			args: args{
 				ings: []slim_corev1.LoadBalancerIngress{},
 			},
-			want: []v1.LoadBalancerIngress{},
+			want: []core_v1.LoadBalancerIngress{},
 		},
 		{
 			name: "non-empty",
@@ -1064,15 +1062,101 @@ func (s *K8sSuite) Test_ConvertToK8sV1LoadBalancerIngress(c *C) {
 					},
 				},
 			},
-			want: []v1.LoadBalancerIngress{
+			want: []core_v1.LoadBalancerIngress{
 				{
-					IP: "1.1.1.1",
+					IP:    "1.1.1.1",
+					Ports: nil,
 				},
 			},
 		},
 	}
 	for _, tt := range tests {
 		got := ConvertToK8sV1LoadBalancerIngress(tt.args.ings)
+		c.Assert(got, checker.DeepEquals, tt.want, Commentf("Test Name: %s", tt.name))
+	}
+}
+
+func (s *K8sSuite) Test_ConvertToNetworkV1IngressLoadBalancerIngress(c *C) {
+	type args struct {
+		ings []slim_corev1.LoadBalancerIngress
+	}
+	tests := []struct {
+		name string
+		args args
+		want []networkingv1.IngressLoadBalancerIngress
+	}{
+		{
+			name: "empty",
+			args: args{
+				ings: []slim_corev1.LoadBalancerIngress{},
+			},
+			want: []networkingv1.IngressLoadBalancerIngress{},
+		},
+		{
+			name: "non-empty",
+			args: args{
+				ings: []slim_corev1.LoadBalancerIngress{
+					{
+						IP: "1.1.1.1",
+					},
+				},
+			},
+			want: []networkingv1.IngressLoadBalancerIngress{
+				{
+					IP:    "1.1.1.1",
+					Ports: []networkingv1.IngressPortStatus{},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		got := ConvertToNetworkV1IngressLoadBalancerIngress(tt.args.ings)
+		c.Assert(got, checker.DeepEquals, tt.want, Commentf("Test Name: %s", tt.name))
+	}
+}
+
+func (s *K8sSuite) Test_ConvertToSlimIngressLoadBalancerStatus(c *C) {
+	type args struct {
+		lbs *slim_corev1.LoadBalancerStatus
+	}
+	tests := []struct {
+		name string
+		args args
+		want *slim_networkingv1.IngressLoadBalancerStatus
+	}{
+		{
+			name: "empty",
+			args: args{
+				lbs: &slim_corev1.LoadBalancerStatus{},
+			},
+			want: &slim_networkingv1.IngressLoadBalancerStatus{
+				Ingress: []slim_networkingv1.IngressLoadBalancerIngress{},
+			},
+		},
+		{
+			name: "non-empty",
+			args: args{
+				lbs: &slim_corev1.LoadBalancerStatus{
+					Ingress: []slim_corev1.LoadBalancerIngress{
+						{
+							IP:    "1.1.1.1",
+							Ports: []slim_corev1.PortStatus{},
+						},
+					},
+				},
+			},
+			want: &slim_networkingv1.IngressLoadBalancerStatus{
+				Ingress: []slim_networkingv1.IngressLoadBalancerIngress{
+					{
+						IP:    "1.1.1.1",
+						Ports: []slim_networkingv1.IngressPortStatus{},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		got := ConvertToSlimIngressLoadBalancerStatus(tt.args.lbs)
 		c.Assert(got, checker.DeepEquals, tt.want, Commentf("Test Name: %s", tt.name))
 	}
 }
@@ -1364,15 +1448,13 @@ func (s *K8sSuite) Test_ConvertToCiliumEndpoint(c *C) {
 							},
 							OwnerReferences: []metav1.OwnerReference{
 								{
-									Kind:               "Pod",
-									APIVersion:         "v1",
-									Name:               "foo",
-									UID:                "65dasd54d45",
-									Controller:         nil,
-									BlockOwnerDeletion: func() *bool { a := true; return &a }(),
+									Kind:       "Pod",
+									APIVersion: "v1",
+									Name:       "foo",
+									UID:        "65dasd54d45",
+									Controller: nil,
 								},
 							},
-							ClusterName: "default",
 						},
 						Status: v2.EndpointStatus{
 							ID:          0,

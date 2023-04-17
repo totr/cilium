@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2020 Authors of Cilium
+// Copyright Authors of Cilium
 
 package cmd
 
@@ -10,17 +10,16 @@ import (
 	"time"
 
 	health "github.com/cilium/cilium/cilium-health/launch"
-	"github.com/cilium/cilium/pkg/cleanup"
 	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/health/defaults"
-	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/cilium/cilium/pkg/logging/logfields"
+	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/pidfile"
 )
 
-func (d *Daemon) initHealth() {
+func (d *Daemon) initHealth(cleaner *daemonCleanup) {
 	// Launch cilium-health in the same process (and namespace) as cilium.
 	log.Info("Launching Cilium health daemon")
 	if ch, err := health.Launch(); err != nil {
@@ -36,7 +35,7 @@ func (d *Daemon) initHealth() {
 
 	// Launch the cilium-health-responder as an endpoint, managed by cilium.
 	log.Info("Launching Cilium health endpoint")
-	if k8s.IsEnabled() {
+	if d.clientset.IsEnabled() {
 		// When Cilium starts up in k8s mode, it is guaranteed to be
 		// running inside a new PID namespace which means that existing
 		// PIDfiles are referring to PIDs that may be reused. Clean up.
@@ -69,8 +68,9 @@ func (d *Daemon) initHealth() {
 						ctx,
 						d,
 						d,
-						&d.nodeDiscovery.LocalNode,
+						d.ipcache,
 						d.mtuConfig,
+						d.bigTCPConfig,
 						d.endpointManager,
 						d.l7Proxy,
 						d.identityAllocator,
@@ -97,25 +97,23 @@ func (d *Daemon) initHealth() {
 	)
 
 	// Make sure to clean up the endpoint namespace when cilium-agent terminates
-	cleanup.DeferTerminationCleanupFunction(cleaner.cleanUPWg, cleaner.cleanUPSig, func() {
-		health.KillEndpoint()
-		health.CleanupEndpoint()
-	})
+	cleaner.cleanupFuncs.Add(health.KillEndpoint)
+	cleaner.cleanupFuncs.Add(health.CleanupEndpoint)
 }
 
 func (d *Daemon) cleanupHealthEndpoint() {
-	localNode := d.nodeDiscovery.LocalNode
-
 	// Delete the process
 	health.KillEndpoint()
 
 	// Clean up agent resources
 	var ep *endpoint.Endpoint
-	if localNode.IPv4HealthIP != nil {
-		ep = d.endpointManager.LookupIPv4(localNode.IPv4HealthIP.String())
+	healthIPv4 := node.GetEndpointHealthIPv4()
+	healthIPv6 := node.GetEndpointHealthIPv6()
+	if healthIPv4 != nil {
+		ep = d.endpointManager.LookupIPv4(healthIPv4.String())
 	}
-	if ep == nil && localNode.IPv6HealthIP != nil {
-		ep = d.endpointManager.LookupIPv6(localNode.IPv6HealthIP.String())
+	if ep == nil && healthIPv6 != nil {
+		ep = d.endpointManager.LookupIPv6(healthIPv6.String())
 	}
 	if ep == nil {
 		log.Debug("Didn't find existing cilium-health endpoint to delete")

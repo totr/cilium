@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package helpers
 
@@ -27,9 +27,10 @@ func (buf *FilterBuffer) ByLines() []string {
 // KVOutput returns a map of the buff string split based on
 // the separator '='.
 // For example, the following strings would be split as follows:
-//		a=1
-//		b=2
-//		c=3
+//
+//	a=1
+//	b=2
+//	c=3
 func (buf *FilterBuffer) KVOutput() map[string]string {
 	result := make(map[string]string)
 	for _, line := range buf.ByLines() {

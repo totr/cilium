@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2020 Authors of Hubble
-
-//go:build !privileged_tests
-// +build !privileged_tests
+// Copyright Authors of Hubble
 
 package agent_test
 
@@ -14,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	flowpb "github.com/cilium/cilium/api/v1/flow"
-	"github.com/cilium/cilium/pkg/hubble/parser/agent"
-	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
-
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	flowpb "github.com/cilium/cilium/api/v1/flow"
+	"github.com/cilium/cilium/pkg/hubble/parser/agent"
+	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
 )
 
 type mockEndpoint struct {
@@ -288,7 +285,8 @@ func TestDecodeAgentEvent(t *testing.T) {
 					},
 				},
 				"ClusterIP",
-				"myTrafficPolicy",
+				"myTrafficPolicyExt",
+				"myTrafficPolicyInt",
 				"myService",
 				"myNamespace",
 			),
@@ -311,10 +309,12 @@ func TestDecodeAgentEvent(t *testing.T) {
 								Port: 7077,
 							},
 						},
-						Type:          "ClusterIP",
-						TrafficPolicy: "myTrafficPolicy",
-						Name:          "myService",
-						Namespace:     "myNamespace",
+						Type:             "ClusterIP",
+						TrafficPolicy:    "myTrafficPolicyExt",
+						ExtTrafficPolicy: "myTrafficPolicyExt",
+						IntTrafficPolicy: "myTrafficPolicyInt",
+						Name:             "myService",
+						Namespace:        "myNamespace",
 					},
 				},
 			},

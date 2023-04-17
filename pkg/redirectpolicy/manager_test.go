@@ -1,48 +1,38 @@
-//  Copyright 2020 Authors of Cilium
-//
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-
-//go:build privileged_tests
-// +build privileged_tests
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of Cilium
 
 package redirectpolicy
 
 import (
-	"net"
 	"testing"
 
+	. "gopkg.in/check.v1"
+	"k8s.io/client-go/tools/cache"
+
 	"github.com/cilium/cilium/pkg/checker"
+	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/k8s"
 	slimcorev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/k8s/utils"
 	lb "github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/policy/api"
-
-	. "gopkg.in/check.v1"
-	"k8s.io/client-go/tools/cache"
+	"github.com/cilium/cilium/pkg/testutils"
 )
 
 // Hook up gocheck into the "go test" runner.
 func Test(t *testing.T) { TestingT(t) }
 
 type ManagerSuite struct {
-	rpm      *Manager
-	svcCache k8s.ServiceCache
-	svc      svcManager
+	rpm *Manager
+	svc svcManager
 }
 
 var _ = Suite(&ManagerSuite{})
+
+func (s *ManagerSuite) SetUpSuite(c *C) {
+	testutils.PrivilegedCheck(c)
+}
 
 type fakeSvcManager struct {
 }
@@ -115,17 +105,17 @@ var (
 	proto2, _ = lb.NewL4Type(udpStr)
 	fe1       = lb.NewL3n4Addr(
 		proto1,
-		net.ParseIP("1.1.1.1"),
+		cmtypes.MustParseAddrCluster("1.1.1.1"),
 		80,
 		lb.ScopeExternal)
 	fe2 = lb.NewL3n4Addr(
 		proto2,
-		net.ParseIP("2.2.2.2"),
+		cmtypes.MustParseAddrCluster("2.2.2.2"),
 		81,
 		lb.ScopeExternal)
 	fe3v6 = lb.NewL3n4Addr(
 		proto1,
-		net.ParseIP("fd00::2"),
+		cmtypes.MustParseAddrCluster("fd00::2"),
 		80,
 		lb.ScopeExternal)
 	portName1 = "test1"
@@ -250,7 +240,6 @@ var (
 func (m *ManagerSuite) SetUpTest(c *C) {
 	m.svc = &fakeSvcManager{}
 	m.rpm = NewRedirectPolicyManager(m.svc)
-	// m.svcCache = k8s.NewServiceCache(fakeDatapath.NewNodeAddressing())
 	configAddrType = LRPConfig{
 		id: k8s.ServiceID{
 			Name:      "test-foo",
@@ -328,7 +317,7 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigSinglePort(c *C) {
 	expectedbes := make([]backend, len(podIPs))
 	for i := range podIPs {
 		expectedbes[i] = backend{
-			L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(podIPs[i]), L4Addr: beP1.l4Addr},
+			L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(podIPs[i]), L4Addr: beP1.l4Addr},
 			podID:    pod1ID,
 		}
 	}
@@ -362,7 +351,7 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigSinglePort(c *C) {
 	expectedbes2 = append(expectedbes2, expectedbes...)
 	for i := range podIPs {
 		expectedbes2 = append(expectedbes2, backend{
-			L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(podIPs[i]), L4Addr: beP1.l4Addr},
+			L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(podIPs[i]), L4Addr: beP1.l4Addr},
 			podID:    pod3ID,
 		})
 	}
@@ -440,7 +429,7 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigMultiplePorts(c *C) {
 	expectedbes := make([]backend, 0, len(podIPs))
 	for i := range podIPs {
 		expectedbes = append(expectedbes, backend{
-			L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(podIPs[i]), L4Addr: beP1.l4Addr},
+			L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(podIPs[i]), L4Addr: beP1.l4Addr},
 			podID:    pod1ID,
 		})
 	}
@@ -465,7 +454,7 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigMultiplePorts(c *C) {
 			c.Assert(len(feM.podBackends), Equals, 2)
 			for i := range podIPs {
 				expectedbes[i] = backend{
-					L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(podIPs[i]), L4Addr: beP1.l4Addr},
+					L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(podIPs[i]), L4Addr: beP1.l4Addr},
 					podID:    pod1ID,
 				}
 			}
@@ -476,7 +465,7 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigMultiplePorts(c *C) {
 			c.Assert(len(feM.podBackends), Equals, 2)
 			for i := range podIPs {
 				expectedbes[i] = backend{
-					L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(podIPs[i]), L4Addr: beP2.l4Addr},
+					L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(podIPs[i]), L4Addr: beP2.l4Addr},
 					podID:    pod1ID,
 				}
 			}
@@ -510,13 +499,13 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigDualStack(c *C) {
 	expectedbes4 := make([]backend, 0, len(podIPs))
 	for i := range podIPs {
 		expectedbes4 = append(expectedbes4, backend{
-			L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(podIPs[i]), L4Addr: beP1.l4Addr},
+			L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(podIPs[i]), L4Addr: beP1.l4Addr},
 			podID:    pod3ID,
 		})
 	}
 	pod3v6 := slimcorev1.PodIP{IP: "fd00::40"}
 	expectedbes6 := []backend{{
-		L3n4Addr: lb.L3n4Addr{IP: net.ParseIP(pod3v6.IP), L4Addr: beP1.l4Addr},
+		L3n4Addr: lb.L3n4Addr{AddrCluster: cmtypes.MustParseAddrCluster(pod3v6.IP), L4Addr: beP1.l4Addr},
 		podID:    pod3ID,
 	}}
 	pod3.Status.PodIPs = append(pod3.Status.PodIPs, pod3v6)
@@ -560,4 +549,30 @@ func (m *ManagerSuite) TestManager_AddrMatcherConfigDualStack(c *C) {
 	}
 }
 
-//TODO Tests for svcMatcher
+// Tests add and update pod operations with namespace mismatched pods.
+func (m *ManagerSuite) TestManager_OnAddandUpdatePod(c *C) {
+	configFe := configAddrType
+	m.rpm.policyFrontendsByHash[fe1.Hash()] = configFe.id
+	configSvc := configSvcType
+	m.rpm.policyConfigs[configSvc.id] = &configSvc
+	pod := pod1.DeepCopy()
+	pod.Namespace = "ns2"
+	podID := k8s.ServiceID{
+		Name:      pod.Name,
+		Namespace: pod.Namespace,
+	}
+
+	m.rpm.OnAddPod(pod)
+
+	// Namespace mismatched pod not selected.
+	c.Assert(len(m.rpm.policyPods), Equals, 0)
+	_, found := m.rpm.policyPods[podID]
+	c.Assert(found, Equals, false)
+
+	m.rpm.OnUpdatePod(pod, true, true)
+
+	// Namespace mismatched pod not selected.
+	c.Assert(len(m.rpm.policyPods), Equals, 0)
+	_, found = m.rpm.policyPods[podID]
+	c.Assert(found, Equals, false)
+}

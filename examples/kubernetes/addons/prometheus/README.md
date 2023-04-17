@@ -11,10 +11,10 @@ The default installation contains:
 ## Enable Metrics in Cilium & Cilium-operator
 
 Enable prometheus metrics on all Cilium agents, be aware this will open the
-port `9090` in all nodes of your cluster where a cilium-agent is running.
+port `9962` in all nodes of your cluster where a cilium-agent is running.
 
 ```
-$ kubectl patch -n kube-system configmap cilium-config --type merge --patch '{"data":{"prometheus-serve-addr":":9090"}}'
+$ kubectl patch -n kube-system configmap cilium-config --type merge --patch '{"data":{"prometheus-serve-addr":":9962"}}'
 configmap/cilium-config patched
 ```
 
@@ -27,14 +27,14 @@ Next, install all monitoring tools and configurations by running:
 $ kubectl create -f examples/kubernetes/addons/prometheus/monitoring-example.yaml
 namespace/monitoring created
 configmap/prometheus created
-deployment.extensions/prometheus created
+deployment.apps/prometheus created
 service/prometheus created
 service/prometheus-open created
 clusterrolebinding.rbac.authorization.k8s.io/prometheus created
 clusterrole.rbac.authorization.k8s.io/prometheus created
 serviceaccount/prometheus-k8s created
 configmap/grafana-config created
-deployment.extensions/grafana created
+deployment.apps/grafana created
 service/grafana created
 configmap/grafana-dashboards created
 job.batch/grafana-dashboards-import created

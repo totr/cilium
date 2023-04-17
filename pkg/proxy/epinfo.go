@@ -1,24 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
-// Copyright 2016-2018 Authors of Cilium
+// Copyright Authors of Cilium
 
 package proxy
 
 import (
 	"context"
 	"net"
+	"net/netip"
 
 	"github.com/cilium/cilium/pkg/endpoint"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
+	ippkg "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/proxy/accesslog"
-	"github.com/cilium/cilium/pkg/proxy/logger"
 )
 
 var (
-	// DefaultEndpointInfoRegistry is the default instance implementing the
-	// EndpointInfoRegistry interface.
-	DefaultEndpointInfoRegistry logger.EndpointInfoRegistry = &defaultEndpointInfoRegistry{}
-	endpointManager             EndpointLookup
+	endpointManager EndpointLookup
 	// Allocator is a package-level variable which is used to lookup security
 	// identities from their numeric representation.
 	// TODO: plumb an allocator in from callers of these functions vs. having
@@ -28,42 +26,58 @@ var (
 
 // EndpointLookup is any type which maps from IP to the endpoint owning that IP.
 type EndpointLookup interface {
-	LookupIP(ip net.IP) (ep *endpoint.Endpoint)
+	LookupIP(ip netip.Addr) (ep *endpoint.Endpoint)
 }
 
-// defaultEndpointInfoRegistry is the default implementation of the
-// EndpointInfoRegistry interface.
-type defaultEndpointInfoRegistry struct{}
+// endpointInfoRegistry provides a default implementation of the
+// logger.EndpointInfoRegistry interface.
+type endpointInfoRegistry struct {
+	ipcache IPCacheManager
+}
 
-func (r *defaultEndpointInfoRegistry) FillEndpointIdentityByID(id identity.NumericIdentity, info *accesslog.EndpointInfo) bool {
-	identity := Allocator.LookupIdentityByID(context.TODO(), id)
-	if identity == nil {
-		return false
+func newEndpointInfoRegistry(ipc IPCacheManager) *endpointInfoRegistry {
+	return &endpointInfoRegistry{
+		ipcache: ipc,
+	}
+}
+
+func (r *endpointInfoRegistry) FillEndpointInfo(info *accesslog.EndpointInfo, ip net.IP, id identity.NumericIdentity) {
+	var ep *endpoint.Endpoint
+	if ip != nil {
+		if ip.To4() != nil {
+			info.IPv4 = ip.String()
+		} else {
+			info.IPv6 = ip.String()
+		}
+
+		// Get (local) endpoint identifier to be reported by cilium monitor
+		addr, _ := ippkg.AddrFromIP(ip)
+		ep = endpointManager.LookupIP(addr)
+		if ep != nil {
+			info.ID = ep.GetID()
+		}
 	}
 
+	// Only resolve the security identity if not passed in, as it may have changed since
+	// reported by the proxy. This way we log the security identity and labels used for
+	// policy enforcement, if any.
+	if id == 0 {
+		if ep != nil {
+			id = ep.GetIdentity()
+		} else if ip != nil {
+			ID, exists := r.ipcache.LookupByIP(ip.String())
+			if exists {
+				id = ID.ID
+			}
+		}
+		// Default to WORLD if still unknown
+		if id == 0 {
+			id = identity.ReservedIdentityWorld
+		}
+	}
 	info.Identity = uint64(id)
-	info.Labels = identity.Labels.GetModel()
-	info.LabelsSHA256 = identity.GetLabelsSHA256()
-
-	return true
-}
-
-func (r *defaultEndpointInfoRegistry) FillEndpointIdentityByIP(ip net.IP, info *accesslog.EndpointInfo) bool {
-	ep := endpointManager.LookupIP(ip)
-	if ep == nil {
-		return false
+	identity := Allocator.LookupIdentityByID(context.TODO(), id)
+	if identity != nil {
+		info.Labels = identity.Labels.GetModel()
 	}
-
-	id, ipv4, ipv6, labels, labelsSHA256, identity, err := ep.GetProxyInfoByFields()
-	if err != nil {
-		return false
-	}
-
-	info.ID = id
-	info.IPv4 = ipv4
-	info.IPv6 = ipv6
-	info.Labels = labels
-	info.LabelsSHA256 = labelsSHA256
-	info.Identity = identity
-	return true
 }
